@@ -91,6 +91,7 @@ function Dashboard({ token, user, onLogout }) {
   const [evaluado, setEvaluado] = useState("");
   const [status, setStatus] = useState("");
   const [links, setLinks] = useState(null);
+  const [revision, setRevision] = useState(null);
 
   useEffect(() => {
     apiRequest("/api/evaluados", { token })
@@ -100,6 +101,11 @@ function Dashboard({ token, user, onLogout }) {
       })
       .catch((err) => setStatus(err.message));
   }, [token]);
+
+  useEffect(() => {
+    if (!user?.is_admin) return;
+    loadRevision();
+  }, [token, user?.is_admin]);
 
   const role = user?.is_admin ? "Admin" : `Solo ${user?.persona || user?.username}`;
   const selectedLabel = useMemo(() => evaluados.find((item) => item.value === evaluado)?.label || "", [evaluados, evaluado]);
@@ -111,6 +117,30 @@ function Dashboard({ token, user, onLogout }) {
       const data = await apiRequest(`/api/${kind}`, { token, method: "POST", body: { evaluado } });
       setStatus(kind === "generar" ? `Informe listo con ${data.total} evaluaciones.` : `Trayectoria lista con ${data.total} evaluaciones.`);
       setLinks(data);
+    } catch (err) {
+      setStatus(err.message);
+    }
+  }
+
+  async function loadRevision() {
+    try {
+      const data = await apiRequest("/api/revision-pendiente", { token });
+      setRevision(data);
+    } catch (err) {
+      setStatus(err.message);
+    }
+  }
+
+  async function sendPending(pendingId) {
+    setStatus("Enviando evaluacion a Slack...");
+    try {
+      await apiRequest("/api/revision-pendiente/enviar", {
+        token,
+        method: "POST",
+        body: { pendingId },
+      });
+      setStatus("Evaluacion enviada a Slack.");
+      await loadRevision();
     } catch (err) {
       setStatus(err.message);
     }
@@ -192,6 +222,27 @@ function Dashboard({ token, user, onLogout }) {
             {links.htmlUrl && <button onClick={() => openFile(links.htmlUrl, "informe.html")}>Abrir web</button>}
             {links.docxUrl && <button className="secondary" onClick={() => openFile(links.docxUrl, "informe.docx")}>Descargar Word</button>}
           </div>
+        </section>
+      )}
+
+      {user?.is_admin && revision && (
+        <section className="review panel">
+          <p className="kicker">Revision previa</p>
+          <h2>Evaluaciones de Slack</h2>
+          {revision.pendientes?.length ? (
+            <div className="pending-list">
+              {revision.pendientes.map((item) => (
+                <article className="pending" key={item.id}>
+                  <p><strong>{item.creada}</strong></p>
+                  <p>{item.origen}</p>
+                  <button onClick={() => sendPending(item.id)}>Enviar evaluacion</button>
+                </article>
+              ))}
+            </div>
+          ) : (
+            <p>No hay evaluaciones pendientes de revision.</p>
+          )}
+          <button className="secondary" onClick={loadRevision}>Actualizar</button>
         </section>
       )}
     </main>

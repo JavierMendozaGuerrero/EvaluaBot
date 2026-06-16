@@ -176,8 +176,20 @@ button:disabled {
 }
 
 .status,
-.result {
+.result,
+.review {
   margin-top: 38px;
+}
+
+.pending-list {
+  display: grid;
+  gap: 16px;
+  margin-bottom: 22px;
+}
+
+.pending {
+  border-top: 1px solid var(--line);
+  padding-top: 16px;
 }
 
 .fine {

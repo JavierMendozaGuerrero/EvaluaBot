@@ -9,7 +9,7 @@ from . import config
 from .notion_service import listar_bbdd_evaluados
 from .reports import generar_archivo_trayectoria, generar_archivos_informe
 from .slack_bot import enviar_revision_pendiente, preguntas_revision_html
-from .state import pendientes_revision
+from .state import evaluaciones_pendientes, lock
 from .users import (
     autenticar_usuario,
     crear_sesion,
@@ -90,10 +90,7 @@ class ApiHandler(BaseHTTPRequestHandler):
                 self.responder_json(
                     {
                         "preguntasHtml": preguntas_revision_html(),
-                        "pendientes": [
-                            {"id": key, **value}
-                            for key, value in pendientes_revision.items()
-                        ],
+                        "pendientes": self.revisiones_pendientes(),
                     }
                 )
                 return
@@ -154,6 +151,10 @@ class ApiHandler(BaseHTTPRequestHandler):
         except Exception as error:
             logging.exception("Error en API POST")
             self.responder_json({"error": str(error)}, 500)
+
+    def revisiones_pendientes(self):
+        with lock:
+            return list(evaluaciones_pendientes)
 
     def url_archivo(self, nombre_archivo, evaluado):
         query = urllib.parse.urlencode({"evaluado": evaluado})

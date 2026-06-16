@@ -2,7 +2,7 @@
 
 El proyecto queda separado asi:
 
-- `app/`: backend Python. Mantiene Slack Socket Mode, Notion, Claude, usuarios, permisos, informes y trayectorias.
+- `backend/`: backend Python. Mantiene Slack Socket Mode, Notion, Claude, usuarios, permisos, informes y trayectorias.
 - `frontend/`: frontend React/Vite preparado para Vercel.
 - `dashboard_web/`: salida generada por el backend. No se sube a GitHub salvo `.gitkeep`.
 

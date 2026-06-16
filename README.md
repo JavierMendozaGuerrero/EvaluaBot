@@ -74,14 +74,16 @@ python bot.py
 ## Estructura del código
 
 - `bot.py`: punto de entrada.
-- `app/config.py`: variables de entorno, preguntas y constantes.
-- `app/slack_bot.py`: envío de evaluaciones y conversación en hilos de Slack.
-- `app/notion_service.py`: creación, lectura y escritura de bases en Notion.
-- `app/web_server.py`: login, registro, informes y trayectoria web.
-- `app/reports.py`: generación de informes con Claude, Word, HTML y caché.
-- `app/users.py`: registro, login, sesiones y permisos.
-- `app/clients.py`: clientes de Slack, Notion y Claude.
-- `app/state.py`: estado compartido en memoria.
+- `backend/config.py`: variables de entorno, preguntas y constantes.
+- `backend/slack_bot.py`: envío de evaluaciones y conversación en hilos de Slack.
+- `backend/notion_service.py`: creación, lectura y escritura de bases en Notion.
+- `backend/api_server.py`: API JSON para el frontend React.
+- `backend/web_server.py`: web antigua integrada en Python (`WEB_MODE=legacy`).
+- `backend/reports.py`: generación de informes con Claude, Word, HTML y caché.
+- `backend/users.py`: registro, login, sesiones y permisos.
+- `backend/clients.py`: clientes de Slack, Notion y Claude.
+- `backend/state.py`: estado compartido en memoria.
+- `frontend/`: interfaz React preparada para Vercel.
 
 La web de informes queda disponible en:
 

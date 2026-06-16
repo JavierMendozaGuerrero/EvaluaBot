@@ -92,6 +92,10 @@ def obtener_sesion(headers):
     return sesiones_web.get(obtener_cookie(headers, "session"))
 
 
+def obtener_sesion_por_token(token):
+    return sesiones_web.get(token)
+
+
 def validar_acceso_sesion(sesion, evaluado):
     if not sesion:
         raise PermissionError("Inicia sesión para acceder.")

@@ -14,3 +14,9 @@ env/
 
 dashboard_web/*
 !dashboard_web/.gitkeep
+
+frontend/node_modules/
+frontend/dist/
+frontend/.env
+frontend/.env.*
+!frontend/.env.example

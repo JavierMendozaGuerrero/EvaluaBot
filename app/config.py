@@ -19,6 +19,8 @@ HORA_ENVIO_PRODUCCION = datetime_time(10, 0)
 PUERTO_WEB = 8000
 CARPETA_WEB = "dashboard_web"
 PREFIJO_BBDD_EVALUADO = "Evaluaciones - "
+FRONTEND_ORIGIN = os.environ.get("FRONTEND_ORIGIN", "http://localhost:5173").strip()
+WEB_MODE = os.environ.get("WEB_MODE", "api").strip().lower()
 
 SLACK_BOT_TOKEN = os.environ["SLACK_BOT_TOKEN"]
 SLACK_APP_TOKEN = os.environ["SLACK_APP_TOKEN"]

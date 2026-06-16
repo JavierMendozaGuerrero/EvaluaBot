@@ -3,6 +3,9 @@ from datetime import time as datetime_time
 from zoneinfo import ZoneInfo
 
 
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+
+
 def env_bool(name, default="false"):
     return os.environ.get(name, default).strip().lower() in {"1", "true", "yes", "si", "sí"}
 
@@ -17,7 +20,7 @@ DIA_ENVIO_PRODUCCION = 4
 HORA_ENVIO_PRODUCCION = datetime_time(10, 0)
 
 PUERTO_WEB = 8000
-CARPETA_WEB = "dashboard_web"
+CARPETA_WEB = os.path.join(BASE_DIR, "dashboard_web")
 PREFIJO_BBDD_EVALUADO = "Evaluaciones - "
 FRONTEND_ORIGIN = os.environ.get("FRONTEND_ORIGIN", "http://localhost:5173").strip()
 WEB_MODE = os.environ.get("WEB_MODE", "api").strip().lower()

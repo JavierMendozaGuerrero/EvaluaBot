@@ -12,8 +12,8 @@ env/
 *.log
 .DS_Store
 
-dashboard_web/*
-!dashboard_web/.gitkeep
+backend/dashboard_web/*
+!backend/dashboard_web/.gitkeep
 
 frontend/node_modules/
 frontend/dist/

@@ -1,0 +1,6 @@
+slack_bolt
+slack_sdk
+notion-client
+anthropic
+python-docx
+tzdata; platform_system == "Windows"

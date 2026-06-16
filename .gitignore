@@ -1,0 +1,16 @@
+__pycache__/
+*.py[cod]
+
+.env
+.env.*
+!.env.example
+
+.venv/
+venv/
+env/
+
+*.log
+.DS_Store
+
+dashboard_web/*
+!dashboard_web/.gitkeep

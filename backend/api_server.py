@@ -37,7 +37,7 @@ class ApiHandler(BaseHTTPRequestHandler):
         self.end_headers()
 
     def leer_json(self):
-        longitud = int(self.headers.get("Content-Length", "0"))
+        longitud = min(int(self.headers.get("Content-Length", "0")), 1_000_000)
         if not longitud:
             return {}
         return json.loads(self.rfile.read(longitud).decode("utf-8"))

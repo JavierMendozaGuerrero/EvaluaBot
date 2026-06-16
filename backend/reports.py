@@ -142,7 +142,12 @@ def guardar_trayectoria_react(evaluaciones, evaluado):
     os.makedirs(config.CARPETA_WEB, exist_ok=True)
     slug = slug_archivo(evaluado)
     ruta = os.path.join(config.CARPETA_WEB, f"trayectoria_{slug}.html")
-    datos_json = json.dumps(evaluaciones, ensure_ascii=False).replace("</", "<\\/")
+    datos_json = (
+        json.dumps(evaluaciones, ensure_ascii=False)
+        .replace("&", "\\u0026")
+        .replace("<", "\\u003c")
+        .replace(">", "\\u003e")
+    )
     contenido = f"""<!DOCTYPE html>
 <html lang="es"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Trayectoria</title>
 <style>{config.IGENERIS_CSS}

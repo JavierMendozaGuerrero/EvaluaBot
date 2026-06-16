@@ -10,7 +10,7 @@ def env_bool(name, default="false"):
     return os.environ.get(name, default).strip().lower() in {"1", "true", "yes", "si", "sí"}
 
 
-CHANNEL_ID = "C0BBFRM14SU"
+CHANNEL_ID = os.environ.get("SLACK_CHANNEL_ID", "C0BBFRM14SU")
 
 APP_MODE = os.environ.get("APP_MODE", "prueba").strip().lower()
 REVIEW_BEFORE_SEND = env_bool("REVIEW_BEFORE_SEND")
@@ -25,10 +25,17 @@ PREFIJO_BBDD_EVALUADO = "Evaluaciones - "
 FRONTEND_ORIGIN = os.environ.get("FRONTEND_ORIGIN", "http://localhost:5173").strip()
 WEB_MODE = os.environ.get("WEB_MODE", "api").strip().lower()
 
-SLACK_BOT_TOKEN = os.environ["SLACK_BOT_TOKEN"]
-SLACK_APP_TOKEN = os.environ["SLACK_APP_TOKEN"]
-NOTION_TOKEN = os.environ["NOTION_TOKEN"]
-NOTION_DATABASE_ID = os.environ["NOTION_DATABASE_ID"]
+def _require_env(name):
+    value = os.environ.get(name)
+    if value is None:
+        raise SystemExit(f"ERROR: falta la variable de entorno {name}. Configúrala antes de iniciar.")
+    return value
+
+
+SLACK_BOT_TOKEN = _require_env("SLACK_BOT_TOKEN")
+SLACK_APP_TOKEN = _require_env("SLACK_APP_TOKEN")
+NOTION_TOKEN = _require_env("NOTION_TOKEN")
+NOTION_DATABASE_ID = _require_env("NOTION_DATABASE_ID")
 NOTION_PARENT_PAGE_ID = os.environ.get("NOTION_PARENT_PAGE_ID", "").strip()
 ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY", "").strip()
 ADMIN_NAME = os.environ.get("ADMIN_NAME", "Ana").strip()

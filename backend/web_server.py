@@ -123,7 +123,7 @@ class WebHandler(SimpleHTTPRequestHandler):
             self.pagina_registro(); return
         if ruta == "/logout":
             self.redirect("/login", "session=; Path=/; Max-Age=0; HttpOnly; SameSite=Lax"); return
-        if ruta == "/users.json":
+        if ruta.lower() == "/users.json":
             self.send_error(404); return
         if ruta.startswith("/informe") or ruta.startswith("/trayectoria"):
             self.servir_archivo_protegido(ruta, parsed.query); return
@@ -136,7 +136,7 @@ class WebHandler(SimpleHTTPRequestHandler):
         if ruta not in ("/login", "/register", "/generar", "/trayectoria", "/enviar_pendiente"):
             self.send_error(404); return
         try:
-            longitud = int(self.headers.get("Content-Length", "0"))
+            longitud = min(int(self.headers.get("Content-Length", "0")), 1_000_000)
             datos = urllib.parse.parse_qs(self.rfile.read(longitud).decode("utf-8") if longitud else "")
             if ruta == "/register":
                 try:

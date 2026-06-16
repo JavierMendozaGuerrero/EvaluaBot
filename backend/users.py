@@ -3,6 +3,7 @@ import hmac
 import json
 import os
 import secrets
+import tempfile
 
 from . import config
 from .state import sesiones_web
@@ -23,8 +24,11 @@ def cargar_usuarios():
 
 def guardar_usuarios(usuarios):
     os.makedirs(config.CARPETA_WEB, exist_ok=True)
-    with open(_ruta_usuarios(), "w", encoding="utf-8") as f:
+    ruta = _ruta_usuarios()
+    with tempfile.NamedTemporaryFile("w", dir=config.CARPETA_WEB, delete=False, suffix=".tmp", encoding="utf-8") as f:
         json.dump(usuarios, f, ensure_ascii=False, indent=2)
+        tmp = f.name
+    os.replace(tmp, ruta)
 
 
 def hash_password(password, salt=None):

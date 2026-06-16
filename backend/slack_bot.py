@@ -52,7 +52,7 @@ def siguiente_envio_produccion(ahora=None):
     objetivo = datetime.combine(ahora.date(), config.HORA_ENVIO_PRODUCCION, tzinfo=config.ZONA_HORARIA_MADRID)
     dias_hasta_viernes = (config.DIA_ENVIO_PRODUCCION - ahora.weekday()) % 7
     objetivo = objetivo + timedelta(days=dias_hasta_viernes)
-    if objetivo <= ahora:
+    if objetivo < ahora:
         objetivo = objetivo + timedelta(days=7)
     return objetivo
 

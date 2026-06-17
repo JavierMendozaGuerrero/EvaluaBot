@@ -1,7 +1,9 @@
 import logging
 import os
 import re
+import unicodedata
 from datetime import datetime, timezone
+from difflib import SequenceMatcher
 
 from . import config
 from .clients import notion
@@ -422,8 +424,8 @@ def _texto_propiedad(propiedades, nombre_propiedad):
     return ""
 
 
-def obtener_lista_empleados() -> list[str]:
-    """Lee la lista de empleados desde la base de datos configurada en Notion."""
+def _obtener_registros_empleados() -> list[dict]:
+    """Lee empleados con su nombre canonico y aliases utiles para busqueda."""
     try:
         db_id, resultado = _retrieve_bbdd(config.NOTION_EMPLOYEES_DATABASE_ID)
         propiedades = resultado.get("properties", {})
@@ -436,7 +438,7 @@ def obtener_lista_empleados() -> list[str]:
             )
             return []
 
-        empleados = []
+        registros = []
         cursor = None
         while True:
             kwargs = {"page_size": 100}
@@ -445,11 +447,22 @@ def obtener_lista_empleados() -> list[str]:
             resp = _query_bbdd(db_id, **kwargs)
             for pagina in resp.get("results", []):
                 props = pagina.get("properties", {})
+                nombre = ""
                 for nombre_prop in nombre_props:
                     valor = _texto_propiedad(props, nombre_prop)
                     if valor:
-                        empleados.append(valor.strip())
+                        nombre = valor.strip()
                         break
+                if not nombre:
+                    continue
+
+                aliases = []
+                for alias_prop in ("Nombre_Slack", "Slack", "Usuario Slack", "Nombre Slack", "Alias", "Email"):
+                    if alias_prop in props:
+                        valor_alias = _texto_propiedad(props, alias_prop)
+                        if valor_alias:
+                            aliases.append(valor_alias.strip())
+                registros.append({"nombre": nombre, "aliases": aliases})
             if not resp.get("has_more"):
                 break
             cursor = resp.get("next_cursor")
@@ -457,35 +470,115 @@ def obtener_lista_empleados() -> list[str]:
             "Lista de empleados leida desde Notion '%s' (%s): %s nombres. Columnas usadas: %s",
             _extraer_titulo_bbdd(resultado) or "sin titulo",
             db_id,
-            len(empleados),
+            len(registros),
             ", ".join(nombre_props),
         )
-        return empleados
+        return registros
     except Exception:
         logging.exception("Error leyendo la lista de empleados desde Notion")
         return []
 
 
+def obtener_lista_empleados() -> list[str]:
+    """Lee los nombres canonicos de empleados desde Notion."""
+    return [registro["nombre"] for registro in _obtener_registros_empleados()]
+
+
 def _tokens_nombre(nombre):
-    return {token for token in normalizar_nombre(nombre).split() if len(token) > 1}
+    return {token for token in _normalizar_para_match(nombre).split() if len(token) > 1}
+
+
+def _normalizar_para_match(valor):
+    texto = normalizar_nombre(valor)
+    texto = "".join(
+        char for char in unicodedata.normalize("NFD", texto)
+        if unicodedata.category(char) != "Mn"
+    )
+    return re.sub(r"[^a-z0-9]+", " ", texto).strip()
+
+
+def _compactar_match(valor):
+    return _normalizar_para_match(valor).replace(" ", "")
+
+
+def _lcs_len(a, b):
+    if not a or not b:
+        return 0
+    prev = [0] * (len(b) + 1)
+    for char_a in a:
+        curr = [0]
+        for idx_b, char_b in enumerate(b, 1):
+            curr.append(prev[idx_b - 1] + 1 if char_a == char_b else max(prev[idx_b], curr[-1]))
+        prev = curr
+    return prev[-1]
+
+
+def _score_orden_letras(buscado, candidato):
+    buscado_compacto = _compactar_match(buscado)
+    candidato_compacto = _compactar_match(candidato)
+    if not buscado_compacto or not candidato_compacto:
+        return 0
+    lcs = _lcs_len(buscado_compacto, candidato_compacto)
+    cobertura_buscado = lcs / len(buscado_compacto)
+    cobertura_candidato = lcs / len(candidato_compacto)
+    return (cobertura_buscado * 0.8) + (cobertura_candidato * 0.2)
+
+
+def _score_nombre(buscado, candidato):
+    buscado_norm = _normalizar_para_match(buscado)
+    candidato_norm = _normalizar_para_match(candidato)
+    if not buscado_norm or not candidato_norm:
+        return 0
+
+    ratio = SequenceMatcher(None, buscado_norm, candidato_norm).ratio()
+    ratio_compacto = SequenceMatcher(None, _compactar_match(buscado), _compactar_match(candidato)).ratio()
+    orden_score = _score_orden_letras(buscado, candidato)
+    tokens_buscados = buscado_norm.split()
+    tokens_candidato = candidato_norm.split()
+    token_hits = 0
+    for token in tokens_buscados:
+        if any(t.startswith(token) or token.startswith(t) for t in tokens_candidato):
+            token_hits += 1
+    token_score = token_hits / max(len(tokens_buscados), 1)
+    prefix_bonus = 0.12 if candidato_norm.startswith(buscado_norm) else 0
+    return max(
+        (ratio * 0.45) + (ratio_compacto * 0.2) + (token_score * 0.25) + (orden_score * 0.1) + prefix_bonus,
+        (orden_score * 0.7) + (ratio_compacto * 0.3),
+    )
 
 
 def buscar_empleado_en_lista(nombre: str):
     """Devuelve el nombre de la lista que coincide con el texto recibido."""
-    nombre_limpio = normalizar_nombre(nombre)
+    nombre_limpio = _normalizar_para_match(nombre)
     if not nombre_limpio:
         return None
-    empleados = obtener_lista_empleados()
-    tokens_buscados = _tokens_nombre(nombre)
-    for empleado in empleados:
-        empleado_limpio = normalizar_nombre(empleado)
-        if nombre_limpio == empleado_limpio:
-            return empleado
-        tokens_empleado = _tokens_nombre(empleado)
-        if tokens_buscados and tokens_buscados.issubset(tokens_empleado):
-            return empleado
+    for registro in _obtener_registros_empleados():
+        if nombre_limpio == _normalizar_para_match(registro["nombre"]):
+            return registro["nombre"]
     logging.info("Empleado no encontrado en la lista de Notion: %s", nombre)
     return None
+
+
+def sugerir_empleados_parecidos(nombre: str, limite: int = 8) -> list[str]:
+    candidatos = []
+    for registro in _obtener_registros_empleados():
+        valores = [registro["nombre"], *registro.get("aliases", [])]
+        score = max((_score_nombre(nombre, valor) for valor in valores if valor), default=0)
+        candidatos.append((score, registro["nombre"]))
+    candidatos.sort(key=lambda item: (-item[0], _normalizar_para_match(item[1])))
+    sugerencias = []
+    vistos = set()
+    for score, empleado in candidatos:
+        if len(sugerencias) >= 3 and score < 0.24:
+            continue
+        clave = _normalizar_para_match(empleado)
+        if clave in vistos:
+            continue
+        vistos.add(clave)
+        sugerencias.append(empleado)
+        if len(sugerencias) >= limite:
+            break
+    return sugerencias
 
 
 _cache_nombre_por_id: dict = {}

@@ -8,7 +8,7 @@ from slack_bolt.adapter.socket_mode import SocketModeHandler
 from . import config
 from .ca_reviews import ca_ts, manejar_mensaje_ca
 from .clients import slack_app
-from .notion_service import buscar_empleado_en_lista, guardar_en_notion, obtener_nombre_por_id_usuario
+from .notion_service import buscar_empleado_en_lista, guardar_en_notion, obtener_nombre_por_id_usuario, sugerir_empleados_parecidos
 from .state import avisos_responder_en_hilo, conversaciones, evaluacion_ts, evaluaciones_pendientes, lock
 from .utils import normalizar_nombre
 
@@ -155,6 +155,21 @@ def _debe_avisar_responder_en_hilo(channel, user_id):
     return True
 
 
+def _mensaje_empleado_no_encontrado(texto):
+    sugerencias = sugerir_empleados_parecidos(texto)
+    if sugerencias:
+        opciones = "\n".join(f"- {nombre}" for nombre in sugerencias)
+        return (
+            f"*{texto}* no aparece tal cual en la lista de empleados.\n"
+            "¿Querías decir alguno de estos nombres? Responde copiando el nombre exacto:\n"
+            f"{opciones}"
+        )
+    return (
+        f"*{texto}* no aparece tal cual en la lista de empleados. "
+        "Escribe nombre y apellido como aparece en la lista."
+    )
+
+
 def _nombre_real(user_id: str, logger) -> str:
     nombre = obtener_nombre_por_id_usuario(user_id)
     if nombre:
@@ -256,10 +271,7 @@ def handle_message_events(event, logger):
                     pregunta = "Sigo aquí. Dime el nombre del miembro del proyecto."
                 else:
                     accion = "pedir_persona_invalida"
-                    pregunta = (
-                        f"*{texto}* no aparece en la lista de empleados. "
-                        "Elige un nombre válido de la lista de empleados o corrige el nombre."
-                    )
+                    pregunta = _mensaje_empleado_no_encontrado(texto)
             else:
                 accion = "pedir_persona"
                 pregunta = "¿Qué miembro del proyecto quieres evaluar?"
@@ -328,10 +340,7 @@ def handle_message_events(event, logger):
                     empleado = buscar_empleado_en_lista(texto)
                     if not empleado:
                         accion = "pedir_valor_modificacion"
-                        pregunta = (
-                            f"*{texto}* no aparece en la lista de empleados. "
-                            "Elige un nombre válido de la lista de empleados o corrige el nombre."
-                        )
+                        pregunta = _mensaje_empleado_no_encontrado(texto)
                     else:
                         valor = empleado
                 if accion != "pedir_valor_modificacion":

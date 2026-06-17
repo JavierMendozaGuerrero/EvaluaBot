@@ -1,10 +1,10 @@
-"""
-Flujo de revisión para Career Advisors (CA).
+﻿"""
+Flujo de revisiÃ³n para Career Advisors (CA).
 
-El bot envía al canal "¿Eres CA de alguien?" cada INTERVALO_CA_SEGUNDOS.
-El usuario responde en hilo: sí → bot pide nombre del advisee → muestra todas
-las evaluaciones desde la última revisión del CA → pide opinión → guarda en
-Notion → pregunta si hay otro advisee.
+El bot envÃ­a al canal "Â¿Eres CA de alguien?" cada INTERVALO_CA_SEGUNDOS.
+El usuario responde en hilo: sÃ­ â†’ bot pide nombre del advisee â†’ muestra todas
+las evaluaciones desde la Ãºltima revisiÃ³n del CA â†’ pide opiniÃ³n â†’ guarda en
+Notion â†’ pregunta si hay otro advisee.
 """
 
 import logging
@@ -23,7 +23,9 @@ from .notion_service import (
     _query_bbdd,
     _tipo_objeto_busqueda_bbdd,
     _usa_data_sources,
+    buscar_empleado_en_lista,
     obtener_evaluaciones_por_evaluado,
+    sugerir_empleados_parecidos,
 )
 from .utils import normalizar_nombre
 
@@ -54,7 +56,7 @@ _PROPS_CA = {
 # ---------------------------------------------------------------------------
 
 def _asegurar_propiedades_ca(database_id: str) -> None:
-    """Añade al esquema de la BD las propiedades que falten."""
+    """AÃ±ade al esquema de la BD las propiedades que falten."""
     try:
         if _usa_data_sources():
             bbdd = notion.data_sources.retrieve(data_source_id=database_id)
@@ -115,7 +117,7 @@ def _obtener_o_crear_bbdd_ca(ca_nombre: str) -> str:
 
 
 def _guardar_opinion(ca_nombre: str, advisee: str, opinion: str) -> tuple[bool, str]:
-    """Devuelve (éxito, mensaje_error)."""
+    """Devuelve (Ã©xito, mensaje_error)."""
     try:
         db_id = _obtener_o_crear_bbdd_ca(ca_nombre)
         fecha_str = datetime.now(config.ZONA_HORARIA_MADRID).strftime("%Y-%m-%d %H:%M")
@@ -136,7 +138,7 @@ def _guardar_opinion(ca_nombre: str, advisee: str, opinion: str) -> tuple[bool, 
 
 
 # ---------------------------------------------------------------------------
-# Fecha de la última opinión del CA sobre un advisee
+# Fecha de la Ãºltima opiniÃ³n del CA sobre un advisee
 # ---------------------------------------------------------------------------
 
 def _fecha_ultima_opinion(ca_nombre: str, advisee: str) -> str | None:
@@ -193,7 +195,7 @@ def _resumen_advisee(advisee: str, desde_fecha: str | None) -> str:
         nuevas = [e for e in evaluaciones if (e.get("fecha") or "") > desde_fecha]
         if not nuevas:
             return (
-                f"*{advisee}*: no hay evaluaciones nuevas desde tu última revisión "
+                f"*{advisee}*: no hay evaluaciones nuevas desde tu Ãºltima revisiÃ³n "
                 f"({desde_fecha[:10]})."
             )
         evaluaciones = nuevas
@@ -203,14 +205,14 @@ def _resumen_advisee(advisee: str, desde_fecha: str | None) -> str:
     for ev in ordenadas:
         fecha = ev.get("fecha", "")[:10] if ev.get("fecha") else "?"
         lineas.append(
-            f"• [{fecha}] *{ev.get('persona_que_evalua', '?')}* en {ev.get('proyecto', '?')} — "
-            f"Satisfacción {ev.get('satisfaccion', '?')}/5 | "
+            f"â€¢ [{fecha}] *{ev.get('persona_que_evalua', '?')}* en {ev.get('proyecto', '?')} â€” "
+            f"SatisfacciÃ³n {ev.get('satisfaccion', '?')}/5 | "
             f"Mejor: {ev.get('mejor_aspecto', '?')} | "
             f"Peor: {ev.get('peor_aspecto', '?')}"
         )
 
     n = len(lineas)
-    cabecera = f"*{advisee}* — {n} evaluación{'es' if n != 1 else ''}"
+    cabecera = f"*{advisee}* â€” {n} evaluaciÃ³n{'es' if n != 1 else ''}"
     if desde_fecha:
         cabecera += f" desde {desde_fecha[:10]}"
     return cabecera + ":\n" + "\n".join(lineas)
@@ -221,7 +223,7 @@ def _resumen_advisee(advisee: str, desde_fecha: str | None) -> str:
 # ---------------------------------------------------------------------------
 
 def _es_si(texto: str) -> bool:
-    return normalizar_nombre(texto) in {"si", "sí", "s", "yes", "y", "claro", "sip", "vale"}
+    return normalizar_nombre(texto) in {"si", "sÃ­", "s", "yes", "y", "claro", "sip", "vale"}
 
 
 def _es_no(texto: str) -> bool:
@@ -229,7 +231,7 @@ def _es_no(texto: str) -> bool:
 
 
 def _es_confirmar(texto: str) -> bool:
-    return normalizar_nombre(texto) in {"si", "sí", "s", "ok", "okay", "confirmar", "guardar", "correcto"}
+    return normalizar_nombre(texto) in {"si", "sÃ­", "s", "ok", "okay", "confirmar", "guardar", "correcto"}
 
 
 def _es_modificar(texto: str) -> bool:
@@ -288,11 +290,22 @@ def _obtener_nombres_empleados() -> list[str]:
 
 def _validar_advisee_nombre(nombre: str) -> bool:
     """Comprueba si el nombre existe en la columna 'Nombre' de 'Lista empleados'."""
-    nombres = _obtener_nombres_empleados()
-    if not nombres:
-        return True  # Si no se puede leer la lista, se deja pasar
-    nombre_norm = normalizar_nombre(nombre)
-    return any(normalizar_nombre(n) == nombre_norm for n in nombres)
+    return buscar_empleado_en_lista(nombre) is not None
+
+
+def _mensaje_advisee_no_encontrado(nombre: str) -> str:
+    sugerencias = sugerir_empleados_parecidos(nombre)
+    if sugerencias:
+        opciones = "\n".join(f"- {item}" for item in sugerencias)
+        return (
+            f"*{nombre}* no aparece tal cual en la lista de empleados.\n"
+            "Â¿QuerÃ­as decir alguno de estos nombres? Responde copiando el nombre exacto:\n"
+            f"{opciones}"
+        )
+    return (
+        f"*{nombre}* no aparece tal cual en la lista de empleados. "
+        "Escribe nombre y apellido como aparece en la lista."
+    )
 
 
 def _nombre_desde_notion(user_id: str) -> str | None:
@@ -355,12 +368,12 @@ def _nombre_real(user_id: str, logger) -> str:
         )
         return nombre if nombre else user_id
     except Exception as exc:
-        logger.error(f"users_info falló para {user_id}: {exc}")
+        logger.error(f"users_info fallÃ³ para {user_id}: {exc}")
         return user_id
 
 
 # ---------------------------------------------------------------------------
-# Envío del mensaje inicial
+# EnvÃ­o del mensaje inicial
 # ---------------------------------------------------------------------------
 
 def enviar_pregunta_inicial_ca() -> None:
@@ -368,8 +381,8 @@ def enviar_pregunta_inicial_ca() -> None:
         resp = slack_app.client.chat_postMessage(
             channel=config.CHANNEL_ID,
             text=(
-                "📋 *Evaluaciones CA* - Obligatorio si eres Career Advisor de alguien.\n"
-                "Entra en el hilo y envía cualquier mensaje para comenzar."
+                "ðŸ“‹ *Evaluaciones CA* - Obligatorio si eres Career Advisor de alguien.\n"
+                "Entra en el hilo y envÃ­a cualquier mensaje para comenzar."
                 f"{config.INSTRUCCIONES_RESPONDER_EN_HILO}"
             ),
         )
@@ -381,7 +394,7 @@ def enviar_pregunta_inicial_ca() -> None:
 
 
 # ---------------------------------------------------------------------------
-# Lógica de conversación — llamada desde slack_bot.py
+# LÃ³gica de conversaciÃ³n â€” llamada desde slack_bot.py
 # ---------------------------------------------------------------------------
 
 def manejar_mensaje_ca(event, logger) -> None:
@@ -421,7 +434,7 @@ def manejar_mensaje_ca(event, logger) -> None:
                 accion = "aclarar_inicial"
 
         elif modo == "esperando_advisee":
-            # la validación y el cambio de modo se hacen fuera del lock
+            # la validaciÃ³n y el cambio de modo se hacen fuera del lock
             payload["advisee"] = texto
             payload["ca_nombre"] = estado.get("ca_nombre")
             accion = "validar_y_mostrar"
@@ -464,26 +477,24 @@ def manejar_mensaje_ca(event, logger) -> None:
         slack_app.client.chat_postMessage(channel=channel, thread_ts=thread_ts, text=text)
 
     if accion == "hacer_primera_pregunta":
-        reply("¿Eres Career Advisor de alguien? (`sí` / `no`)")
+        reply("Â¿Eres Career Advisor de alguien? (`sÃ­` / `no`)")
 
     elif accion == "pedir_advisee":
-        reply("¿Cuál es el nombre de tu advisee?")
+        reply("Â¿CuÃ¡l es el nombre de tu advisee?")
 
     elif accion == "terminar_sin_ca":
-        reply("¡Perfecto, gracias! 👋")
+        reply("Â¡Perfecto, gracias! ðŸ‘‹")
 
     elif accion == "aclarar_inicial":
-        reply("Responde `sí` o `no`. ¿Eres Career Advisor de alguien?")
+        reply("Responde `sÃ­` o `no`. Â¿Eres Career Advisor de alguien?")
 
     elif accion == "validar_y_mostrar":
         advisee = payload["advisee"]
-        if not _validar_advisee_nombre(advisee):
-            reply(
-                f"*{advisee}* no aparece en la lista de empleados. "
-                "Escríbelo sin tildes, con la primera letra del nombre y del primer apellido en mayúscula y el resto en minúscula. "
-                "Por ejemplo: *Maria Garcia*"
-            )
+        advisee_encontrado = buscar_empleado_en_lista(advisee)
+        if not advisee_encontrado:
+            reply(_mensaje_advisee_no_encontrado(advisee))
         else:
+            advisee = advisee_encontrado
             with _lock:
                 if clave in conversaciones_ca:
                     conversaciones_ca[clave]["advisee_actual"] = advisee
@@ -498,40 +509,40 @@ def manejar_mensaje_ca(event, logger) -> None:
                 if clave in conversaciones_ca:
                     conversaciones_ca[clave]["modo"] = "esperando_otro" if sin_novedades else "esperando_opinion"
             if sin_novedades:
-                reply(f"{resumen}\n\n¿Tienes otro advisee? (`sí` / `no`)")
+                reply(f"{resumen}\n\nÂ¿Tienes otro advisee? (`sÃ­` / `no`)")
             else:
-                reply(f"{resumen}\n\n*¿Qué opinas de esto?*")
+                reply(f"{resumen}\n\n*Â¿QuÃ© opinas de esto?*")
 
     elif accion == "mostrar_confirmacion_ca":
         reply(
-            f"*Resumen de tu valoración:*\n"
-            f"• Advisee: *{payload.get('advisee', '?')}*\n"
-            f"• Opinión: {payload.get('opinion', '?')}\n\n"
-            "Responde `sí` para guardar, `modificar` para cambiar la opinión, o `no` para cancelar."
+            f"*Resumen de tu valoraciÃ³n:*\n"
+            f"â€¢ Advisee: *{payload.get('advisee', '?')}*\n"
+            f"â€¢ OpiniÃ³n: {payload.get('opinion', '?')}\n\n"
+            "Responde `sÃ­` para guardar, `modificar` para cambiar la opiniÃ³n, o `no` para cancelar."
         )
 
     elif accion == "pedir_nueva_opinion":
-        reply(f"¿Qué opinas de las evaluaciones de *{payload.get('advisee', '?')}*?")
+        reply(f"Â¿QuÃ© opinas de las evaluaciones de *{payload.get('advisee', '?')}*?")
 
     elif accion == "cancelar_opinion":
-        reply("De acuerdo, no se guardará esta opinión.\n\n¿Tienes otro advisee? (`sí` / `no`)")
+        reply("De acuerdo, no se guardarÃ¡ esta opiniÃ³n.\n\nÂ¿Tienes otro advisee? (`sÃ­` / `no`)")
 
     elif accion == "guardar_y_preguntar_otro":
         ca_nombre = payload["ca_nombre"] or _nombre_real(user_id, logger)
         ok, error = _guardar_opinion(ca_nombre, payload["advisee"], payload["opinion"])
         if ok:
-            reply("✅ Opinión guardada en Notion.\n\n¿Tienes otro advisee? (`sí` / `no`)")
+            reply("âœ… OpiniÃ³n guardada en Notion.\n\nÂ¿Tienes otro advisee? (`sÃ­` / `no`)")
         else:
-            reply(f"⚠️ No se pudo guardar en Notion: `{error[:300]}`\n\n¿Tienes otro advisee? (`sí` / `no`)")
+            reply(f"âš ï¸ No se pudo guardar en Notion: `{error[:300]}`\n\nÂ¿Tienes otro advisee? (`sÃ­` / `no`)")
 
     elif accion == "pedir_siguiente_advisee":
-        reply("¿Cuál es el nombre de tu próximo advisee?")
+        reply("Â¿CuÃ¡l es el nombre de tu prÃ³ximo advisee?")
 
     elif accion == "terminar":
-        reply("¡Perfecto, gracias por tu tiempo! 🎉")
+        reply("Â¡Perfecto, gracias por tu tiempo! ðŸŽ‰")
 
     elif accion == "aclarar_otro":
-        reply("Responde `sí` si tienes otro advisee, o `no` para terminar.")
+        reply("Responde `sÃ­` si tienes otro advisee, o `no` para terminar.")
 
 
 # ---------------------------------------------------------------------------

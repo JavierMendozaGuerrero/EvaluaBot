@@ -6,6 +6,7 @@ from datetime import datetime, timedelta
 from slack_bolt.adapter.socket_mode import SocketModeHandler
 
 from . import config
+from .ca_reviews import ca_ts, manejar_mensaje_ca
 from .clients import slack_app
 from .notion_service import guardar_en_notion
 from .state import conversaciones, evaluacion_ts, evaluaciones_pendientes, lock
@@ -124,6 +125,9 @@ def handle_message_events(event, logger):
         return
     thread_ts = event.get("thread_ts")
     if not thread_ts:
+        return
+    if thread_ts in ca_ts:
+        manejar_mensaje_ca(event, logger)
         return
     with lock:
         if thread_ts not in evaluacion_ts:

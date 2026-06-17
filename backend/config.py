@@ -15,6 +15,7 @@ CHANNEL_ID = os.environ.get("SLACK_CHANNEL_ID", "C0BBFRM14SU")
 APP_MODE = os.environ.get("APP_MODE", "prueba").strip().lower()
 REVIEW_BEFORE_SEND = env_bool("REVIEW_BEFORE_SEND")
 INTERVALO_PRUEBA_SEGUNDOS = 300
+INTERVALO_CA_SEGUNDOS = int(os.environ.get("INTERVALO_CA_SEGUNDOS", "120"))
 ZONA_HORARIA_MADRID = ZoneInfo("Europe/Madrid")
 DIA_ENVIO_PRODUCCION = 4
 HORA_ENVIO_PRODUCCION = datetime_time(10, 0)

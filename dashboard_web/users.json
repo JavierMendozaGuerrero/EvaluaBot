@@ -1,0 +1,9 @@
+{
+  "irene": {
+    "username": "Irene",
+    "persona": "Irene",
+    "is_admin": false,
+    "salt": "86e990a92496078b3680d0d0d09b5ba4",
+    "password_hash": "a9e07662d703615d85b09142a7d79ab994c4a2899616ab1d421f6fa2551c483e"
+  }
+}

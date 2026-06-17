@@ -2,9 +2,9 @@
 
 Este bot:
 1. Envía "haz tu evaluación" a un canal de Slack cada 5 minutos.
-2. Si alguien responde **en hilo** a ese mensaje, pregunta a quién está
-   evaluando y guarda el resultado en una base de datos de Notion específica
-   para esa persona. Si no existe, la crea.
+2. Si alguien responde **en hilo** a ese mensaje, pregunta primero el proyecto
+   y después el miembro evaluado. Guarda el resultado en una base de datos de
+   Notion específica para esa persona. Si no existe, la crea.
 3. Expone una web local para generar informes con Claude, descargar un Word
    y crear una trayectoria React navegable por fechas.
 4. Añade registro/login: Ana puede ver todo como admin; el resto solo puede
@@ -56,6 +56,9 @@ $env:SLACK_BOT_TOKEN="xoxb-..."
 $env:SLACK_APP_TOKEN="xapp-..."
 $env:NOTION_TOKEN="secret_..."
 $env:NOTION_DATABASE_ID="3800a3d98b8a804c97a8fe8667e9940c"
+$env:NOTION_EMPLOYEES_DATABASE_ID="id_de_la_pagina_evaluaciones_o_listas_de_datos"
+$env:NOTION_DATA_LISTS_PAGE_NAME="Listas de datos"
+$env:NOTION_EMPLOYEES_DATABASE_NAME="Lista de empleados"
 $env:NOTION_PARENT_PAGE_ID="id_de_la_pagina_donde_crear_las_bases"
 $env:ANTHROPIC_API_KEY="sk-ant-..."
 $env:ADMIN_NAME="Ana"
@@ -106,8 +109,8 @@ Desde ahí puedes:
 
 1. En modo `prueba`, el bot envía la primera pregunta al arrancar y luego cada 5 minutos.
 2. **Responde en hilo** a ese mensaje (no en el canal directamente)
-3. Responde primero el nombre de la persona evaluada
-4. Responde el proyecto correspondiente
+3. Responde primero el proyecto correspondiente
+4. Responde el nombre del miembro evaluado
 5. Al final, el bot mostrará un resumen de tus respuestas en el hilo.
 6. Responde `sí` para guardar en Notion o `modificar` para cambiar una respuesta concreta.
 7. Revisa Notion: debería aparecer o reutilizarse una base llamada

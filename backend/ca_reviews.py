@@ -366,8 +366,9 @@ def enviar_pregunta_inicial_ca() -> None:
         resp = slack_app.client.chat_postMessage(
             channel=config.CHANNEL_ID,
             text=(
-                "📋 *Evaluaciones CA* — Obligatorio si eres Career Advisor de alguien.\n"
+                "📋 *Evaluaciones CA* - Obligatorio si eres Career Advisor de alguien.\n"
                 "Entra en el hilo y envía cualquier mensaje para comenzar."
+                f"{config.INSTRUCCIONES_RESPONDER_EN_HILO}"
             ),
         )
         with _lock:

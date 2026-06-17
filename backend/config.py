@@ -20,11 +20,16 @@ ZONA_HORARIA_MADRID = ZoneInfo("Europe/Madrid")
 DIA_ENVIO_PRODUCCION = 4
 HORA_ENVIO_PRODUCCION = datetime_time(10, 0)
 
-PUERTO_WEB = 8000
+PUERTO_WEB = int(os.environ.get("PUERTO_WEB", "8000"))
 CARPETA_WEB = os.path.join(BASE_DIR, "dashboard_web")
 PREFIJO_BBDD_EVALUADO = "Evaluaciones - "
 FRONTEND_ORIGIN = os.environ.get("FRONTEND_ORIGIN", "http://localhost:5173").strip()
 WEB_MODE = os.environ.get("WEB_MODE", "api").strip().lower()
+INSTRUCCIONES_RESPONDER_EN_HILO = (
+    "\n\nResponde siempre en el hilo de esta notificación, no en el canal principal. "
+    "Aquí solo mando notificaciones cuando toca evaluar. "
+    "No soy un bot inteligente: solo registro respuestas simples."
+)
 
 def _require_env(name):
     value = os.environ.get(name)
@@ -37,14 +42,17 @@ SLACK_BOT_TOKEN = _require_env("SLACK_BOT_TOKEN")
 SLACK_APP_TOKEN = _require_env("SLACK_APP_TOKEN")
 NOTION_TOKEN = _require_env("NOTION_TOKEN")
 NOTION_DATABASE_ID = _require_env("NOTION_DATABASE_ID")
+NOTION_EMPLOYEES_DATABASE_ID = os.environ.get("NOTION_EMPLOYEES_DATABASE_ID", NOTION_DATABASE_ID).strip()
+NOTION_DATA_LISTS_PAGE_NAME = os.environ.get("NOTION_DATA_LISTS_PAGE_NAME", "Listas de datos").strip()
+NOTION_EMPLOYEES_DATABASE_NAME = os.environ.get("NOTION_EMPLOYEES_DATABASE_NAME", "Lista de empleados").strip()
 NOTION_PARENT_PAGE_ID = os.environ.get("NOTION_PARENT_PAGE_ID", "").strip()
 ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY", "").strip()
 ADMIN_NAME = os.environ.get("ADMIN_NAME", "Ana").strip()
 ADMIN_ACCESS_CODE = os.environ.get("ADMIN_ACCESS_CODE", "").strip()
 
 PREGUNTAS = [
-    {"clave": "evaluado", "texto": "1️⃣ ¿A quién estás evaluando?"},
-    {"clave": "proyecto", "texto": "2️⃣ ¿A qué proyecto corresponde esta evaluación?"},
+    {"clave": "proyecto", "texto": "1️⃣ ¿En qué proyecto estás trabajando ahora?"},
+    {"clave": "evaluado", "texto": "2️⃣ Indica el nombre del miembro del proyecto"},
     {
         "clave": "satisfaccion",
         "texto": "3️⃣ ¿Cómo de satisfecho estás con esa persona? (responde un número del 1 al 5)",

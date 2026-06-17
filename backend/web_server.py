@@ -13,6 +13,10 @@ from .users import autenticar_usuario, crear_sesion, obtener_sesion, registrar_u
 from .utils import normalizar_nombre, slug_archivo
 
 
+class ReusableTCPServer(socketserver.TCPServer):
+    allow_reuse_address = True
+
+
 class WebHandler(SimpleHTTPRequestHandler):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, directory=config.CARPETA_WEB, **kwargs)
@@ -180,6 +184,15 @@ class WebHandler(SimpleHTTPRequestHandler):
 
 def iniciar_servidor_web():
     os.makedirs(config.CARPETA_WEB, exist_ok=True)
-    with socketserver.TCPServer(("", config.PUERTO_WEB), WebHandler) as httpd:
-        logging.info(f"Web disponible en http://localhost:{config.PUERTO_WEB}")
-        httpd.serve_forever()
+    try:
+        with ReusableTCPServer(("", config.PUERTO_WEB), WebHandler) as httpd:
+            logging.info(f"Web disponible en http://localhost:{config.PUERTO_WEB}")
+            httpd.serve_forever()
+    except OSError:
+        logging.error(
+            "No se pudo iniciar la web en http://localhost:%s. "
+            "Ese puerto parece estar ocupado. Cierra el otro proceso o arranca con: "
+            '$env:PUERTO_WEB="8001"; python bot.py',
+            config.PUERTO_WEB,
+        )
+        logging.debug("Detalle del error al iniciar la web", exc_info=True)

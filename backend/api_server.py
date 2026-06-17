@@ -21,6 +21,10 @@ from .users import (
 from .utils import normalizar_nombre, slug_archivo
 
 
+class ReusableTCPServer(TCPServer):
+    allow_reuse_address = True
+
+
 class ApiHandler(BaseHTTPRequestHandler):
     def log_message(self, *args, **kwargs):
         pass
@@ -185,6 +189,15 @@ class ApiHandler(BaseHTTPRequestHandler):
 
 def iniciar_api_backend():
     os.makedirs(config.CARPETA_WEB, exist_ok=True)
-    with TCPServer(("", config.PUERTO_WEB), ApiHandler) as httpd:
-        logging.info(f"API backend disponible en http://localhost:{config.PUERTO_WEB}")
-        httpd.serve_forever()
+    try:
+        with ReusableTCPServer(("", config.PUERTO_WEB), ApiHandler) as httpd:
+            logging.info(f"API backend disponible en http://localhost:{config.PUERTO_WEB}")
+            httpd.serve_forever()
+    except OSError as error:
+        logging.error(
+            "No se pudo iniciar la API en http://localhost:%s. "
+            "Ese puerto parece estar ocupado. Cierra el otro proceso o arranca con: "
+            '$env:PUERTO_WEB="8001"; python bot.py',
+            config.PUERTO_WEB,
+        )
+        logging.debug("Detalle del error al iniciar la API", exc_info=True)

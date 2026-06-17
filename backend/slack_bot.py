@@ -19,7 +19,8 @@ def enviar_una_evaluacion():
             channel=config.CHANNEL_ID,
             text=(
                 "📍 ¿En qué proyecto estás trabajando ahora? "
-                "Si estás en más de uno, elige solo uno y escribe el nombre del proyecto."
+                "Si estás en más de uno, elige solo uno y escribe el nombre del proyecto.\n"
+                "_Si en algún momento quieres cancelar la evaluación, escribe SOS en el hilo._"
                 f"{config.INSTRUCCIONES_RESPONDER_EN_HILO}"
             ),
         )
@@ -223,6 +224,15 @@ def handle_message_events(event, logger):
     user_id = event.get("user")
     texto = (event.get("text") or "").strip()
 
+    if normalizar_nombre(texto) == "sos":
+        with lock:
+            conversaciones.pop(clave_conv, None)
+        slack_app.client.chat_postMessage(
+            channel=channel, thread_ts=thread_ts,
+            text="Evaluación cancelada. Si quieres volver a empezar, envía otro mensaje en el hilo.",
+        )
+        return
+
     with lock:
         estado = conversaciones.get(clave_conv)
         if estado is None:
@@ -315,7 +325,7 @@ def handle_message_events(event, logger):
                 accion = "pedir_modificacion"
                 pregunta = texto_menu_modificacion()
             elif _es_no(texto):
-                conversaciones.pop(clave_conv, None)
+                estado["modo"] = "terminado"
                 accion = "terminar"
             else:
                 accion = "mostrar_resumen"
@@ -389,11 +399,14 @@ def handle_message_events(event, logger):
                     "Si estás en más de uno, elige solo uno y escribe el nombre del proyecto."
                 )
             elif _es_no(texto):
-                conversaciones.pop(clave_conv, None)
+                estado["modo"] = "terminado"
                 accion = "terminar"
             else:
                 accion = "pedir_mas_proyectos"
                 pregunta = "Responde `sí` o `no` para indicar si hay más proyectos."
+
+        elif modo == "terminado":
+            accion = "ya_terminado"
 
     if accion == "pedir_persona":
         slack_app.client.chat_postMessage(
@@ -464,6 +477,9 @@ def handle_message_events(event, logger):
         return
     if accion == "terminar":
         slack_app.client.chat_postMessage(channel=config.CHANNEL_ID, thread_ts=thread_ts, text="Perfecto, gracias por tu tiempo. 👋")
+        return
+    if accion == "ya_terminado":
+        slack_app.client.chat_postMessage(channel=config.CHANNEL_ID, thread_ts=thread_ts, text="Esta evaluación ya ha concluido. Puedes salir del hilo. 👋")
         return
 
     # fallback: keep the conversation alive with the current prompt

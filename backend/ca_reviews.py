@@ -35,6 +35,8 @@ ca_ts: set = set()
 conversaciones_ca: dict = {}
 _lock = threading.Lock()
 _cache_bbdd: dict = {}
+_cache_nombre_usuario: dict = {}
+_cache_lista_empleados: dict = {"db_id": None, "nombres": None}
 
 PREFIJO_BBDD = "Opiniones CA - "
 
@@ -224,7 +226,121 @@ def _es_no(texto: str) -> bool:
     return normalizar_nombre(texto) in {"no", "n", "nope", "nel"}
 
 
+def _es_confirmar(texto: str) -> bool:
+    return normalizar_nombre(texto) in {"si", "sí", "s", "ok", "okay", "confirmar", "guardar", "correcto"}
+
+
+def _es_modificar(texto: str) -> bool:
+    return normalizar_nombre(texto) in {"modificar", "cambiar", "editar", "m"}
+
+
+def _obtener_nombres_empleados() -> list[str]:
+    """Devuelve la lista de nombres de la columna 'Nombre' de 'Lista empleados' en Notion."""
+    with _lock:
+        if _cache_lista_empleados["nombres"] is not None:
+            return _cache_lista_empleados["nombres"]
+    try:
+        with _lock:
+            db_id = _cache_lista_empleados["db_id"]
+        if not db_id:
+            resultado = notion.search(
+                query="Lista de empleados",
+                filter={"value": _tipo_objeto_busqueda_bbdd(), "property": "object"},
+                page_size=10,
+            )
+            for bbdd in resultado.get("results", []):
+                if _extraer_titulo_bbdd(bbdd) == "Lista de empleados":
+                    db_id = _data_source_id(bbdd)
+                    with _lock:
+                        _cache_lista_empleados["db_id"] = db_id
+                    break
+        if not db_id:
+            return []
+        nombres = []
+        cursor = None
+        while True:
+            kwargs: dict = {"page_size": 100}
+            if cursor:
+                kwargs["start_cursor"] = cursor
+            resp = _query_bbdd(db_id, **kwargs)
+            for fila in resp.get("results", []):
+                props = fila.get("properties", {})
+                for col in ("Nombre", "Nombre_Slack"):
+                    prop = props.get(col, {})
+                    valor = "".join(
+                        p.get("plain_text", "")
+                        for p in (prop.get("rich_text") or prop.get("title") or [])
+                    ).strip()
+                    if valor:
+                        nombres.append(valor)
+            if not resp.get("has_more"):
+                break
+            cursor = resp.get("next_cursor")
+        with _lock:
+            _cache_lista_empleados["nombres"] = nombres
+        return nombres
+    except Exception:
+        logging.exception("Error obteniendo nombres de 'Lista empleados' en Notion")
+        return []
+
+
+def _validar_advisee_nombre(nombre: str) -> bool:
+    """Comprueba si el nombre existe en la columna 'Nombre' de 'Lista empleados'."""
+    nombres = _obtener_nombres_empleados()
+    if not nombres:
+        return True  # Si no se puede leer la lista, se deja pasar
+    nombre_norm = normalizar_nombre(nombre)
+    return any(normalizar_nombre(n) == nombre_norm for n in nombres)
+
+
+def _nombre_desde_notion(user_id: str) -> str | None:
+    """Busca el nombre del usuario en 'Lista empleados' de Notion por ID_usuario."""
+    with _lock:
+        if user_id in _cache_nombre_usuario:
+            return _cache_nombre_usuario[user_id]
+    try:
+        resultado = notion.search(
+            query="Lista de empleados",
+            filter={"value": _tipo_objeto_busqueda_bbdd(), "property": "object"},
+            page_size=10,
+        )
+        db_id = None
+        for bbdd in resultado.get("results", []):
+            if _extraer_titulo_bbdd(bbdd) == "Lista de empleados":
+                db_id = _data_source_id(bbdd)
+                break
+        if not db_id:
+            return None
+
+        filas = _query_bbdd(db_id, page_size=100).get("results", [])
+        for fila in filas:
+            props = fila.get("properties", {})
+            prop_id = props.get("ID_usuario", {})
+            id_usuario = "".join(
+                p.get("plain_text", "")
+                for p in (prop_id.get("rich_text") or prop_id.get("title") or [])
+            ).strip()
+            if id_usuario != user_id:
+                continue
+            prop_nombre = props.get("Nombre", {})
+            nombre = "".join(
+                p.get("plain_text", "")
+                for p in (prop_nombre.get("rich_text") or prop_nombre.get("title") or [])
+            ).strip()
+            if nombre:
+                with _lock:
+                    _cache_nombre_usuario[user_id] = nombre
+                return nombre
+        return None
+    except Exception:
+        logging.exception(f"Error buscando nombre para '{user_id}' en Lista empleados")
+        return None
+
+
 def _nombre_real(user_id: str, logger) -> str:
+    nombre = _nombre_desde_notion(user_id)
+    if nombre:
+        return nombre
     try:
         resp = slack_app.client.users_info(user=user_id)
         user = resp.get("user", {})
@@ -249,13 +365,16 @@ def enviar_pregunta_inicial_ca() -> None:
     try:
         resp = slack_app.client.chat_postMessage(
             channel=config.CHANNEL_ID,
-            text="👥 *¿Eres Career Advisor de alguien?* Responde `sí` o `no` en este hilo.",
+            text=(
+                "📋 *Evaluaciones CA* — Obligatorio si eres Career Advisor de alguien.\n"
+                "Entra en el hilo y envía cualquier mensaje para comenzar."
+            ),
         )
         with _lock:
             ca_ts.add(resp["ts"])
-        logging.info(f"Pregunta CA enviada, ts={resp['ts']}")
+        logging.info(f"Mensaje CA enviado, ts={resp['ts']}")
     except Exception:
-        logging.exception("Error enviando pregunta CA")
+        logging.exception("Error enviando mensaje CA")
 
 
 # ---------------------------------------------------------------------------
@@ -267,6 +386,10 @@ def manejar_mensaje_ca(event, logger) -> None:
     thread_ts = event.get("thread_ts")
     channel = event.get("channel")
     texto = (event.get("text") or "").strip()
+
+    if not thread_ts or thread_ts not in ca_ts:
+        return
+
     clave = (thread_ts, user_id)
 
     accion = None
@@ -275,12 +398,16 @@ def manejar_mensaje_ca(event, logger) -> None:
     with _lock:
         estado = conversaciones_ca.get(clave)
         if estado is None:
-            estado = {"modo": "inicial", "ca_nombre": None}
+            estado = {"modo": "pre_inicial", "ca_nombre": None}
             conversaciones_ca[clave] = estado
 
         modo = estado["modo"]
 
-        if modo == "inicial":
+        if modo == "pre_inicial":
+            estado["modo"] = "inicial"
+            accion = "hacer_primera_pregunta"
+
+        elif modo == "inicial":
             if _es_si(texto):
                 estado["modo"] = "esperando_advisee"
                 accion = "pedir_advisee"
@@ -291,19 +418,34 @@ def manejar_mensaje_ca(event, logger) -> None:
                 accion = "aclarar_inicial"
 
         elif modo == "esperando_advisee":
-            estado["advisee_actual"] = texto
-            # el modo definitivo (esperando_opinion o esperando_otro) se fija
-            # fuera del lock, una vez sabemos si hay evaluaciones nuevas
+            # la validación y el cambio de modo se hacen fuera del lock
             payload["advisee"] = texto
             payload["ca_nombre"] = estado.get("ca_nombre")
-            accion = "mostrar_resumen"
+            accion = "validar_y_mostrar"
 
         elif modo == "esperando_opinion":
             payload["advisee"] = estado.get("advisee_actual", "?")
             payload["ca_nombre"] = estado.get("ca_nombre")
             payload["opinion"] = texto
-            estado["modo"] = "esperando_otro"
-            accion = "guardar_y_preguntar_otro"
+            estado["opinion_actual"] = texto
+            estado["modo"] = "confirmacion_ca"
+            accion = "mostrar_confirmacion_ca"
+
+        elif modo == "confirmacion_ca":
+            payload["advisee"] = estado.get("advisee_actual", "?")
+            payload["ca_nombre"] = estado.get("ca_nombre")
+            payload["opinion"] = estado.get("opinion_actual", "")
+            if _es_confirmar(texto):
+                estado["modo"] = "esperando_otro"
+                accion = "guardar_y_preguntar_otro"
+            elif _es_modificar(texto):
+                estado["modo"] = "esperando_opinion"
+                accion = "pedir_nueva_opinion"
+            elif _es_no(texto):
+                estado["modo"] = "esperando_otro"
+                accion = "cancelar_opinion"
+            else:
+                accion = "mostrar_confirmacion_ca"
 
         elif modo == "esperando_otro":
             if _es_si(texto):
@@ -318,7 +460,10 @@ def manejar_mensaje_ca(event, logger) -> None:
     def reply(text):
         slack_app.client.chat_postMessage(channel=channel, thread_ts=thread_ts, text=text)
 
-    if accion == "pedir_advisee":
+    if accion == "hacer_primera_pregunta":
+        reply("¿Eres Career Advisor de alguien? (`sí` / `no`)")
+
+    elif accion == "pedir_advisee":
         reply("¿Cuál es el nombre de tu advisee?")
 
     elif accion == "terminar_sin_ca":
@@ -327,21 +472,46 @@ def manejar_mensaje_ca(event, logger) -> None:
     elif accion == "aclarar_inicial":
         reply("Responde `sí` o `no`. ¿Eres Career Advisor de alguien?")
 
-    elif accion == "mostrar_resumen":
-        ca_nombre = _nombre_real(user_id, logger)
-        with _lock:
-            if clave in conversaciones_ca:
-                conversaciones_ca[clave]["ca_nombre"] = ca_nombre
-        desde_fecha = _fecha_ultima_opinion(ca_nombre, payload["advisee"])
-        resumen = _resumen_advisee(payload["advisee"], desde_fecha)
-        sin_novedades = "no hay evaluaciones nuevas" in resumen or "No hay evaluaciones registradas" in resumen
-        with _lock:
-            if clave in conversaciones_ca:
-                conversaciones_ca[clave]["modo"] = "esperando_otro" if sin_novedades else "esperando_opinion"
-        if sin_novedades:
-            reply(f"{resumen}\n\n¿Tienes otro advisee? (`sí` / `no`)")
+    elif accion == "validar_y_mostrar":
+        advisee = payload["advisee"]
+        if not _validar_advisee_nombre(advisee):
+            reply(
+                f"*{advisee}* no aparece en la lista de empleados. "
+                "Escríbelo sin tildes, con la primera letra del nombre y del primer apellido en mayúscula y el resto en minúscula. "
+                "Por ejemplo: *Maria Garcia*"
+            )
         else:
-            reply(f"{resumen}\n\n*¿Qué opinas de esto?*")
+            with _lock:
+                if clave in conversaciones_ca:
+                    conversaciones_ca[clave]["advisee_actual"] = advisee
+            ca_nombre = _nombre_real(user_id, logger)
+            with _lock:
+                if clave in conversaciones_ca:
+                    conversaciones_ca[clave]["ca_nombre"] = ca_nombre
+            desde_fecha = _fecha_ultima_opinion(ca_nombre, advisee)
+            resumen = _resumen_advisee(advisee, desde_fecha)
+            sin_novedades = "no hay evaluaciones nuevas" in resumen or "No hay evaluaciones registradas" in resumen
+            with _lock:
+                if clave in conversaciones_ca:
+                    conversaciones_ca[clave]["modo"] = "esperando_otro" if sin_novedades else "esperando_opinion"
+            if sin_novedades:
+                reply(f"{resumen}\n\n¿Tienes otro advisee? (`sí` / `no`)")
+            else:
+                reply(f"{resumen}\n\n*¿Qué opinas de esto?*")
+
+    elif accion == "mostrar_confirmacion_ca":
+        reply(
+            f"*Resumen de tu valoración:*\n"
+            f"• Advisee: *{payload.get('advisee', '?')}*\n"
+            f"• Opinión: {payload.get('opinion', '?')}\n\n"
+            "Responde `sí` para guardar, `modificar` para cambiar la opinión, o `no` para cancelar."
+        )
+
+    elif accion == "pedir_nueva_opinion":
+        reply(f"¿Qué opinas de las evaluaciones de *{payload.get('advisee', '?')}*?")
+
+    elif accion == "cancelar_opinion":
+        reply("De acuerdo, no se guardará esta opinión.\n\n¿Tienes otro advisee? (`sí` / `no`)")
 
     elif accion == "guardar_y_preguntar_otro":
         ca_nombre = payload["ca_nombre"] or _nombre_real(user_id, logger)

@@ -8,14 +8,20 @@ from slack_bolt.adapter.socket_mode import SocketModeHandler
 from . import config
 from .ca_reviews import ca_ts, manejar_mensaje_ca
 from .clients import slack_app
-from .notion_service import guardar_en_notion
+from .notion_service import guardar_en_notion, validar_empleado_en_lista
 from .state import conversaciones, evaluacion_ts, evaluaciones_pendientes, lock
 from .utils import normalizar_nombre
 
 
 def enviar_una_evaluacion():
     try:
-        resp = slack_app.client.chat_postMessage(channel=config.CHANNEL_ID, text=config.PREGUNTAS[0]["texto"])
+        resp = slack_app.client.chat_postMessage(
+            channel=config.CHANNEL_ID,
+            text=(
+            "📍 ¿En qué proyecto estás trabajando ahora? "
+            "Si estás en más de uno, elige solo uno y escribe el nombre del proyecto."
+        ),
+        )
         with lock:
             evaluacion_ts.add(resp["ts"])
         logging.info(f"Evaluación iniciada, ts={resp['ts']}")
@@ -119,99 +125,264 @@ def respuesta_es_modificacion(texto):
     return normalizar_nombre(texto) in {"modificar", "cambiar", "editar", "no", "n", "repetir"}
 
 
+def _es_si(texto):
+    return normalizar_nombre(texto) in {"si", "sí", "s", "yes", "y", "ok", "okay", "claro", "vale"}
+
+
+def _es_no(texto):
+    return normalizar_nombre(texto) in {"no", "n", "nope", "nel"}
+
+
+def _es_valor_satisfaccion(texto):
+    try:
+        return int(texto) in {1, 2, 3, 4, 5}
+    except Exception:
+        return False
+
+
+def _nombre_real(user_id: str, logger) -> str:
+    try:
+        resp = slack_app.client.users_info(user=user_id)
+        user = resp.get("user", {})
+        profile = user.get("profile", {})
+        nombre = (
+            (user.get("real_name") or "").strip()
+            or (profile.get("real_name") or "").strip()
+            or (profile.get("display_name") or "").strip()
+            or (user.get("name") or "").strip()
+        )
+        return nombre if nombre else user_id
+    except Exception:
+        logger.warning(f"No se pudo obtener el nombre del usuario {user_id}")
+        return user_id
+
+
 @slack_app.event("message")
 def handle_message_events(event, logger):
     if event.get("bot_id"):
         return
     thread_ts = event.get("thread_ts")
-    if not thread_ts:
-        return
+    channel = event.get("channel")
     if thread_ts in ca_ts:
         manejar_mensaje_ca(event, logger)
         return
-    with lock:
-        if thread_ts not in evaluacion_ts:
+
+    # Permite responder directamente en el canal además de en hilo.
+    if thread_ts:
+        with lock:
+            if thread_ts not in evaluacion_ts:
+                return
+        clave_conv = (thread_ts, event.get("user"))
+    else:
+        if channel != config.CHANNEL_ID:
             return
+        clave_conv = (channel, event.get("user"))
 
     user_id = event.get("user")
-    texto = event.get("text", "").strip()
-    clave_conv = (thread_ts, user_id)
+    texto = (event.get("text") or "").strip()
 
     with lock:
         estado = conversaciones.get(clave_conv)
         if estado is None:
-            estado = {"indice": 0, "respuestas": {}, "modo": "preguntas"}
+            estado = {
+                "modo": "esperando_proyecto",
+                "respuestas": {},
+                "proyecto_actual": None,
+            }
             conversaciones[clave_conv] = estado
 
-        if estado.get("modo") == "confirmacion":
-            respuestas_finales = dict(estado["respuestas"])
-            if respuesta_es_confirmacion(texto):
-                del conversaciones[clave_conv]
-                accion = "guardar"
-            elif respuesta_es_modificacion(texto):
-                estado["modo"] = "elegir_modificacion"
-                accion = "menu_modificacion"
-            else:
-                accion = "aclarar"
-            terminado = False
-        elif estado.get("modo") == "elegir_modificacion":
-            clave = clave_modificacion(texto)
-            if clave:
-                estado["modo"] = "capturar_modificacion"
-                estado["modificando"] = clave
-                siguiente_pregunta = texto_pregunta_por_clave(clave)
-                accion = "pedir_nuevo_valor"
-            else:
-                accion = "menu_modificacion"
-            terminado = False
-        elif estado.get("modo") == "capturar_modificacion":
-            estado["respuestas"][estado.get("modificando")] = texto
-            estado.pop("modificando", None)
-            estado["modo"] = "confirmacion"
-            respuestas_finales = dict(estado["respuestas"])
-            accion = "mostrar_resumen"
-            terminado = False
-        else:
-            accion = None
-            if estado["indice"] >= len(config.PREGUNTAS):
-                return
-            pregunta_actual = config.PREGUNTAS[estado["indice"]]
-            estado["respuestas"][pregunta_actual["clave"]] = texto
-            estado["indice"] += 1
-            terminado = estado["indice"] >= len(config.PREGUNTAS)
-            if terminado:
-                respuestas_finales = dict(estado["respuestas"])
-                estado["modo"] = "confirmacion"
-            else:
-                siguiente_pregunta = config.PREGUNTAS[estado["indice"]]["texto"]
+        modo = estado.get("modo")
+        accion = None
+        pregunta = None
 
-    if accion == "menu_modificacion":
-        slack_app.client.chat_postMessage(channel=config.CHANNEL_ID, thread_ts=thread_ts, text=texto_menu_modificacion())
+        if modo == "esperando_proyecto":
+            if texto:
+                estado["respuestas"]["proyecto"] = texto
+                estado["proyecto_actual"] = texto
+                estado["modo"] = "esperando_persona"
+                accion = "pedir_persona"
+                pregunta = (
+                    f"Perfecto, vamos con el proyecto *{texto}*. "
+                    "Evalúa a los miembros de este proyecto. "
+                    "Dime el nombre del miembro."
+                )
+            else:
+                accion = "pedir_proyecto"
+                pregunta = (
+                    "¿En qué proyecto estás trabajando ahora? "
+                    "Si estás en más de uno, elige solo uno y escribe el nombre del proyecto."
+                )
+
+        elif modo == "esperando_persona":
+            if texto:
+                if validar_empleado_en_lista(texto):
+                    estado["respuestas"]["evaluado"] = texto
+                    estado["modo"] = "esperando_satisfaccion"
+                    accion = "pedir_satisfaccion"
+                    pregunta = (
+                        f"¿Cómo de satisfecho estás con *{texto}* en *{estado['respuestas'].get('proyecto', '?')}*? "
+                        "Responde un número del 1 al 5."
+                    )
+                else:
+                    accion = "pedir_persona_invalida"
+                    pregunta = (
+                        f"*{texto}* no aparece en la lista de empleados. "
+                        "Elige un nombre válido de la lista o corrige el nombre."
+                    )
+            else:
+                accion = "pedir_persona"
+                pregunta = "¿Qué persona quieres evaluar?"
+
+        elif modo == "esperando_satisfaccion":
+            if _es_valor_satisfaccion(texto):
+                estado["respuestas"]["satisfaccion"] = texto
+                estado["modo"] = "esperando_mejor"
+                accion = "pedir_mejor"
+                pregunta = "¿Cuál es el mejor aspecto de esa persona?"
+            else:
+                accion = "pedir_satisfaccion"
+                pregunta = "Responde un número del 1 al 5 para la satisfacción."
+
+        elif modo == "esperando_mejor":
+            if texto:
+                estado["respuestas"]["mejor_aspecto"] = texto
+                estado["modo"] = "esperando_peor"
+                accion = "pedir_peor"
+                pregunta = "¿Cuál es el peor aspecto de esa persona?"
+            else:
+                accion = "pedir_mejor"
+                pregunta = "¿Cuál es el mejor aspecto de esa persona?"
+
+        elif modo == "esperando_peor":
+            if texto:
+                estado["respuestas"]["peor_aspecto"] = texto
+                estado["modo"] = "confirmacion"
+                accion = "mostrar_resumen"
+                pregunta = resumen_respuestas(estado["respuestas"])
+            else:
+                accion = "pedir_peor"
+                pregunta = "¿Cuál es el peor aspecto de esa persona?"
+
+        elif modo == "confirmacion":
+            if respuesta_es_confirmacion(texto):
+                estado["modo"] = "guardar"
+                accion = "guardar"
+            elif _es_no(texto):
+                conversaciones.pop(clave_conv, None)
+                accion = "terminar"
+            else:
+                accion = "mostrar_resumen"
+                pregunta = resumen_respuestas(estado["respuestas"])
+
+        elif modo == "guardar":
+            accion = "guardar"
+
+        elif modo == "preguntar_mas_personas":
+            if _es_si(texto):
+                estado["modo"] = "esperando_persona"
+                accion = "pedir_persona_mismo_proyecto"
+                proyecto = estado.get("proyecto_actual") or ""
+                pregunta = (
+                    f"Perfecto. ¿Qué otra persona del proyecto *{proyecto}* quieres evaluar?"
+                    if proyecto
+                    else "Perfecto. ¿Qué otra persona quieres evaluar?"
+                )
+            elif _es_no(texto):
+                estado["modo"] = "preguntar_mas_proyectos"
+                accion = "pedir_mas_proyectos"
+                pregunta = (
+                    "Si hay más proyectos en los que estés trabajando, por favor, dímelo. "
+                    "¿Hay más proyectos? (`sí` / `no`)"
+                )
+            else:
+                accion = "pedir_mas_personas"
+                pregunta = "Responde `sí` o `no` para indicar si hay más personas en este proyecto."
+
+        elif modo == "preguntar_mas_proyectos":
+            if _es_si(texto):
+                estado["modo"] = "esperando_proyecto"
+                estado["proyecto_actual"] = None
+                accion = "pedir_proyecto"
+                pregunta = (
+                    "Perfecto. ¿En qué proyecto estás trabajando ahora? "
+                    "Si estás en más de uno, elige solo uno y escribe el nombre del proyecto."
+                )
+            elif _es_no(texto):
+                conversaciones.pop(clave_conv, None)
+                accion = "terminar"
+            else:
+                accion = "pedir_mas_proyectos"
+                pregunta = "Responde `sí` o `no` para indicar si hay más proyectos."
+
+    if accion == "pedir_persona":
+        slack_app.client.chat_postMessage(
+            channel=config.CHANNEL_ID,
+            thread_ts=thread_ts,
+            text=(pregunta if pregunta else "¿Qué persona quieres evaluar?")
+        )
         return
-    if accion == "pedir_nuevo_valor":
-        slack_app.client.chat_postMessage(channel=config.CHANNEL_ID, thread_ts=thread_ts, text="Perfecto. Escribe la nueva respuesta para este campo:\n" + siguiente_pregunta)
+    if accion == "pedir_persona_invalida":
+        slack_app.client.chat_postMessage(channel=config.CHANNEL_ID, thread_ts=thread_ts, text=pregunta)
+        return
+    if accion == "pedir_persona_mismo_proyecto":
+        slack_app.client.chat_postMessage(channel=config.CHANNEL_ID, thread_ts=thread_ts, text=pregunta)
+        return
+    if accion == "pedir_proyecto":
+        slack_app.client.chat_postMessage(channel=config.CHANNEL_ID, thread_ts=thread_ts, text=pregunta)
+        return
+    if accion == "pedir_satisfaccion":
+        slack_app.client.chat_postMessage(channel=config.CHANNEL_ID, thread_ts=thread_ts, text=pregunta)
+        return
+    if accion == "pedir_mejor":
+        slack_app.client.chat_postMessage(channel=config.CHANNEL_ID, thread_ts=thread_ts, text=pregunta)
+        return
+    if accion == "pedir_peor":
+        slack_app.client.chat_postMessage(channel=config.CHANNEL_ID, thread_ts=thread_ts, text=pregunta)
         return
     if accion == "mostrar_resumen":
-        slack_app.client.chat_postMessage(channel=config.CHANNEL_ID, thread_ts=thread_ts, text="Respuesta actualizada.\n\n" + resumen_respuestas(respuestas_finales))
-        return
-    if accion == "aclarar":
-        slack_app.client.chat_postMessage(channel=config.CHANNEL_ID, thread_ts=thread_ts, text="Responde `sí` para guardar en Notion o `modificar` para cambiar una respuesta concreta.")
+        slack_app.client.chat_postMessage(
+            channel=config.CHANNEL_ID,
+            thread_ts=thread_ts,
+            text=(pregunta if isinstance(pregunta, str) else resumen_respuestas(estado["respuestas"]))
+            + "\n\n¿Quieres guardar esta evaluación? (`sí` / `no`)",
+        )
         return
     if accion == "guardar":
-        nombre = user_id
-        try:
-            nombre = slack_app.client.users_info(user=user_id)["user"]["real_name"]
-        except Exception:
-            logger.warning(f"No se pudo obtener el nombre del usuario {user_id}")
+        nombre = _nombre_real(user_id, logger)
+        respuestas_finales = dict(estado["respuestas"])
         guardado = guardar_en_notion(nombre, respuestas_finales)
-        texto_confirmacion = "¡Gracias! Tus respuestas han sido registradas en Notion. ✅" if guardado else "He recibido tu confirmación, pero no he podido guardar en Notion. Revisa permisos/logs."
-        slack_app.client.chat_postMessage(channel=config.CHANNEL_ID, thread_ts=thread_ts, text=texto_confirmacion)
+        if guardado:
+            slack_app.client.chat_postMessage(
+                channel=config.CHANNEL_ID,
+                thread_ts=thread_ts,
+                text=(
+                    "✅ Evaluación guardada en Notion.\n\n"
+                    "Si hay más miembros en este proyecto, por favor, dímelo. "
+                    "¿Hay más miembros para evaluar aquí? (`sí` / `no`)"
+                ),
+            )
+            with lock:
+                estado["modo"] = "preguntar_mas_personas"
+            return
+        slack_app.client.chat_postMessage(
+            channel=config.CHANNEL_ID,
+            thread_ts=thread_ts,
+            text="⚠️ No se pudo guardar en Notion. Revisa permisos/logs.",
+        )
+        return
+    if accion == "pedir_mas_personas":
+        slack_app.client.chat_postMessage(channel=config.CHANNEL_ID, thread_ts=thread_ts, text=pregunta)
+        return
+    if accion == "pedir_mas_proyectos":
+        slack_app.client.chat_postMessage(channel=config.CHANNEL_ID, thread_ts=thread_ts, text=pregunta)
+        return
+    if accion == "terminar":
+        slack_app.client.chat_postMessage(channel=config.CHANNEL_ID, thread_ts=thread_ts, text="Perfecto, gracias por tu tiempo. 👋")
         return
 
-    if not terminado:
-        slack_app.client.chat_postMessage(channel=config.CHANNEL_ID, thread_ts=thread_ts, text=siguiente_pregunta)
-        return
-    slack_app.client.chat_postMessage(channel=config.CHANNEL_ID, thread_ts=thread_ts, text=resumen_respuestas(respuestas_finales))
+    # fallback: keep the conversation alive with the current prompt
+    if pregunta:
+        slack_app.client.chat_postMessage(channel=config.CHANNEL_ID, thread_ts=thread_ts, text=pregunta)
 
 
 def preguntas_revision_html():

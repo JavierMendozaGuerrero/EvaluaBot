@@ -6,6 +6,7 @@ from datetime import datetime, timezone
 from . import config
 from .clients import notion
 from .state import bbdd_por_evaluado, lock
+from .utils import normalizar_nombre
 
 
 def _titulo_bbdd(titulo):
@@ -169,6 +170,64 @@ def guardar_en_notion(nombre, respuestas):
 def _texto_rich_text(propiedades, nombre_propiedad):
     items = propiedades.get(nombre_propiedad, {}).get("rich_text", [])
     return items[0]["text"]["content"] if items else ""
+
+
+def _texto_title(propiedades, nombre_propiedad):
+    items = propiedades.get(nombre_propiedad, {}).get("title", [])
+    return items[0]["text"]["content"] if items else ""
+
+
+def obtener_lista_empleados() -> list[str]:
+    """Lee la lista de empleados desde la base de datos configurada en Notion.
+
+    Se intenta leer la propiedad 'Name' (título) y, si no existe, se usa la
+    propiedad 'Empleado' o 'Nombre'.
+    """
+    try:
+        db_id = config.NOTION_DATABASE_ID
+        resultado = notion.databases.retrieve(database_id=db_id)
+        propiedades = resultado.get("properties", {})
+        nombre_prop = None
+        for candidato in ("Name", "Empleado", "Nombre", "Employee", "Employee Name"):
+            if candidato in propiedades:
+                nombre_prop = candidato
+                break
+        if nombre_prop is None:
+            logging.warning("No se encontró una propiedad de nombre para la lista de empleados en Notion.")
+            return []
+
+        empleados = []
+        cursor = None
+        while True:
+            kwargs = {"page_size": 100}
+            if cursor:
+                kwargs["start_cursor"] = cursor
+            resp = notion.databases.query(database_id=db_id, **kwargs)
+            for pagina in resp.get("results", []):
+                props = pagina.get("properties", {})
+                if nombre_prop == "Name":
+                    valor = _texto_title(props, nombre_prop)
+                else:
+                    valor = _texto_rich_text(props, nombre_prop)
+                if valor:
+                    empleados.append(valor.strip())
+            if not resp.get("has_more"):
+                break
+            cursor = resp.get("next_cursor")
+        return empleados
+    except Exception:
+        logging.exception("Error leyendo la lista de empleados desde Notion")
+        return []
+
+
+def validar_empleado_en_lista(nombre: str) -> bool:
+    """Comprueba si un nombre coincide con algún empleado de la lista de Notion."""
+    nombre_limpio = normalizar_nombre(nombre)
+    if not nombre_limpio:
+        return False
+    empleados = obtener_lista_empleados()
+    nombres = {normalizar_nombre(e) for e in empleados if e}
+    return nombre_limpio in nombres
 
 
 def listar_bbdd_evaluados():

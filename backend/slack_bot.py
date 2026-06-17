@@ -8,7 +8,7 @@ from slack_bolt.adapter.socket_mode import SocketModeHandler
 from . import config
 from .ca_reviews import ca_ts, manejar_mensaje_ca
 from .clients import slack_app
-from .notion_service import buscar_empleado_en_lista, guardar_en_notion
+from .notion_service import buscar_empleado_en_lista, guardar_en_notion, obtener_nombre_por_id_usuario
 from .state import avisos_responder_en_hilo, conversaciones, evaluacion_ts, evaluaciones_pendientes, lock
 from .utils import normalizar_nombre
 
@@ -156,6 +156,9 @@ def _debe_avisar_responder_en_hilo(channel, user_id):
 
 
 def _nombre_real(user_id: str, logger) -> str:
+    nombre = obtener_nombre_por_id_usuario(user_id)
+    if nombre:
+        return nombre
     try:
         resp = slack_app.client.users_info(user=user_id)
         user = resp.get("user", {})

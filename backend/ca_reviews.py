@@ -41,10 +41,11 @@ _cache_lista_empleados: dict = {"db_id": None, "nombres": None}
 PREFIJO_BBDD = "Opiniones CA - "
 
 _PROPS_CA = {
-    "Name":    {"title": {}},
-    "Opinion": {"rich_text": {}},
-    "Advisee": {"rich_text": {}},
-    "Fecha":   {"date": {}},
+    "Name":      {"title": {}},
+    "Opinion":   {"rich_text": {}},
+    "Advisee":   {"rich_text": {}},
+    "Evaluador": {"rich_text": {}},
+    "Fecha":     {"date": {}},
 }
 
 
@@ -121,10 +122,11 @@ def _guardar_opinion(ca_nombre: str, advisee: str, opinion: str) -> tuple[bool, 
         _crear_pagina_en_bbdd(
             db_id,
             {
-                "Name":    {"title":     [{"text": {"content": f"Opinion {fecha_str}"}}]},
-                "Opinion": {"rich_text": [{"text": {"content": opinion[:2000]}}]},
-                "Advisee": {"rich_text": [{"text": {"content": advisee}}]},
-                "Fecha":   {"date":      {"start": datetime.now(timezone.utc).isoformat()}},
+                "Name":      {"title":     [{"text": {"content": f"Opinion {fecha_str}"}}]},
+                "Opinion":   {"rich_text": [{"text": {"content": opinion[:2000]}}]},
+                "Advisee":   {"rich_text": [{"text": {"content": advisee}}]},
+                "Evaluador": {"rich_text": [{"text": {"content": ca_nombre}}]},
+                "Fecha":     {"date":      {"start": datetime.now(timezone.utc).isoformat()}},
             },
         )
         return True, ""

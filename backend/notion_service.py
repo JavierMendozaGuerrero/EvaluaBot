@@ -31,6 +31,7 @@ def _propiedades_bbdd_evaluaciones():
         "Name": {"title": {}},
         "Persona evaluada": {"rich_text": {}},
         "Persona que evalua": {"rich_text": {}},
+        "Evaluador": {"rich_text": {}},
         "Proyecto": {"rich_text": {}},
         "Satisfaccion": {"rich_text": {}},
         "Mejor aspecto": {"rich_text": {}},
@@ -372,6 +373,7 @@ def guardar_en_notion(nombre, respuestas):
                 "Name": {"title": [{"text": {"content": nombre}}]},
                 "Persona evaluada": {"rich_text": [{"text": {"content": nombre_evaluado}}]},
                 "Persona que evalua": {"rich_text": [{"text": {"content": nombre}}]},
+                "Evaluador": {"rich_text": [{"text": {"content": nombre}}]},
                 "Proyecto": {"rich_text": [{"text": {"content": proyecto}}]},
                 "Satisfaccion": {"rich_text": [{"text": {"content": respuestas.get("satisfaccion", "")}}]},
                 "Mejor aspecto": {"rich_text": [{"text": {"content": respuestas.get("mejor_aspecto", "")}}]},
@@ -484,6 +486,49 @@ def buscar_empleado_en_lista(nombre: str):
             return empleado
     logging.info("Empleado no encontrado en la lista de Notion: %s", nombre)
     return None
+
+
+_cache_nombre_por_id: dict = {}
+
+
+def obtener_nombre_por_id_usuario(user_id: str) -> str | None:
+    """Busca el nombre en la lista de empleados por la columna ID_usuario."""
+    with lock:
+        if user_id in _cache_nombre_por_id:
+            return _cache_nombre_por_id[user_id]
+    try:
+        db_id, _ = _retrieve_bbdd(config.NOTION_EMPLOYEES_DATABASE_ID)
+        cursor = None
+        while True:
+            kwargs: dict = {"page_size": 100}
+            if cursor:
+                kwargs["start_cursor"] = cursor
+            resp = _query_bbdd(db_id, **kwargs)
+            for fila in resp.get("results", []):
+                props = fila.get("properties", {})
+                prop_id = props.get("ID_usuario", {})
+                id_usuario = "".join(
+                    p.get("plain_text", "")
+                    for p in (prop_id.get("rich_text") or prop_id.get("title") or [])
+                ).strip()
+                if id_usuario != user_id:
+                    continue
+                prop_nombre = props.get("Nombre", {})
+                nombre = "".join(
+                    p.get("plain_text", "")
+                    for p in (prop_nombre.get("rich_text") or prop_nombre.get("title") or [])
+                ).strip()
+                if nombre:
+                    with lock:
+                        _cache_nombre_por_id[user_id] = nombre
+                    return nombre
+            if not resp.get("has_more"):
+                break
+            cursor = resp.get("next_cursor")
+        return None
+    except Exception:
+        logging.exception(f"Error buscando nombre para '{user_id}' en lista de empleados")
+        return None
 
 
 def validar_empleado_en_lista(nombre: str) -> bool:

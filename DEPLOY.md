@@ -33,7 +33,6 @@ NOTION_PARENT_PAGE_ID
 NOTION_USERS_DATABASE_ID      # opcional, si ya existe la base de usuarios web
 NOTION_USERS_DATABASE_NAME    # opcional, por defecto: Usuarios web
 ANTHROPIC_API_KEY
-ADMIN_ACCESS_CODE
 APP_MODE
 FRONTEND_ORIGIN
 ```

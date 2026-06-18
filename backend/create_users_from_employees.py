@@ -115,7 +115,6 @@ def crear_usuarios(apply=False, output=None, password=None):
             "username": username,
             "persona": empleado,
             "email": email,
-            "is_admin": False,
             "salt": salt,
             "password_hash": password_hash,
         }

@@ -17,8 +17,6 @@ def validar_configuracion():
         return False
     if not config.ANTHROPIC_API_KEY:
         print("Falta ANTHROPIC_API_KEY. La web no podra generar informes con Claude.")
-    if not config.ADMIN_ACCESS_CODE:
-        print("Falta ADMIN_ACCESS_CODE. Ana no podra desbloquear la vista administradora.")
     if Document is None:
         print("Falta python-docx. Instala: pip install python-docx")
     return True
@@ -39,8 +37,6 @@ def main():
     else:
         minutos = config.INTERVALO_PRUEBA_SEGUNDOS // 60
         print(f"Bot activo en modo prueba. Enviara una evaluacion ahora y luego cada {minutos} minutos.")
-    if config.REVIEW_BEFORE_SEND:
-        print("Revision previa activada: las evaluaciones quedan pendientes en la web antes de enviarse a Slack.")
     print("Las preguntas se hacen una a una en el hilo y el resultado se guarda en Notion tras confirmacion.")
     if config.WEB_MODE == "legacy":
         print(f"Web legacy disponible en http://localhost:{config.PUERTO_WEB}")

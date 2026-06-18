@@ -1,4 +1,4 @@
-import html
+﻿import html
 import logging
 import os
 import socketserver
@@ -8,8 +8,7 @@ from http.server import SimpleHTTPRequestHandler
 from . import config
 from .notion_service import listar_bbdd_evaluados
 from .reports import generar_archivo_trayectoria, generar_archivos_informe
-from .slack_bot import enviar_revision_pendiente, pendientes_revision_html, preguntas_revision_html
-from .users import autenticar_usuario, crear_sesion, obtener_sesion, registrar_usuario, validar_acceso_sesion, validar_admin_sesion
+from .users import autenticar_usuario, crear_sesion, obtener_sesion, registrar_usuario, validar_acceso_sesion
 from .utils import normalizar_nombre, slug_archivo
 
 
@@ -61,7 +60,7 @@ class WebHandler(SimpleHTTPRequestHandler):
         except PermissionError as error:
             self.pagina_error("Acceso denegado", str(error), 403)
             return
-        nombre_autorizado = "Todas las personas" if evaluado == "__todas__" else evaluado
+        nombre_autorizado = evaluado
         slug = slug_archivo(nombre_autorizado)
         if not (ruta.startswith(f"/informe_{slug}.") or ruta.startswith(f"/trayectoria_{slug}.")):
             self.pagina_error("Acceso denegado", "El archivo solicitado no corresponde con la persona autorizada.", 403)
@@ -72,8 +71,6 @@ class WebHandler(SimpleHTTPRequestHandler):
     def opciones_evaluados(self):
         sesion = obtener_sesion(self.headers)
         opciones = []
-        if sesion and sesion.get("is_admin"):
-            opciones.append('<option value="__todas__">Todas las personas</option>')
         for bbdd in sorted(listar_bbdd_evaluados(), key=lambda item: item["evaluado"].lower()):
             if sesion and not sesion.get("is_admin") and normalizar_nombre(bbdd["evaluado"]) != normalizar_nombre(sesion.get("persona")):
                 continue
@@ -81,6 +78,15 @@ class WebHandler(SimpleHTTPRequestHandler):
             nombre_valor = html.escape(bbdd["evaluado"], quote=True)
             opciones.append(f'<option value="{nombre_valor}">{nombre_texto}</option>')
         return "\n".join(opciones) or '<option value="">No hay tabla disponible</option>'
+
+    def evaluado_usuario(self):
+        sesion = obtener_sesion(self.headers)
+        if not sesion:
+            return ""
+        for bbdd in sorted(listar_bbdd_evaluados(), key=lambda item: item["evaluado"].lower()):
+            if normalizar_nombre(bbdd["evaluado"]) == normalizar_nombre(sesion.get("persona")):
+                return bbdd["evaluado"]
+        return sesion.get("persona", "")
 
     def pagina_error(self, titulo, mensaje, status=500):
         self.responder_html(f"""<!DOCTYPE html><html lang="es"><head><meta charset="utf-8"><title>{html.escape(titulo)}</title></head>
@@ -97,8 +103,8 @@ class WebHandler(SimpleHTTPRequestHandler):
         extra = f"<p class='error'>{html.escape(mensaje)}</p>" if mensaje else ""
         self.responder_html(f"""<!DOCTYPE html><html lang="es"><head><meta charset="utf-8"><title>Registro</title><style>{config.IGENERIS_CSS}.login-wrap{{max-width:980px;margin:0 auto}}.auth-form{{max-width:460px}}</style></head>
 <body><main class="page login-wrap"><nav class="nav"><a class="brand" href="/login">igeneris</a><div class="nav-links"><a href="/login">Login</a></div></nav>
-<section class="hero"><div><p class="kicker">Nuevo acceso</p><h1>Registra tu usuario.</h1><p>Tu usuario determina qué tabla puedes consultar. Ana puede activar permisos con su clave.</p></div>
-<form class="auth-form panel" method="post" action="/register"><h2>Registro</h2>{extra}<label>Usuario</label><input name="username" required><label>Contraseña</label><input name="password" type="password" required><label>Clave admin</label><input name="admin_code" type="password" placeholder="Solo Ana"><div class="actions"><button type="submit">Crear cuenta</button><a class="button secondary" href="/login">Ya tengo cuenta</a></div></form></section></main></body></html>""")
+<section class="hero"><div><p class="kicker">Nuevo acceso</p><h1>Registra tu usuario.</h1><p>Tu usuario determina qué tabla puedes consultar.</p></div>
+<form class="auth-form panel" method="post" action="/register"><h2>Registro</h2>{extra}<label>Usuario</label><input name="username" required><label>Contraseña</label><input name="password" type="password" required><div class="actions"><button type="submit">Crear cuenta</button><a class="button secondary" href="/login">Ya tengo cuenta</a></div></form></section></main></body></html>""")
 
     def pagina_home(self):
         sesion = obtener_sesion(self.headers)
@@ -107,15 +113,15 @@ class WebHandler(SimpleHTTPRequestHandler):
             return
         opciones = self.opciones_evaluados()
         usuario = html.escape(sesion["username"])
-        rol = "Admin" if sesion.get("is_admin") else f"Solo {html.escape(sesion.get('persona', ''))}"
-        revision = ""
-        if sesion.get("is_admin"):
-            revision = f"""<section class="review panel"><p class="kicker">Revisión antes de enviar</p><h2>Evaluación de Slack</h2><p>Estas son las preguntas que se enviarán.</p><ol>{preguntas_revision_html()}</ol>{pendientes_revision_html()}</section>"""
+        es_admin = bool(sesion.get("is_admin"))
+        rol = "Admin" if es_admin else html.escape(sesion.get("persona", ""))
+        selector_informe = f'<label>Persona evaluada</label><select name="evaluado">{opciones}</select>' if es_admin else f'<input type="hidden" name="evaluado" value="{html.escape(self.evaluado_usuario(), quote=True)}">'
+        selector_trayectoria = selector_informe
         self.responder_html(f"""<!DOCTYPE html><html lang="es"><head><meta charset="utf-8"><title>Evaluaciones</title><style>{config.IGENERIS_CSS}.tools{{display:grid;grid-template-columns:repeat(2,minmax(260px,1fr));gap:26px;margin-top:34px}}.tool{{border-top:1px solid var(--ink);padding-top:18px}}.review{{margin-top:38px}}.loading{{position:fixed;inset:0;display:none;place-items:center;background:rgba(9,14,22,.72);color:white;padding:24px}}.loading.visible{{display:grid}}</style></head>
 <body><main class="page"><nav class="nav"><a class="brand" href="/">igeneris</a><div class="nav-links"><span>{usuario}</span><span>{rol}</span><a href="/logout">Cerrar sesión</a></div></nav>
-<section class="hero"><div><p class="kicker">People analytics</p><h1>Centro de evaluaciones.</h1></div><div class="panel"><p>Genera informes y trayectorias visuales a partir del feedback guardado en Notion.</p><p class="fine">Ana puede consultar todo. Cada persona ve únicamente su tabla.</p></div></section>
-<section class="tools"><form class="tool" method="post" action="/generar" data-loading="Comprobando caché y generando informe si hace falta"><h2>Informe</h2><p>Reutiliza el último informe si no hay cambios; si hay nuevas evaluaciones, Claude lo actualiza.</p><label>Persona evaluada</label><select name="evaluado">{opciones}</select><div class="actions"><button type="submit">Generar informe</button></div></form>
-<form class="tool" method="post" action="/trayectoria" data-loading="Preparando trayectoria visual"><h2>Trayectoria</h2><p>Una experiencia visual para navegar el feedback por fecha, proyecto y satisfacción.</p><label>Persona evaluada</label><select name="evaluado">{opciones}</select><div class="actions"><button class="secondary" type="submit">Generar trayectoria</button></div></form></section>{revision}
+<section class="hero"><div><p class="kicker">People analytics</p><h1>Centro de evaluaciones.</h1></div>{'<div class="panel"><p>Genera informes y trayectorias visuales a partir del feedback guardado en Notion.</p></div>' if es_admin else ''}</section>
+<section class="tools"><form class="tool" method="post" action="/generar" data-loading="Comprobando caché y generando informe si hace falta"><h2>Informe</h2><p>Reutiliza el último informe si no hay cambios; si hay nuevas evaluaciones, Claude lo actualiza.</p>{selector_informe}<div class="actions"><button type="submit">Generar informe</button></div></form>
+<form class="tool" method="post" action="/trayectoria" data-loading="Preparando trayectoria visual"><h2>Trayectoria</h2><p>Una experiencia visual para navegar el feedback por fecha, proyecto y satisfacción.</p>{selector_trayectoria}<div class="actions"><button class="secondary" type="submit">Generar trayectoria</button></div></form></section>
 <div id="loading" class="loading"><div><h2 id="loading-title">Preparando</h2><p>Esto puede tardar unos segundos.</p></div></div><script>for(const form of document.querySelectorAll("form")){{form.addEventListener("submit",()=>{{document.getElementById("loading-title").textContent=form.dataset.loading||"Procesando";document.getElementById("loading").classList.add("visible");}})}}</script></main></body></html>""")
 
     def do_GET(self):
@@ -137,14 +143,14 @@ class WebHandler(SimpleHTTPRequestHandler):
 
     def do_POST(self):
         ruta = urllib.parse.urlparse(self.path).path
-        if ruta not in ("/login", "/register", "/generar", "/trayectoria", "/enviar_pendiente"):
+        if ruta not in ("/login", "/register", "/generar", "/trayectoria"):
             self.send_error(404); return
         try:
             longitud = min(int(self.headers.get("Content-Length", "0")), 1_000_000)
             datos = urllib.parse.parse_qs(self.rfile.read(longitud).decode("utf-8") if longitud else "")
             if ruta == "/register":
                 try:
-                    registrar_usuario(datos.get("username", [""])[0], datos.get("password", [""])[0], datos.get("admin_code", [""])[0])
+                    registrar_usuario(datos.get("username", [""])[0], datos.get("password", [""])[0])
                 except Exception as error:
                     self.pagina_registro(str(error)); return
                 self.redirect("/login"); return
@@ -156,12 +162,7 @@ class WebHandler(SimpleHTTPRequestHandler):
                 self.redirect("/", f"session={crear_sesion(usuario)}; Path=/; HttpOnly; SameSite=Lax"); return
 
             sesion = obtener_sesion(self.headers)
-            if ruta == "/enviar_pendiente":
-                validar_admin_sesion(sesion)
-                enviar_revision_pendiente(datos.get("pending_id", [""])[0])
-                self.responder_html('<h1>Evaluación enviada</h1><p>La primera pregunta se ha enviado a Slack.</p><p><a href="/">Volver</a></p>'); return
-
-            evaluado = datos.get("evaluado", ["__todas__"])[0]
+            evaluado = datos.get("evaluado", [""])[0]
             validar_acceso_sesion(sesion, evaluado)
             query = urllib.parse.urlencode({"evaluado": evaluado})
             if ruta == "/generar":
@@ -196,3 +197,4 @@ def iniciar_servidor_web():
             config.PUERTO_WEB,
         )
         logging.debug("Detalle del error al iniciar la web", exc_info=True)
+

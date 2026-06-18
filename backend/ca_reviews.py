@@ -19,11 +19,13 @@ from .notion_service import (
     _crear_pagina_en_bbdd,
     _data_source_id,
     _extraer_titulo_bbdd,
+    _parent_bbdd_en_pagina,
     _parent_bbdd_referencia,
     _query_bbdd,
     _tipo_objeto_busqueda_bbdd,
     _usa_data_sources,
     buscar_empleado_en_lista,
+    obtener_advisees,
     obtener_evaluaciones_por_evaluado,
     sugerir_empleados_parecidos,
 )
@@ -40,15 +42,14 @@ _cache_bbdd: dict = {}
 _cache_nombre_usuario: dict = {}
 _cache_lista_empleados: dict = {"db_id": None, "nombres": None}
 
-PREFIJO_BBDD = "Opiniones CA - "
+PREFIJO_BBDD = "Opiniones - "
 
 _PROPS_CA = {
-    "Name":             {"title": {}},
-    "Opinion":          {"rich_text": {}},
-    "Advisee":          {"rich_text": {}},
-    "Evaluador":        {"rich_text": {}},
-    "Resumen_advisee":  {"rich_text": {}},
-    "Fecha":            {"date": {}},
+    "Name":    {"title": {}},
+    "Fecha":   {"date": {}},
+    "CA":      {"rich_text": {}},
+    "Opinion": {"rich_text": {}},
+    "Resumen": {"rich_text": {}},
 }
 
 
@@ -73,20 +74,23 @@ def _asegurar_propiedades_ca(database_id: str) -> None:
         logging.exception(f"Error asegurando propiedades de BD CA {database_id}")
 
 
-def _obtener_o_crear_bbdd_ca(ca_nombre: str) -> str:
-    titulo = f"{PREFIJO_BBDD}{ca_nombre.strip()}"
+def _obtener_o_crear_bbdd_ca(advisee: str) -> str:
+    titulo = f"{PREFIJO_BBDD}{advisee.strip()}"
     with _lock:
         if titulo in _cache_bbdd:
             return _cache_bbdd[titulo]
 
     parent = _parent_bbdd_referencia()
+    parent_ca = _parent_bbdd_en_pagina(config.NOTION_CA_TRACKING_PAGE_NAME, crear=True)
     resultado = notion.search(
         query=titulo,
         filter={"value": _tipo_objeto_busqueda_bbdd(), "property": "object"},
         page_size=100,
     )
     for bbdd in resultado.get("results", []):
-        if _extraer_titulo_bbdd(bbdd) == titulo and _coincide_parent_bbdd(bbdd, parent):
+        if _extraer_titulo_bbdd(bbdd) == titulo and (
+            _coincide_parent_bbdd(bbdd, parent) or _coincide_parent_bbdd(bbdd, parent_ca)
+        ):
             db_id = _data_source_id(bbdd)
             _asegurar_propiedades_ca(db_id)  # repara propiedades si la BD es antigua
             with _lock:
@@ -95,7 +99,7 @@ def _obtener_o_crear_bbdd_ca(ca_nombre: str) -> str:
 
     if _usa_data_sources():
         nueva = notion.databases.create(
-            parent=parent,
+            parent=parent_ca,
             title=[{"type": "text", "text": {"content": titulo}}],
             initial_data_source={
                 "title": [{"type": "text", "text": {"content": titulo}}],
@@ -105,7 +109,7 @@ def _obtener_o_crear_bbdd_ca(ca_nombre: str) -> str:
         nueva = notion.databases.retrieve(database_id=nueva["id"])
     else:
         nueva = notion.databases.create(
-            parent=parent,
+            parent=parent_ca,
             title=[{"type": "text", "text": {"content": titulo}}],
             properties=_PROPS_CA,
         )
@@ -120,17 +124,16 @@ def _obtener_o_crear_bbdd_ca(ca_nombre: str) -> str:
 def _guardar_opinion(ca_nombre: str, advisee: str, opinion: str, resumen: str = "") -> tuple[bool, str]:
     """Devuelve (éxito, mensaje_error)."""
     try:
-        db_id = _obtener_o_crear_bbdd_ca(ca_nombre)
+        db_id = _obtener_o_crear_bbdd_ca(advisee)
         fecha_str = datetime.now(config.ZONA_HORARIA_MADRID).strftime("%Y-%m-%d %H:%M")
         _crear_pagina_en_bbdd(
             db_id,
             {
-                "Name":            {"title":     [{"text": {"content": f"Opinion {fecha_str}"}}]},
-                "Opinion":         {"rich_text": [{"text": {"content": opinion[:2000]}}]},
-                "Advisee":         {"rich_text": [{"text": {"content": advisee}}]},
-                "Evaluador":       {"rich_text": [{"text": {"content": ca_nombre}}]},
-                "Resumen_advisee": {"rich_text": [{"text": {"content": resumen[:2000]}}]},
-                "Fecha":           {"date":      {"start": datetime.now(timezone.utc).isoformat()}},
+                "Name":    {"title":     [{"text": {"content": f"Opinion {fecha_str}"}}]},
+                "Fecha":   {"date":      {"start": datetime.now(timezone.utc).isoformat()}},
+                "CA":      {"rich_text": [{"text": {"content": ca_nombre}}]},
+                "Opinion": {"rich_text": [{"text": {"content": opinion[:2000]}}]},
+                "Resumen": {"rich_text": [{"text": {"content": resumen[:2000]}}]},
             },
         )
         return True, ""
@@ -144,7 +147,7 @@ def _guardar_opinion(ca_nombre: str, advisee: str, opinion: str, resumen: str = 
 # ---------------------------------------------------------------------------
 
 def _fecha_ultima_opinion(ca_nombre: str, advisee: str) -> str | None:
-    titulo = f"{PREFIJO_BBDD}{ca_nombre.strip()}"
+    titulo = f"{PREFIJO_BBDD}{advisee.strip()}"
     try:
         resultado = notion.search(
             query=titulo,
@@ -163,11 +166,11 @@ def _fecha_ultima_opinion(ca_nombre: str, advisee: str) -> str | None:
         fechas = []
         for fila in filas:
             props = fila.get("properties", {})
-            advisee_texto = "".join(
+            ca_texto = "".join(
                 p.get("plain_text", "")
-                for p in props.get("Advisee", {}).get("rich_text", [])
-            )
-            if normalizar_nombre(advisee_texto) == normalizar_nombre(advisee):
+                for p in (props.get("CA", {}).get("rich_text") or props.get("Evaluador", {}).get("rich_text") or [])
+            ).strip()
+            if normalizar_nombre(ca_texto) == normalizar_nombre(ca_nombre):
                 fecha = (props.get("Fecha", {}).get("date") or {}).get("start", "")
                 if fecha:
                     fechas.append(fecha)
@@ -404,6 +407,44 @@ def _nombre_real(user_id: str, logger) -> str:
 # Envío del mensaje inicial
 # ---------------------------------------------------------------------------
 
+def _identidad_usuario_slack(user_id: str, logger) -> tuple[str, list[str]]:
+    aliases = [user_id]
+    nombre_notion = _nombre_desde_notion(user_id)
+    if nombre_notion:
+        aliases.append(nombre_notion)
+    try:
+        resp = slack_app.client.users_info(user=user_id)
+        user = resp.get("user", {})
+        profile = user.get("profile", {})
+        aliases.extend([
+            user.get("real_name", ""),
+            user.get("name", ""),
+            profile.get("real_name", ""),
+            profile.get("display_name", ""),
+            profile.get("email", ""),
+        ])
+    except Exception as exc:
+        logger.error(f"users_info fallo para {user_id}: {exc}")
+
+    limpios = []
+    vistos = set()
+    for alias in aliases:
+        alias = (alias or "").strip()
+        clave_alias = normalizar_nombre(alias)
+        if alias and clave_alias not in vistos:
+            vistos.add(clave_alias)
+            limpios.append(alias)
+
+    nombre = nombre_notion or (limpios[0] if limpios else user_id)
+    return nombre, limpios
+
+
+def _advisee_permitido_para_ca(ca_nombre: str, ca_aliases: list[str], advisee: str) -> tuple[bool, list[str]]:
+    permitidos = obtener_advisees(ca_nombre, ca_aliases=ca_aliases)
+    advisee_norm = normalizar_nombre(advisee)
+    return any(normalizar_nombre(nombre) == advisee_norm for nombre in permitidos), permitidos
+
+
 def enviar_pregunta_inicial_ca() -> None:
     try:
         resp = slack_app.client.chat_postMessage(
@@ -525,11 +566,19 @@ def manejar_mensaje_ca(event, logger) -> None:
                         accion = "pedir_valor_modificacion_ca"
                         payload["error_advisee"] = texto
                     else:
-                        estado["advisee_actual"] = empleado
-                        payload["advisee"] = empleado
-                        estado.pop("campo_modificando", None)
-                        estado["modo"] = "confirmacion_ca"
-                        accion = "mostrar_confirmacion_ca"
+                        ca_nombre, ca_aliases = _identidad_usuario_slack(user_id, logger)
+                        permitido, permitidos = _advisee_permitido_para_ca(ca_nombre, ca_aliases, empleado)
+                        if not permitido:
+                            accion = "pedir_valor_modificacion_ca"
+                            payload["error_advisee_no_asociado"] = empleado
+                            payload["advisees_permitidos"] = permitidos
+                        else:
+                            estado["ca_nombre"] = ca_nombre
+                            estado["advisee_actual"] = empleado
+                            payload["advisee"] = empleado
+                            estado.pop("campo_modificando", None)
+                            estado["modo"] = "confirmacion_ca"
+                            accion = "mostrar_confirmacion_ca"
                 elif clave == "opinion":
                     estado["opinion_actual"] = texto
                     payload["opinion"] = texto
@@ -574,10 +623,19 @@ def manejar_mensaje_ca(event, logger) -> None:
             reply(_mensaje_advisee_no_encontrado(advisee))
         else:
             advisee = advisee_encontrado
+            ca_nombre, ca_aliases = _identidad_usuario_slack(user_id, logger)
+            permitido, permitidos = _advisee_permitido_para_ca(ca_nombre, ca_aliases, advisee)
+            if not permitido:
+                opciones = "\n".join(f"- {item}" for item in permitidos) if permitidos else "- No tienes advisees asociados en Lista CA."
+                reply(
+                    f"*{advisee}* no aparece asociado a ti como advisee en `Lista CA`.\n"
+                    "Solo puedes hacer evaluaciones CA de las personas que tengas en tus columnas A1, A2, A3...\n"
+                    f"Tus advisees actuales:\n{opciones}"
+                )
+                return
             with _lock:
                 if clave in conversaciones_ca:
                     conversaciones_ca[clave]["advisee_actual"] = advisee
-            ca_nombre = _nombre_real(user_id, logger)
             with _lock:
                 if clave in conversaciones_ca:
                     conversaciones_ca[clave]["ca_nombre"] = ca_nombre
@@ -606,7 +664,16 @@ def manejar_mensaje_ca(event, logger) -> None:
 
     elif accion == "pedir_valor_modificacion_ca":
         clave = estado.get("campo_modificando")
-        if payload.get("error_advisee"):
+        if payload.get("error_advisee_no_asociado"):
+            permitidos = payload.get("advisees_permitidos") or []
+            opciones = "\n".join(f"- {item}" for item in permitidos) if permitidos else "- No tienes advisees asociados en Lista CA."
+            reply(
+                f"*{payload['error_advisee_no_asociado']}* existe en la lista de empleados, "
+                "pero no aparece asociado a ti en `Lista CA`.\n"
+                f"Tus advisees actuales:\n{opciones}\n\n"
+                "Escribe uno de esos nombres."
+            )
+        elif payload.get("error_advisee"):
             sugerencias = sugerir_empleados_parecidos(payload["error_advisee"])
             if sugerencias:
                 opciones = "\n".join(f"- {n}" for n in sugerencias)
@@ -626,7 +693,17 @@ def manejar_mensaje_ca(event, logger) -> None:
         reply("De acuerdo, no se guardará esta opinión.\n\n¿Tienes otro advisee? (`sí` / `no`)")
 
     elif accion == "guardar_y_preguntar_otro":
-        ca_nombre = payload["ca_nombre"] or _nombre_real(user_id, logger)
+        ca_nombre, ca_aliases = _identidad_usuario_slack(user_id, logger)
+        if payload.get("ca_nombre"):
+            ca_aliases.append(payload["ca_nombre"])
+        permitido, permitidos = _advisee_permitido_para_ca(ca_nombre, ca_aliases, payload["advisee"])
+        if not permitido:
+            opciones = "\n".join(f"- {item}" for item in permitidos) if permitidos else "- No tienes advisees asociados en Lista CA."
+            reply(
+                f"No puedo guardar esta opiniÃ³n: *{payload['advisee']}* no aparece asociado a ti en `Lista CA`.\n"
+                f"Tus advisees actuales:\n{opciones}"
+            )
+            return
         resumen = estado.get("resumen_actual", "")
         ok, error = _guardar_opinion(ca_nombre, payload["advisee"], payload["opinion"], resumen)
         if ok:

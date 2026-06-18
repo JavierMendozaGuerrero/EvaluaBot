@@ -16,8 +16,8 @@ def _evaluaciones_para_prompt(evaluaciones):
     lineas = []
     for e in evaluaciones:
         lineas.append(
-            f"- Evaluado: {e.get('persona_evaluada') or e['evaluado']} | "
-            f"Evaluador: {e.get('persona_que_evalua') or e['nombre']} | "
+            f"- Evaluado: {e['evaluado']} | "
+            f"Evaluador: {e.get('persona_que_evalua') or e.get('nombre') or 'Desconocido'} | "
             f"Proyecto: {e.get('proyecto') or 'Sin proyecto'} | "
             f"Satisfacción: {e['satisfaccion']} | Mejor aspecto: {e['mejor_aspecto']} | "
             f"Peor aspecto: {e['peor_aspecto']} | Fecha: {e['fecha']}"
@@ -119,9 +119,11 @@ def guardar_informe_word(informe, evaluaciones, evaluado):
     return ruta
 
 
-def generar_archivos_informe(evaluado="__todas__"):
+def generar_archivos_informe(evaluado=""):
+    if not evaluado:
+        raise RuntimeError("Selecciona una persona evaluada.")
     evaluaciones = obtener_evaluaciones_por_evaluado(evaluado)
-    nombre = "Todas las personas" if evaluado == "__todas__" else evaluado
+    nombre = evaluado
     slug = slug_archivo(nombre)
     huella = _huella_evaluaciones(evaluaciones)
     cache = cargar_cache_informe(slug)
@@ -275,8 +277,10 @@ render();
     return ruta
 
 
-def generar_archivo_trayectoria(evaluado="__todas__"):
+def generar_archivo_trayectoria(evaluado=""):
+    if not evaluado:
+        raise RuntimeError("Selecciona una persona evaluada.")
     evaluaciones = obtener_evaluaciones_por_evaluado(evaluado)
-    nombre = "Todas las personas" if evaluado == "__todas__" else evaluado
+    nombre = evaluado
     guardar_trayectoria_react(evaluaciones, nombre)
     return len(evaluaciones), slug_archivo(nombre)

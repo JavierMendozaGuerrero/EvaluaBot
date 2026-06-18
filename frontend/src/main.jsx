@@ -2,7 +2,7 @@ import React, { useEffect, useMemo, useState } from "react";
 import { createRoot } from "react-dom/client";
 import "./styles.css";
 
-const API_BASE = import.meta.env.VITE_API_BASE_URL || "http://localhost:8000";
+const API_BASE = import.meta.env.VITE_API_BASE_URL || `${window.location.protocol}//${window.location.hostname}:8000`;
 
 function apiUrl(path) {
   return `${API_BASE}${path}`;
@@ -280,7 +280,7 @@ function ObjetivosPage({ token, advisee, caName, onBack }) {
 function AuthScreen({ onLogin }) {
   const resetToken = getResetToken();
   const [mode, setMode] = useState(resetToken ? "reset" : "login");
-  const [form, setForm] = useState({ username: "", email: "", password: "", confirmPassword: "", newPassword: "", confirmNewPassword: "", adminCode: "" });
+  const [form, setForm] = useState({ username: "", email: "", password: "", confirmPassword: "", newPassword: "", confirmNewPassword: "" });
   const [error, setError] = useState("");
   const [message, setMessage] = useState("");
   const [loading, setLoading] = useState(false);
@@ -385,12 +385,6 @@ function AuthScreen({ onLogin }) {
               Minimo 8 caracteres, una mayuscula y un caracter especial. Las contrasenas deben coincidir.
             </p>
           )}
-          {mode === "register" && (
-            <>
-              <label>Clave admin</label>
-              <PasswordInput placeholder="Solo Ana" value={form.adminCode} onChange={(e) => setForm({ ...form, adminCode: e.target.value })} required={false} />
-            </>
-          )}
           <div className="actions">
             <button type="submit" disabled={!canSubmit}>
               {loading ? "Procesando..." : mode === "forgot" ? "Enviar enlace" : mode === "reset" ? "Guardar contrasena" : mode === "login" ? "Entrar" : "Crear cuenta"}
@@ -409,10 +403,10 @@ function Dashboard({ token, user, onLogout, onNavigate }) {
   const [evaluado, setEvaluado] = useState("");
   const [status, setStatus] = useState("");
   const [links, setLinks] = useState(null);
-  const [revision, setRevision] = useState(null);
   const [advisees, setAdvisees] = useState([]);
   const [opinionesModal, setOpinionesModal] = useState(null);
   const [loadingOpiniones, setLoadingOpiniones] = useState(false);
+  const isAdmin = Boolean(user?.is_admin);
 
   useEffect(() => {
     apiRequest("/api/evaluados", { token })
@@ -429,45 +423,18 @@ function Dashboard({ token, user, onLogout, onNavigate }) {
       .catch(() => {});
   }, [token]);
 
-  useEffect(() => {
-    if (!user?.is_admin) return;
-    loadRevision();
-  }, [token, user?.is_admin]);
-
-  const role = user?.is_admin ? "Admin" : `Solo ${user?.persona || user?.username}`;
+  const role = isAdmin ? "Admin" : "";
+  const ownEvaluado = user?.persona || user?.username || "";
+  const targetEvaluado = isAdmin ? evaluado : (evaluado || ownEvaluado);
   const selectedLabel = useMemo(() => evaluados.find((item) => item.value === evaluado)?.label || "", [evaluados, evaluado]);
 
   async function generate(kind) {
     setLinks(null);
     setStatus(kind === "generar" ? "Claude esta generando el informe..." : "Preparando trayectoria visual...");
     try {
-      const data = await apiRequest(`/api/${kind}`, { token, method: "POST", body: { evaluado } });
+      const data = await apiRequest(`/api/${kind}`, { token, method: "POST", body: { evaluado: targetEvaluado } });
       setStatus(kind === "generar" ? `Informe listo con ${data.total} evaluaciones.` : `Trayectoria lista con ${data.total} evaluaciones.`);
       setLinks(data);
-    } catch (err) {
-      setStatus(err.message);
-    }
-  }
-
-  async function loadRevision() {
-    try {
-      const data = await apiRequest("/api/revision-pendiente", { token });
-      setRevision(data);
-    } catch (err) {
-      setStatus(err.message);
-    }
-  }
-
-  async function sendPending(pendingId) {
-    setStatus("Enviando evaluacion a Slack...");
-    try {
-      await apiRequest("/api/revision-pendiente/enviar", {
-        token,
-        method: "POST",
-        body: { pendingId },
-      });
-      setStatus("Evaluacion enviada a Slack.");
-      await loadRevision();
     } catch (err) {
       setStatus(err.message);
     }
@@ -516,7 +483,7 @@ function Dashboard({ token, user, onLogout, onNavigate }) {
         <a className="brand" href="/">igeneris</a>
         <div className="nav-links">
           <span>{user?.username}</span>
-          <span>{role}</span>
+          {role && <span>{role}</span>}
           <button className="link-button" onClick={() => onNavigate({ type: "mis-objetivos" })}>Mis objetivos</button>
           <button className="link-button" onClick={onLogout}>Cerrar sesion</button>
         </div>
@@ -527,14 +494,16 @@ function Dashboard({ token, user, onLogout, onNavigate }) {
           <p className="kicker">People analytics</p>
           <h1>Centro de evaluaciones.</h1>
         </div>
-        <div className="panel">
-          <p className="lead">Genera informes y trayectorias visuales a partir del feedback guardado en Notion.</p>
-          <label>Persona evaluada</label>
-          <select value={evaluado} onChange={(e) => setEvaluado(e.target.value)}>
-            {evaluados.map((item) => <option key={item.value} value={item.value}>{item.label}</option>)}
-          </select>
-          <p className="fine">Seleccion actual: {selectedLabel || "sin tabla disponible"}</p>
-        </div>
+        {isAdmin && (
+          <div className="panel">
+            <p className="lead">Genera informes y trayectorias visuales a partir del feedback guardado en Notion.</p>
+            <label>Persona evaluada</label>
+            <select value={evaluado} onChange={(e) => setEvaluado(e.target.value)}>
+              {evaluados.map((item) => <option key={item.value} value={item.value}>{item.label}</option>)}
+            </select>
+            <p className="fine">Seleccion actual: {selectedLabel || "sin tabla disponible"}</p>
+          </div>
+        )}
       </section>
 
       <section className="tools">
@@ -542,13 +511,13 @@ function Dashboard({ token, user, onLogout, onNavigate }) {
           <p className="kicker">Informe</p>
           <h2>Documento ejecutivo</h2>
           <p>Analisis con Claude y descarga en Word cuando hay evaluaciones nuevas.</p>
-          <button onClick={() => generate("generar")} disabled={!evaluado}>Generar informe</button>
+          <button onClick={() => generate("generar")} disabled={!targetEvaluado}>Generar informe</button>
         </article>
         <article className="tool wrapped">
           <p className="kicker">Trayectoria</p>
           <h2>Vista tipo wrapped</h2>
           <p>Navega por fechas, proyecto, satisfaccion y comentarios clave.</p>
-          <button className="secondary" onClick={() => generate("trayectoria")} disabled={!evaluado}>Generar trayectoria</button>
+          <button className="secondary" onClick={() => generate("trayectoria")} disabled={!targetEvaluado}>Generar trayectoria</button>
         </article>
       </section>
 
@@ -621,26 +590,6 @@ function Dashboard({ token, user, onLogout, onNavigate }) {
         </section>
       )}
 
-      {user?.is_admin && revision && (
-        <section className="review panel">
-          <p className="kicker">Revision previa</p>
-          <h2>Evaluaciones de Slack</h2>
-          {revision.pendientes?.length ? (
-            <div className="pending-list">
-              {revision.pendientes.map((item) => (
-                <article className="pending" key={item.id}>
-                  <p><strong>{item.creada}</strong></p>
-                  <p>{item.origen}</p>
-                  <button onClick={() => sendPending(item.id)}>Enviar evaluacion</button>
-                </article>
-              ))}
-            </div>
-          ) : (
-            <p>No hay evaluaciones pendientes de revision.</p>
-          )}
-          <button className="secondary" onClick={loadRevision}>Actualizar</button>
-        </section>
-      )}
     </main>
   );
 }

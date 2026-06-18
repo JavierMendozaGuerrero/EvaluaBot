@@ -15,7 +15,7 @@ from .notion_service import (
     _crear_pagina_en_bbdd,
     _data_source_id,
     _extraer_titulo_bbdd,
-    _parent_bbdd_referencia,
+    _parent_bbdd_en_pagina,
     _query_bbdd,
     _tipo_objeto_busqueda_bbdd,
     _usa_data_sources,
@@ -91,7 +91,7 @@ def _obtener_o_crear_bbdd_usuarios():
         return database_id
 
     titulo = config.NOTION_USERS_DATABASE_NAME
-    parent = _parent_bbdd_referencia()
+    parent = _parent_bbdd_en_pagina(config.NOTION_DATA_LISTS_PAGE_NAME, crear=True)
     resultado = notion.search(
         query=titulo,
         filter={"value": _tipo_objeto_busqueda_bbdd(), "property": "object"},
@@ -369,7 +369,7 @@ def cambiar_password_con_token(token, nueva_password, confirm_password=None):
         password_reset_tokens.pop(token, None)
 
 
-def registrar_usuario(username, password, admin_code):
+def registrar_usuario(username, password):
     username = " ".join((username or "").split()).strip()
     if not username or not password:
         raise ValueError("Usuario y contraseña son obligatorios.")
@@ -380,13 +380,12 @@ def registrar_usuario(username, password, admin_code):
     if clave in usuarios:
         raise ValueError("Ese usuario ya existe.")
 
-    es_admin = normalizar_nombre(username) == normalizar_nombre(config.ADMIN_NAME) and bool(config.ADMIN_ACCESS_CODE) and admin_code == config.ADMIN_ACCESS_CODE
     salt, password_hash = hash_password(password)
     usuarios[clave] = {
         "username": username,
         "persona": username,
         "email": "",
-        "is_admin": es_admin,
+        "is_admin": False,
         "salt": salt,
         "password_hash": password_hash,
     }
@@ -444,15 +443,8 @@ def validar_acceso_sesion(sesion, evaluado, extra_permitidos=None):
         raise PermissionError("Inicia sesión para acceder.")
     if sesion.get("is_admin"):
         return
-    if evaluado == "__todas__":
-        raise PermissionError("Solo Ana puede generar informes globales.")
     if normalizar_nombre(sesion.get("persona")) == normalizar_nombre(evaluado):
         return
     if extra_permitidos and normalizar_nombre(evaluado) in [normalizar_nombre(n) for n in extra_permitidos]:
         return
     raise PermissionError("Solo puedes ver las evaluaciones hechas sobre ti.")
-
-
-def validar_admin_sesion(sesion):
-    if not sesion or not sesion.get("is_admin"):
-        raise PermissionError("Solo Ana puede revisar y enviar evaluaciones.")

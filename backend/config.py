@@ -13,7 +13,6 @@ def env_bool(name, default="false"):
 CHANNEL_ID = os.environ.get("SLACK_CHANNEL_ID", "C0BBFRM14SU")
 
 APP_MODE = os.environ.get("APP_MODE", "prueba").strip().lower()
-REVIEW_BEFORE_SEND = env_bool("REVIEW_BEFORE_SEND")
 INTERVALO_PRUEBA_SEGUNDOS = 300
 INTERVALO_CA_SEGUNDOS = int(os.environ.get("INTERVALO_CA_SEGUNDOS", "120"))
 ZONA_HORARIA_MADRID = ZoneInfo("Europe/Madrid")
@@ -51,14 +50,13 @@ NOTION_TOKEN = _require_env("NOTION_TOKEN")
 NOTION_DATABASE_ID = _require_env("NOTION_DATABASE_ID")
 NOTION_EMPLOYEES_DATABASE_ID = os.environ.get("NOTION_EMPLOYEES_DATABASE_ID", NOTION_DATABASE_ID).strip()
 NOTION_DATA_LISTS_PAGE_NAME = os.environ.get("NOTION_DATA_LISTS_PAGE_NAME", "Listas de datos").strip()
+NOTION_INDIVIDUAL_EVALUATIONS_PAGE_NAME = os.environ.get("NOTION_INDIVIDUAL_EVALUATIONS_PAGE_NAME", "Evaluaciones Individuales").strip()
+NOTION_CA_TRACKING_PAGE_NAME = os.environ.get("NOTION_CA_TRACKING_PAGE_NAME", "Seguimiento CA").strip()
 NOTION_EMPLOYEES_DATABASE_NAME = os.environ.get("NOTION_EMPLOYEES_DATABASE_NAME", "Lista de empleados").strip()
 NOTION_USERS_DATABASE_ID = os.environ.get("NOTION_USERS_DATABASE_ID", "").strip()
 NOTION_USERS_DATABASE_NAME = os.environ.get("NOTION_USERS_DATABASE_NAME", "Usuarios web").strip()
 NOTION_PARENT_PAGE_ID = os.environ.get("NOTION_PARENT_PAGE_ID", "").strip()
 ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY", "").strip()
-ADMIN_NAME = os.environ.get("ADMIN_NAME", "Ana").strip()
-ADMIN_ACCESS_CODE = os.environ.get("ADMIN_ACCESS_CODE", "").strip()
-
 PREGUNTAS = [
     {"clave": "proyecto", "texto": "1️⃣ ¿En qué proyecto estás trabajando ahora?"},
     {"clave": "evaluado", "texto": "2️⃣ Indica el nombre del miembro del proyecto"},

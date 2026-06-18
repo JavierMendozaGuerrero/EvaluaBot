@@ -1,5 +1,4 @@
 ﻿import logging
-import secrets
 import time
 from datetime import datetime, timedelta
 
@@ -9,7 +8,7 @@ from . import config
 from .ca_reviews import ca_ts, manejar_mensaje_ca
 from .clients import slack_app
 from .notion_service import buscar_empleado_en_lista, guardar_en_notion, obtener_nombre_por_id_usuario, sugerir_empleados_parecidos
-from .state import avisos_responder_en_hilo, conversaciones, evaluacion_ts, evaluaciones_pendientes, lock
+from .state import avisos_responder_en_hilo, conversaciones, evaluacion_ts, lock
 from .utils import normalizar_nombre
 
 
@@ -31,22 +30,8 @@ def enviar_una_evaluacion():
         logging.exception("Error enviando mensaje de evaluación")
 
 
-def crear_revision_pendiente(origen):
-    pendiente = {
-        "id": secrets.token_urlsafe(12),
-        "origen": origen,
-        "creada": datetime.now(config.ZONA_HORARIA_MADRID).strftime("%Y-%m-%d %H:%M:%S %Z"),
-    }
-    with lock:
-        evaluaciones_pendientes.append(pendiente)
-    logging.info(f"Evaluación pendiente de revisión creada: {pendiente['id']}")
-
-
 def enviar_o_crear_revision(origen):
-    if config.REVIEW_BEFORE_SEND:
-        crear_revision_pendiente(origen)
-    else:
-        enviar_una_evaluacion()
+    enviar_una_evaluacion()
 
 
 def enviar_evaluaciones_modo_prueba():
@@ -485,34 +470,6 @@ def handle_message_events(event, logger):
     # fallback: keep the conversation alive with the current prompt
     if pregunta:
         slack_app.client.chat_postMessage(channel=config.CHANNEL_ID, thread_ts=thread_ts, text=pregunta)
-
-
-def preguntas_revision_html():
-    return "\n".join(f"<li>{pregunta['texto']}</li>" for pregunta in config.PREGUNTAS)
-
-
-def pendientes_revision_html():
-    with lock:
-        pendientes = list(evaluaciones_pendientes)
-    if not config.REVIEW_BEFORE_SEND:
-        return "<p class='fine'>La revisión previa está desactivada. Las evaluaciones se envían automáticamente.</p>"
-    if not pendientes:
-        return "<p class='fine'>No hay evaluaciones pendientes de revisión.</p>"
-    return "\n".join(
-        f"""<div class="card-line"><p><strong>Pendiente:</strong> {p['creada']} · {p['origen']}</p>
-<form method="post" action="/enviar_pendiente" data-loading="Enviando evaluación a Slack">
-<input type="hidden" name="pending_id" value="{p['id']}"><button type="submit">Enviar evaluación</button></form></div>"""
-        for p in pendientes
-    )
-
-
-def enviar_revision_pendiente(pending_id):
-    with lock:
-        indice = next((i for i, item in enumerate(evaluaciones_pendientes) if item["id"] == pending_id), None)
-        if indice is None:
-            raise RuntimeError("Esa evaluación pendiente ya no existe.")
-        evaluaciones_pendientes.pop(indice)
-    enviar_una_evaluacion()
 
 
 def start_socket_mode():

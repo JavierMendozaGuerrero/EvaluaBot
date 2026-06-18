@@ -1,4 +1,4 @@
-# Bot de Slack: evaluación periódica + respuestas guardadas en Notion
+﻿# Bot de Slack: evaluación periódica + respuestas guardadas en Notion
 
 Este bot:
 1. Envía "haz tu evaluación" a un canal de Slack cada 5 minutos.
@@ -7,8 +7,7 @@ Este bot:
    Notion específica para esa persona. Si no existe, la crea.
 3. Expone una web local para generar informes con Claude, descargar un Word
    y crear una trayectoria React navegable por fechas.
-4. Añade registro/login: Ana puede ver todo como admin; el resto solo puede
-   generar contenidos sobre su propia tabla.
+4. Anade registro/login: cada usuario puede generar contenidos sobre su propia tabla.
 
 ## 1. Configurar la app de Slack
 
@@ -27,9 +26,8 @@ para que el token tenga los permisos actualizados.
 1. Crea una integración en https://www.notion.so/my-integrations
 2. Copia el "Internal Integration Secret" (empieza por `secret_` o `ntn_`)
 3. Crea una base de datos de referencia (vista de tabla) con estas columnas EXACTAS:
-   - `Name` (tipo Title, ya viene por defecto)
-   - `Persona evaluada` (tipo Text)
-   - `Persona que evalua` (tipo Text)
+   - `Name` (tipo Title, ya viene por defecto; se usa solo como titulo tecnico)
+   - `Evaluador` (tipo Text)
    - `Proyecto` (tipo Text)
    - `Satisfaccion` (tipo Text)
    - `Mejor aspecto` (tipo Text)
@@ -62,11 +60,8 @@ $env:NOTION_EMPLOYEES_DATABASE_NAME="Lista de empleados"
 $env:NOTION_USERS_DATABASE_NAME="Usuarios web"
 $env:NOTION_PARENT_PAGE_ID="id_de_la_pagina_donde_crear_las_bases"
 $env:ANTHROPIC_API_KEY="sk-ant-..."
-$env:ADMIN_NAME="Ana"
-$env:ADMIN_ACCESS_CODE="una_clave_para_ana"
 $env:APP_MODE="prueba"       # prueba: ahora y cada 5 min
 # $env:APP_MODE="produccion" # produccion: viernes 10:00 hora Madrid
-$env:REVIEW_BEFORE_SEND="true" # true: Ana revisa en la web antes de enviar a Slack
 ```
 
 ## 5. Ejecutar
@@ -105,8 +100,6 @@ Desde ahí puedes:
 - Los usuarios web se guardan en una base de Notion llamada `Usuarios web`
   (o la que configures con `NOTION_USERS_DATABASE_NAME`). Las contraseñas se
   guardan como `salt` + `password_hash`, no en texto plano.
-- Registrar `Ana` introduciendo también `ADMIN_ACCESS_CODE` para activar permisos admin.
-- Entrar como `Ana` para generar informes globales o de cualquier persona.
 - Entrar como otra persona para generar solo lo que le han evaluado a esa persona.
 
 ## 6. Probar
@@ -129,4 +122,4 @@ Desde ahí puedes:
 - El bot solo recuerda los mensajes de evaluación enviados mientras está
   corriendo (si lo reinicias, pierde la memoria de los `ts` anteriores).
 - En modo `produccion`, el bot envía la evaluación los viernes a las 10:00 hora de Madrid.
-- Si `REVIEW_BEFORE_SEND=true`, el bot crea una evaluación pendiente y Ana debe aprobarla desde la web antes de que se mande a Slack.
+

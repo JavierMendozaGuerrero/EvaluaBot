@@ -31,8 +31,6 @@ def _extraer_titulo_pagina(pagina):
 def _propiedades_bbdd_evaluaciones():
     return {
         "Name": {"title": {}},
-        "Persona evaluada": {"rich_text": {}},
-        "Persona que evalua": {"rich_text": {}},
         "Evaluador": {"rich_text": {}},
         "Proyecto": {"rich_text": {}},
         "Satisfaccion": {"rich_text": {}},
@@ -319,6 +317,49 @@ def _parent_bbdd_referencia():
     return {"type": "page_id", "page_id": parent["page_id"]}
 
 
+def _parent_bbdd_en_pagina(nombre_pagina, crear=False):
+    parent_raiz = _parent_bbdd_referencia()
+    page_id = _page_or_database_link_by_name(parent_raiz["page_id"], nombre_pagina)
+    if page_id:
+        return {"type": "page_id", "page_id": page_id}
+    if not crear:
+        return parent_raiz
+
+    pagina = notion.pages.create(
+        parent=parent_raiz,
+        properties={"title": {"title": [{"type": "text", "text": {"content": nombre_pagina}}]}},
+    )
+    return {"type": "page_id", "page_id": pagina["id"]}
+
+
+def _buscar_bbdd_en_pagina(nombre_pagina, titulo_bbdd):
+    parent = _parent_bbdd_en_pagina(nombre_pagina, crear=False)
+    if parent.get("type") != "page_id":
+        return None
+
+    objetivo = normalizar_nombre(titulo_bbdd)
+    for bloque in _iter_blocks(parent["page_id"]):
+        if bloque.get("type") == "child_database" and normalizar_nombre(_titulo_child_database(bloque)) == objetivo:
+            try:
+                return _data_source_id(notion.databases.retrieve(database_id=bloque["id"]))
+            except Exception:
+                logging.exception("No se pudo resolver la base %s desde %s", titulo_bbdd, nombre_pagina)
+                return bloque["id"]
+
+        if bloque.get("type") != "link_to_page":
+            continue
+        target_id = _target_link_to_page(bloque)
+        if not target_id:
+            continue
+        try:
+            db = notion.databases.retrieve(database_id=target_id)
+            if normalizar_nombre(_extraer_titulo_bbdd(db)) == objetivo:
+                return _data_source_id(db)
+        except Exception:
+            continue
+    return None
+
+
 def obtener_parent_bbdd_evaluados():
     try:
         return _parent_bbdd_referencia()
@@ -336,9 +377,12 @@ def obtener_o_crear_bbdd_evaluado(nombre_evaluado):
         return cacheada
 
     parent = _parent_bbdd_referencia()
+    parent_evaluaciones = _parent_bbdd_en_pagina(config.NOTION_INDIVIDUAL_EVALUATIONS_PAGE_NAME, crear=True)
     resultado = notion.search(query=titulo, filter={"value": _tipo_objeto_busqueda_bbdd(), "property": "object"}, page_size=100)
     for bbdd in resultado.get("results", []):
-        if _extraer_titulo_bbdd(bbdd) == titulo and _coincide_parent_bbdd(bbdd, parent):
+        if _extraer_titulo_bbdd(bbdd) == titulo and (
+            _coincide_parent_bbdd(bbdd, parent) or _coincide_parent_bbdd(bbdd, parent_evaluaciones)
+        ):
             database_id = _data_source_id(bbdd)
             asegurar_propiedades_bbdd(database_id)
             with lock:
@@ -347,13 +391,13 @@ def obtener_o_crear_bbdd_evaluado(nombre_evaluado):
 
     if _usa_data_sources():
         nueva = notion.databases.create(
-            parent=parent,
+            parent=parent_evaluaciones,
             title=[{"type": "text", "text": {"content": titulo}}],
             initial_data_source={"title": [{"type": "text", "text": {"content": titulo}}], "properties": _propiedades_bbdd_evaluaciones()},
         )
         nueva = notion.databases.retrieve(database_id=nueva["id"])
     else:
-        nueva = notion.databases.create(parent=parent, title=[{"type": "text", "text": {"content": titulo}}], properties=_propiedades_bbdd_evaluaciones())
+        nueva = notion.databases.create(parent=parent_evaluaciones, title=[{"type": "text", "text": {"content": titulo}}], properties=_propiedades_bbdd_evaluaciones())
 
     database_id = _data_source_id(nueva)
     asegurar_propiedades_bbdd(database_id)
@@ -369,18 +413,17 @@ def guardar_en_notion(nombre, respuestas):
     try:
         database_id = obtener_o_crear_bbdd_evaluado(nombre_evaluado)
         asegurar_propiedades_bbdd(database_id)
+        fecha = datetime.now(timezone.utc)
         _crear_pagina_en_bbdd(
             database_id,
             {
-                "Name": {"title": [{"text": {"content": nombre}}]},
-                "Persona evaluada": {"rich_text": [{"text": {"content": nombre_evaluado}}]},
-                "Persona que evalua": {"rich_text": [{"text": {"content": nombre}}]},
+                "Name": {"title": [{"text": {"content": f"Evaluacion {fecha.strftime('%Y-%m-%d %H:%M')}"}}]},
                 "Evaluador": {"rich_text": [{"text": {"content": nombre}}]},
                 "Proyecto": {"rich_text": [{"text": {"content": proyecto}}]},
                 "Satisfaccion": {"rich_text": [{"text": {"content": respuestas.get("satisfaccion", "")}}]},
                 "Mejor aspecto": {"rich_text": [{"text": {"content": respuestas.get("mejor_aspecto", "")}}]},
                 "Peor aspecto": {"rich_text": [{"text": {"content": respuestas.get("peor_aspecto", "")}}]},
-                "Fecha": {"date": {"start": datetime.now(timezone.utc).isoformat()}},
+                "Fecha": {"date": {"start": fecha.isoformat()}},
             },
         )
         return True
@@ -683,13 +726,14 @@ def obtener_evaluaciones_de_bbdd(database_id, evaluado):
             for pagina in resultado.get("results", []):
                 props = pagina.get("properties", {})
                 titulo_items = props.get("Name", {}).get("title", [])
-                nombre = titulo_items[0]["text"]["content"] if titulo_items else "Desconocido"
+                nombre_tecnico = titulo_items[0]["text"]["content"] if titulo_items else ""
+                evaluador = _texto_rich_text(props, "Evaluador") or _texto_rich_text(props, "Persona que evalua") or nombre_tecnico or "Desconocido"
                 fecha = (props.get("Fecha", {}).get("date") or {}).get("start", "")
                 evaluaciones.append({
-                    "nombre": nombre,
+                    "nombre": evaluador,
                     "evaluado": evaluado,
-                    "persona_evaluada": _texto_rich_text(props, "Persona evaluada") or evaluado,
-                    "persona_que_evalua": _texto_rich_text(props, "Persona que evalua") or nombre,
+                    "persona_evaluada": evaluado,
+                    "persona_que_evalua": evaluador,
                     "proyecto": _texto_rich_text(props, "Proyecto"),
                     "satisfaccion": _texto_rich_text(props, "Satisfaccion"),
                     "mejor_aspecto": _texto_rich_text(props, "Mejor aspecto"),
@@ -716,8 +760,8 @@ def obtener_evaluaciones():
 
 
 def obtener_evaluaciones_por_evaluado(evaluado):
-    if not evaluado or evaluado == "__todas__":
-        return obtener_evaluaciones()
+    if not evaluado:
+        raise RuntimeError("Selecciona una persona evaluada.")
     for bbdd in listar_bbdd_evaluados():
         if bbdd["evaluado"] == evaluado:
             return obtener_evaluaciones_de_bbdd(bbdd["id"], bbdd["evaluado"])
@@ -747,10 +791,11 @@ _cache_lista_ca: dict = {"db_id": None}
 _cache_advisees_por_ca: dict = {}
 
 
-def obtener_advisees(ca_nombre: str) -> list[str]:
+def obtener_advisees(ca_nombre: str, ca_aliases=None) -> list[str]:
     """Retorna los advisees de un CA desde 'Lista CA' (columna CA y columnas A1, A2, ...)."""
-    ca_norm = normalizar_nombre(ca_nombre)
-    logging.info(f"[advisees] Buscando advisees para CA: '{ca_nombre}' (norm: '{ca_norm}')")
+    ca_norms = {normalizar_nombre(valor) for valor in [ca_nombre, *(ca_aliases or [])] if valor}
+    ca_norm = sorted(ca_norms)[0] if ca_norms else ""
+    logging.info(f"[advisees] Buscando advisees para CA: '{ca_nombre}' (aliases: {ca_norms})")
     with lock:
         if ca_norm in _cache_advisees_por_ca:
             return _cache_advisees_por_ca[ca_norm]
@@ -800,7 +845,7 @@ def obtener_advisees(ca_nombre: str) -> list[str]:
                     for p in (prop_ca.get("rich_text") or prop_ca.get("title") or [])
                 ).strip()
                 logging.info(f"[advisees] Fila encontrada con CA='{nombre_ca}' (norm: '{normalizar_nombre(nombre_ca)}')")
-                if normalizar_nombre(nombre_ca) != ca_norm:
+                if normalizar_nombre(nombre_ca) not in ca_norms:
                     continue
                 pares = []
                 for col_name, prop_val in props.items():
@@ -867,23 +912,34 @@ def obtener_datos_empleados_por_nombres(nombres: list[str]) -> list[dict]:
         return [{"nombre": n, "foto": "", "email": ""} for n in nombres]
 
 
-def obtener_opiniones_ca_por_advisee(ca_nombre: str, advisee: str) -> list[dict]:
+def obtener_opiniones_ca_por_advisee(ca_nombre: str, advisee: str, ca_aliases=None) -> list[dict]:
     """Retorna las opiniones guardadas por el CA sobre el advisee, ordenadas por fecha desc."""
-    titulo = f"Opiniones CA - {ca_nombre.strip()}"
+    ca_norms = {normalizar_nombre(valor) for valor in [ca_nombre, *(ca_aliases or [])] if valor}
     advisee_norm = normalizar_nombre(advisee)
-    try:
+
+    def texto_alias(props, nombres):
+        for nombre in nombres:
+            if nombre in props:
+                valor = _texto_propiedad(props, nombre)
+                if valor:
+                    return valor
+        return ""
+
+    def buscar_bbdd(titulo):
+        db_id = _buscar_bbdd_en_pagina(config.NOTION_CA_TRACKING_PAGE_NAME, titulo)
+        if db_id:
+            return db_id
         resultado = notion.search(
             query=titulo,
             filter={"value": _tipo_objeto_busqueda_bbdd(), "property": "object"},
-            page_size=10,
+            page_size=25,
         )
-        db_id = None
         for bbdd in resultado.get("results", []):
-            if _extraer_titulo_bbdd(bbdd) == titulo:
-                db_id = _data_source_id(bbdd)
-                break
-        if not db_id:
-            return []
+            if normalizar_nombre(_extraer_titulo_bbdd(bbdd)) == normalizar_nombre(titulo):
+                return _data_source_id(bbdd)
+        return None
+
+    def leer_opiniones_nuevo(db_id):
         opiniones = []
         cursor = None
         while True:
@@ -893,28 +949,128 @@ def obtener_opiniones_ca_por_advisee(ca_nombre: str, advisee: str) -> list[dict]
             resp = _query_bbdd(db_id, **kwargs)
             for fila in resp.get("results", []):
                 props = fila.get("properties", {})
-                advisee_texto = "".join(
-                    p.get("plain_text", "")
-                    for p in props.get("Advisee", {}).get("rich_text", [])
-                ).strip()
-                if normalizar_nombre(advisee_texto) != advisee_norm:
+                ca_texto = texto_alias(props, ("CA", "CA que le evalua", "CA que le evalúa", "Career Advisor", "Evaluador"))
+                if ca_texto and normalizar_nombre(ca_texto) not in ca_norms:
                     continue
-                opinion = "".join(
-                    p.get("plain_text", "")
-                    for p in props.get("Opinion", {}).get("rich_text", [])
-                ).strip()
-                resumen = "".join(
-                    p.get("plain_text", "")
-                    for p in props.get("Resumen_advisee", {}).get("rich_text", [])
-                ).strip()
+                opinion = texto_alias(props, ("Opinion", "Opinión"))
+                resumen = texto_alias(props, ("Resumen", "Resumen_advisee", "Resumen sobre lo que se opina", "Resumen evaluaciones"))
                 fecha = (props.get("Fecha", {}).get("date") or {}).get("start", "")
-                opiniones.append({"fecha": fecha, "opinion": opinion, "resumen_advisee": resumen})
+                if not any((fecha, ca_texto, opinion, resumen)):
+                    continue
+                opiniones.append({"fecha": fecha, "ca": ca_texto, "opinion": opinion, "resumen_advisee": resumen})
             if not resp.get("has_more"):
                 break
             cursor = resp.get("next_cursor")
+        return opiniones
+
+    def leer_opiniones_antiguo(db_id):
+        opiniones = []
+        cursor = None
+        while True:
+            kwargs: dict = {"page_size": 100}
+            if cursor:
+                kwargs["start_cursor"] = cursor
+            resp = _query_bbdd(db_id, **kwargs)
+            for fila in resp.get("results", []):
+                props = fila.get("properties", {})
+                advisee_texto = texto_alias(props, ("Advisee", "Persona evaluada", "Evaluado"))
+                if normalizar_nombre(advisee_texto) != advisee_norm:
+                    continue
+                opinion = texto_alias(props, ("Opinion", "Opinión"))
+                resumen = texto_alias(props, ("Resumen", "Resumen_advisee", "Resumen sobre lo que se opina", "Resumen evaluaciones"))
+                fecha = (props.get("Fecha", {}).get("date") or {}).get("start", "")
+                ca_texto = texto_alias(props, ("CA", "Evaluador", "CA que le evalua", "CA que le evalúa"))
+                if not any((fecha, ca_texto, opinion, resumen)):
+                    continue
+                opiniones.append({"fecha": fecha, "ca": ca_texto or ca_nombre, "opinion": opinion, "resumen_advisee": resumen})
+            if not resp.get("has_more"):
+                break
+            cursor = resp.get("next_cursor")
+        return opiniones
+
+    try:
+        opiniones = []
+        db_nuevo = buscar_bbdd(f"Opiniones - {advisee.strip()}")
+        if db_nuevo:
+            try:
+                opiniones.extend(leer_opiniones_nuevo(db_nuevo))
+            except Exception:
+                logging.exception("No se pudieron leer opiniones nuevas para %s", advisee)
+
+        db_antiguo = buscar_bbdd(f"Opiniones CA - {ca_nombre.strip()}")
+        if db_antiguo:
+            try:
+                opiniones.extend(leer_opiniones_antiguo(db_antiguo))
+            except Exception:
+                logging.exception("No se pudieron leer opiniones antiguas para %s / %s", ca_nombre, advisee)
+
         return sorted(opiniones, key=lambda x: x.get("fecha", ""), reverse=True)
     except Exception:
         logging.exception(f"Error obteniendo opiniones de '{ca_nombre}' sobre '{advisee}'")
+        return []
+
+
+def listar_advisees_con_opiniones_ca(ca_nombre: str, ca_aliases=None) -> list[str]:
+    """Lista evaluados con base 'Opiniones - ...' en Seguimiento CA para este CA."""
+    ca_norms = {normalizar_nombre(valor) for valor in [ca_nombre, *(ca_aliases or [])] if valor}
+    if not ca_norms:
+        return []
+
+    def texto_alias(props, nombres):
+        for nombre in nombres:
+            if nombre in props:
+                valor = _texto_propiedad(props, nombre)
+                if valor:
+                    return valor
+        return ""
+
+    def db_desde_bloque(bloque):
+        if bloque.get("type") == "child_database":
+            titulo = _titulo_child_database(bloque)
+            try:
+                db = notion.databases.retrieve(database_id=bloque["id"])
+                return titulo, _data_source_id(db)
+            except Exception:
+                logging.exception("No se pudo resolver la base de seguimiento %s", titulo)
+                return titulo, bloque["id"]
+        if bloque.get("type") == "link_to_page":
+            target_id = _target_link_to_page(bloque)
+            if not target_id:
+                return "", None
+            try:
+                db = notion.databases.retrieve(database_id=target_id)
+                return _extraer_titulo_bbdd(db), _data_source_id(db)
+            except Exception:
+                return "", None
+        return "", None
+
+    try:
+        parent = _parent_bbdd_en_pagina(config.NOTION_CA_TRACKING_PAGE_NAME, crear=False)
+        if parent.get("type") != "page_id":
+            return []
+
+        encontrados = []
+        for bloque in _iter_blocks(parent["page_id"]):
+            titulo, db_id = db_desde_bloque(bloque)
+            if not db_id or not titulo.startswith("Opiniones - "):
+                continue
+
+            try:
+                resp = _query_bbdd(db_id, page_size=100)
+            except Exception:
+                logging.exception("No se pudo leer la base de seguimiento %s", titulo)
+                continue
+
+            for fila in resp.get("results", []):
+                props = fila.get("properties", {})
+                ca_texto = texto_alias(props, ("CA", "CA que le evalua", "CA que le evalúa", "Career Advisor", "Evaluador"))
+                if normalizar_nombre(ca_texto) in ca_norms:
+                    encontrados.append(titulo.removeprefix("Opiniones - ").strip())
+                    break
+
+        return sorted(set(encontrados), key=normalizar_nombre)
+    except Exception:
+        logging.exception("Error listando advisees con opiniones CA")
         return []
 
 

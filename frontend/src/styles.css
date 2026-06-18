@@ -119,6 +119,70 @@ select:focus {
   border-bottom-color: var(--ink);
 }
 
+input::-ms-reveal,
+input::-ms-clear {
+  display: none;
+}
+
+.password-field {
+  position: relative;
+}
+
+.password-field input {
+  padding-right: 48px;
+}
+
+.password-toggle {
+  position: absolute;
+  right: 0;
+  top: 0;
+  width: 42px;
+  min-height: 46px;
+  padding: 0;
+  border: 0;
+  border-bottom: 1px solid var(--line);
+  background: transparent;
+  color: var(--ink);
+}
+
+.password-toggle:hover,
+.password-toggle:focus {
+  border-bottom-color: var(--ink);
+  background: transparent;
+}
+
+.eye-icon {
+  position: relative;
+  width: 20px;
+  height: 12px;
+  border: 2px solid var(--ink);
+  border-radius: 50%;
+}
+
+.eye-icon::before {
+  content: "";
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: var(--ink);
+  transform: translate(-50%, -50%);
+}
+
+.eye-icon.is-visible::after {
+  content: "";
+  position: absolute;
+  left: -3px;
+  top: 5px;
+  width: 26px;
+  height: 2px;
+  background: var(--ink);
+  transform: rotate(-35deg);
+  transform-origin: center;
+}
+
 button,
 .button {
   display: inline-flex;

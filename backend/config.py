@@ -24,7 +24,14 @@ PUERTO_WEB = int(os.environ.get("PUERTO_WEB", "8000"))
 CARPETA_WEB = os.path.join(BASE_DIR, "dashboard_web")
 PREFIJO_BBDD_EVALUADO = "Evaluaciones - "
 FRONTEND_ORIGIN = os.environ.get("FRONTEND_ORIGIN", "http://localhost:5173").strip()
+APP_PUBLIC_URL = os.environ.get("APP_PUBLIC_URL", FRONTEND_ORIGIN).strip().rstrip("/")
 WEB_MODE = os.environ.get("WEB_MODE", "api").strip().lower()
+SMTP_HOST = os.environ.get("SMTP_HOST", "").strip()
+SMTP_PORT = int(os.environ.get("SMTP_PORT", "587"))
+SMTP_USER = os.environ.get("SMTP_USER", "").strip()
+SMTP_PASSWORD = os.environ.get("SMTP_PASSWORD", "").strip()
+SMTP_FROM = os.environ.get("SMTP_FROM", SMTP_USER).strip()
+SMTP_USE_TLS = env_bool("SMTP_USE_TLS", "true")
 INSTRUCCIONES_RESPONDER_EN_HILO = (
     "\n\nResponde siempre en el hilo de esta notificación, no en el canal principal. "
     "Aquí solo mando notificaciones cuando toca evaluar. "
@@ -45,6 +52,8 @@ NOTION_DATABASE_ID = _require_env("NOTION_DATABASE_ID")
 NOTION_EMPLOYEES_DATABASE_ID = os.environ.get("NOTION_EMPLOYEES_DATABASE_ID", NOTION_DATABASE_ID).strip()
 NOTION_DATA_LISTS_PAGE_NAME = os.environ.get("NOTION_DATA_LISTS_PAGE_NAME", "Listas de datos").strip()
 NOTION_EMPLOYEES_DATABASE_NAME = os.environ.get("NOTION_EMPLOYEES_DATABASE_NAME", "Lista de empleados").strip()
+NOTION_USERS_DATABASE_ID = os.environ.get("NOTION_USERS_DATABASE_ID", "").strip()
+NOTION_USERS_DATABASE_NAME = os.environ.get("NOTION_USERS_DATABASE_NAME", "Usuarios web").strip()
 NOTION_PARENT_PAGE_ID = os.environ.get("NOTION_PARENT_PAGE_ID", "").strip()
 ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY", "").strip()
 ADMIN_NAME = os.environ.get("ADMIN_NAME", "Ana").strip()

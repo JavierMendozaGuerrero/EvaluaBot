@@ -12,9 +12,11 @@ from .slack_bot import enviar_revision_pendiente, preguntas_revision_html
 from .state import evaluaciones_pendientes, lock
 from .users import (
     autenticar_usuario,
+    cambiar_password_con_token,
     crear_sesion,
     obtener_sesion_por_token,
     registrar_usuario,
+    solicitar_reset_password,
     validar_acceso_sesion,
     validar_admin_sesion,
 )
@@ -30,7 +32,13 @@ class ApiHandler(BaseHTTPRequestHandler):
         pass
 
     def end_headers(self):
-        self.send_header("Access-Control-Allow-Origin", config.FRONTEND_ORIGIN)
+        origen = self.headers.get("Origin", "")
+        origenes_permitidos = {
+            config.FRONTEND_ORIGIN,
+            "http://localhost:5173",
+            "http://127.0.0.1:5173",
+        }
+        self.send_header("Access-Control-Allow-Origin", origen if origen in origenes_permitidos else config.FRONTEND_ORIGIN)
         self.send_header("Access-Control-Allow-Credentials", "true")
         self.send_header("Access-Control-Allow-Headers", "Content-Type, Authorization")
         self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
@@ -120,6 +128,14 @@ class ApiHandler(BaseHTTPRequestHandler):
                 usuario = autenticar_usuario(datos.get("username", ""), datos.get("password", ""))
                 token = crear_sesion(usuario)
                 self.responder_json({"token": token, "user": obtener_sesion_por_token(token)})
+                return
+            if ruta == "/api/password-reset/request":
+                solicitar_reset_password(datos.get("email", ""))
+                self.responder_json({"ok": True})
+                return
+            if ruta == "/api/password-reset/confirm":
+                cambiar_password_con_token(datos.get("token", ""), datos.get("password", ""), datos.get("confirmPassword"))
+                self.responder_json({"ok": True})
                 return
 
             sesion = self.sesion_actual()

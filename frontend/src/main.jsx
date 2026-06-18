@@ -24,20 +24,93 @@ async function apiRequest(path, { token, method = "GET", body } = {}) {
   return data;
 }
 
+function isStrongPassword(password) {
+  return password.length >= 8 && /[A-Z]/.test(password) && /[^A-Za-z0-9]/.test(password);
+}
+
+function getResetToken() {
+  const queryToken = new URLSearchParams(window.location.search).get("reset");
+  if (queryToken) return queryToken;
+
+  const hashMatch = window.location.hash.match(/reset[=/]([^&/?#]+)/);
+  if (hashMatch) return decodeURIComponent(hashMatch[1]);
+
+  const pathMatch = window.location.pathname.match(/\/reset\/([^/]+)/);
+  return pathMatch ? decodeURIComponent(pathMatch[1]) : "";
+}
+
+function PasswordInput({ value, onChange, placeholder = "", required = true, minLength }) {
+  const [visible, setVisible] = useState(false);
+  return (
+    <div className="password-field">
+      <input
+        type={visible ? "text" : "password"}
+        value={value}
+        placeholder={placeholder}
+        onChange={onChange}
+        required={required}
+        minLength={minLength}
+      />
+      <button
+        type="button"
+        className="password-toggle"
+        onClick={() => setVisible(!visible)}
+        aria-label={visible ? "Ocultar contrasena" : "Mostrar contrasena"}
+        title={visible ? "Ocultar contrasena" : "Mostrar contrasena"}
+      >
+        <span className={`eye-icon ${visible ? "is-visible" : ""}`} aria-hidden="true" />
+      </button>
+    </div>
+  );
+}
+
 function AuthScreen({ onLogin }) {
-  const [mode, setMode] = useState("login");
-  const [form, setForm] = useState({ username: "", password: "", adminCode: "" });
+  const resetToken = getResetToken();
+  const [mode, setMode] = useState(resetToken ? "reset" : "login");
+  const [form, setForm] = useState({ username: "", email: "", password: "", confirmPassword: "", newPassword: "", confirmNewPassword: "", adminCode: "" });
   const [error, setError] = useState("");
+  const [message, setMessage] = useState("");
   const [loading, setLoading] = useState(false);
+  const passwordToValidate = mode === "reset" ? form.newPassword : mode === "register" ? form.password : "";
+  const passwordInvalid = Boolean(passwordToValidate) && !isStrongPassword(passwordToValidate);
+  const passwordsMismatch = mode === "reset"
+    ? Boolean(form.confirmNewPassword) && form.newPassword !== form.confirmNewPassword
+    : mode === "register"
+      ? Boolean(form.confirmPassword) && form.password !== form.confirmPassword
+      : false;
+  const passwordConfirmationMissing = mode === "reset"
+    ? !form.confirmNewPassword
+    : mode === "register"
+      ? !form.confirmPassword
+      : false;
+  const canSubmit = !loading && !((mode === "reset" || mode === "register") && (!isStrongPassword(passwordToValidate) || passwordConfirmationMissing || passwordsMismatch));
 
   async function submit(event) {
     event.preventDefault();
     setError("");
+    setMessage("");
+    if ((mode === "reset" || mode === "register") && !isStrongPassword(passwordToValidate)) {
+      setError("La contrasena debe tener minimo 8 caracteres, una mayuscula y un caracter especial.");
+      return;
+    }
+    if ((mode === "reset" && form.newPassword !== form.confirmNewPassword) || (mode === "register" && form.password !== form.confirmPassword)) {
+      setError("Las contrasenas no coinciden.");
+      return;
+    }
     setLoading(true);
     try {
       if (mode === "register") {
         await apiRequest("/api/register", { method: "POST", body: form });
         setMode("login");
+      } else if (mode === "forgot") {
+        await apiRequest("/api/password-reset/request", { method: "POST", body: { email: form.email } });
+        setMessage("Si el email existe, te hemos enviado un enlace para cambiar la contrasena.");
+      } else if (mode === "reset") {
+        await apiRequest("/api/password-reset/confirm", { method: "POST", body: { token: resetToken, password: form.newPassword, confirmPassword: form.confirmNewPassword } });
+        localStorage.removeItem("evaluabot_token");
+        window.history.replaceState({}, "", window.location.pathname);
+        setMode("login");
+        setMessage("Contrasena actualizada. Ya puedes entrar.");
       } else {
         const data = await apiRequest("/api/login", { method: "POST", body: form });
         localStorage.setItem("evaluabot_token", data.token);
@@ -54,31 +127,63 @@ function AuthScreen({ onLogin }) {
     <main className="page auth-page">
       <nav className="nav">
         <a className="brand" href="/">igeneris</a>
-        <button className="link-button" onClick={() => setMode(mode === "login" ? "register" : "login")}>
+        <button className="link-button" onClick={() => { setError(""); setMessage(""); setMode(mode === "login" ? "register" : "login"); }}>
           {mode === "login" ? "Registro" : "Login"}
         </button>
       </nav>
       <section className="hero">
         <div>
           <p className="kicker">Evaluaciones internas</p>
-          <h1>{mode === "login" ? "Accede a tus informes." : "Registra tu usuario."}</h1>
+          <h1>{mode === "forgot" ? "Recupera tu acceso." : mode === "reset" ? "Crea una contrasena nueva." : mode === "login" ? "Accede a tus informes." : "Registra tu usuario."}</h1>
           <p className="lead">Consulta informes, trayectorias y feedback con permisos por persona.</p>
         </div>
         <form className="panel auth-form" onSubmit={submit}>
-          <h2>{mode === "login" ? "Entrar" : "Crear cuenta"}</h2>
+          <h2>{mode === "forgot" ? "Enviar email" : mode === "reset" ? "Cambiar contrasena" : mode === "login" ? "Entrar" : "Crear cuenta"}</h2>
           {error && <p className="error">{error}</p>}
-          <label>Usuario</label>
-          <input value={form.username} onChange={(e) => setForm({ ...form, username: e.target.value })} required />
-          <label>Contrasena</label>
-          <input type="password" value={form.password} onChange={(e) => setForm({ ...form, password: e.target.value })} required />
+          {message && <p className="fine">{message}</p>}
+          {mode === "forgot" ? (
+            <>
+              <label>Email</label>
+              <input type="email" value={form.email} onChange={(e) => setForm({ ...form, email: e.target.value })} required />
+            </>
+          ) : mode === "reset" ? (
+            <>
+              <label>Nueva contrasena</label>
+              <PasswordInput value={form.newPassword} onChange={(e) => setForm({ ...form, newPassword: e.target.value })} minLength={8} />
+              <label>Repite la contrasena</label>
+              <PasswordInput value={form.confirmNewPassword} onChange={(e) => setForm({ ...form, confirmNewPassword: e.target.value })} minLength={8} />
+            </>
+          ) : (
+            <>
+              <label>{mode === "login" ? "Usuario o email" : "Usuario"}</label>
+              <input value={form.username} onChange={(e) => setForm({ ...form, username: e.target.value })} required />
+              <label>Contrasena</label>
+              <PasswordInput value={form.password} onChange={(e) => setForm({ ...form, password: e.target.value })} minLength={mode === "register" ? 8 : undefined} />
+              {mode === "register" && (
+                <>
+                  <label>Repite la contrasena</label>
+                  <PasswordInput value={form.confirmPassword} onChange={(e) => setForm({ ...form, confirmPassword: e.target.value })} minLength={8} />
+                </>
+              )}
+            </>
+          )}
+          {(mode === "register" || mode === "reset") && (
+            <p className={(passwordInvalid || passwordsMismatch) ? "error fine" : "fine"}>
+              Minimo 8 caracteres, una mayuscula y un caracter especial. Las contrasenas deben coincidir.
+            </p>
+          )}
           {mode === "register" && (
             <>
               <label>Clave admin</label>
-              <input type="password" placeholder="Solo Ana" value={form.adminCode} onChange={(e) => setForm({ ...form, adminCode: e.target.value })} />
+              <PasswordInput placeholder="Solo Ana" value={form.adminCode} onChange={(e) => setForm({ ...form, adminCode: e.target.value })} required={false} />
             </>
           )}
           <div className="actions">
-            <button type="submit" disabled={loading}>{loading ? "Procesando..." : mode === "login" ? "Entrar" : "Crear cuenta"}</button>
+            <button type="submit" disabled={!canSubmit}>
+              {loading ? "Procesando..." : mode === "forgot" ? "Enviar enlace" : mode === "reset" ? "Guardar contrasena" : mode === "login" ? "Entrar" : "Crear cuenta"}
+            </button>
+            {mode === "login" && <button type="button" className="secondary" onClick={() => { setError(""); setMessage(""); setMode("forgot"); }}>Olvide mi contrasena</button>}
+            {(mode === "forgot" || mode === "reset") && <button type="button" className="secondary" onClick={() => { window.history.replaceState({}, "", window.location.pathname); setError(""); setMessage(""); setMode("login"); }}>Volver</button>}
           </div>
         </form>
       </section>
@@ -250,10 +355,12 @@ function Dashboard({ token, user, onLogout }) {
 }
 
 function App() {
+  const resetToken = getResetToken();
   const [token, setToken] = useState(localStorage.getItem("evaluabot_token") || "");
   const [user, setUser] = useState(null);
 
   useEffect(() => {
+    if (resetToken) return;
     if (!token) return;
     apiRequest("/api/me", { token })
       .then((data) => {
@@ -261,9 +368,9 @@ function App() {
         else localStorage.removeItem("evaluabot_token");
       })
       .catch(() => localStorage.removeItem("evaluabot_token"));
-  }, [token]);
+  }, [token, resetToken]);
 
-  if (!token || !user) {
+  if (resetToken || !token || !user) {
     return <AuthScreen onLogin={(newToken, newUser) => { setToken(newToken); setUser(newUser); }} />;
   }
   return <Dashboard token={token} user={user} onLogout={() => { localStorage.removeItem("evaluabot_token"); setToken(""); setUser(null); }} />;

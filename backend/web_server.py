@@ -91,7 +91,7 @@ class WebHandler(SimpleHTTPRequestHandler):
         self.responder_html(f"""<!DOCTYPE html><html lang="es"><head><meta charset="utf-8"><title>Login</title><style>{config.IGENERIS_CSS}.login-wrap{{max-width:980px;margin:0 auto}}.auth-form{{max-width:420px}}</style></head>
 <body><main class="page login-wrap"><nav class="nav"><a class="brand" href="/login">igeneris</a><div class="nav-links"><a href="/register">Registro</a></div></nav>
 <section class="hero"><div><p class="kicker">Evaluaciones internas</p><h1>Accede a tus informes.</h1><p>Una herramienta privada para consultar feedback, trayectoria e informes.</p></div>
-<form class="auth-form panel" method="post" action="/login"><h2>Entrar</h2>{extra}<label>Usuario</label><input name="username" required><label>Contraseña</label><input name="password" type="password" required><div class="actions"><button type="submit">Entrar</button><a class="button secondary" href="/register">Crear cuenta</a></div></form></section></main></body></html>""")
+<form class="auth-form panel" method="post" action="/login"><h2>Entrar</h2>{extra}<label>Usuario o email</label><input name="username" required><label>Contraseña</label><input name="password" type="password" required><div class="actions"><button type="submit">Entrar</button><a class="button secondary" href="/register">Crear cuenta</a></div></form></section></main></body></html>""")
 
     def pagina_registro(self, mensaje=""):
         extra = f"<p class='error'>{html.escape(mensaje)}</p>" if mensaje else ""

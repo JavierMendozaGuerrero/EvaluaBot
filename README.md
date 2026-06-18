@@ -59,6 +59,7 @@ $env:NOTION_DATABASE_ID="3800a3d98b8a804c97a8fe8667e9940c"
 $env:NOTION_EMPLOYEES_DATABASE_ID="id_de_la_pagina_evaluaciones_o_listas_de_datos"
 $env:NOTION_DATA_LISTS_PAGE_NAME="Listas de datos"
 $env:NOTION_EMPLOYEES_DATABASE_NAME="Lista de empleados"
+$env:NOTION_USERS_DATABASE_NAME="Usuarios web"
 $env:NOTION_PARENT_PAGE_ID="id_de_la_pagina_donde_crear_las_bases"
 $env:ANTHROPIC_API_KEY="sk-ant-..."
 $env:ADMIN_NAME="Ana"
@@ -101,6 +102,9 @@ Desde ahí puedes:
 - Reutilizar el informe anterior si no hay evaluaciones nuevas, evitando llamadas innecesarias a Claude.
 - Generar una trayectoria React con botones para pasar de una fecha a otra y ver la evaluación correspondiente de esa persona.
 - Registrarte con usuario y contraseña. El usuario determina la tabla que puedes ver.
+- Los usuarios web se guardan en una base de Notion llamada `Usuarios web`
+  (o la que configures con `NOTION_USERS_DATABASE_NAME`). Las contraseñas se
+  guardan como `salt` + `password_hash`, no en texto plano.
 - Registrar `Ana` introduciendo también `ADMIN_ACCESS_CODE` para activar permisos admin.
 - Entrar como `Ana` para generar informes globales o de cualquier persona.
 - Entrar como otra persona para generar solo lo que le han evaluado a esa persona.

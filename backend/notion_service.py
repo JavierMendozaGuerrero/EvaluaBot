@@ -417,11 +417,28 @@ def _texto_propiedad(propiedades, nombre_propiedad):
             if nombre:
                 nombres.append(nombre)
         return ", ".join(nombres).strip()
+    if tipo == "email":
+        return (propiedad.get("email") or "").strip()
     if tipo == "formula":
         formula = propiedad.get("formula") or {}
         if formula.get("type") == "string":
             return (formula.get("string") or "").strip()
     return ""
+
+
+def _texto_email_propiedad(propiedades, nombre_propiedad):
+    propiedad = propiedades.get(nombre_propiedad, {})
+    tipo = propiedad.get("type")
+    if tipo == "email":
+        return (propiedad.get("email") or "").strip()
+    if tipo == "people":
+        emails = []
+        for persona in propiedad.get("people", []):
+            email = (persona.get("person") or {}).get("email", "")
+            if email:
+                emails.append(email)
+        return ", ".join(emails).strip()
+    return _texto_propiedad(propiedades, nombre_propiedad)
 
 
 def _obtener_registros_empleados() -> list[dict]:
@@ -457,12 +474,19 @@ def _obtener_registros_empleados() -> list[dict]:
                     continue
 
                 aliases = []
+                email = ""
+                for email_prop in ("Email", "Mail", "Correo", "Correo electronico", "Correo electrónico", "E-mail"):
+                    if email_prop in props:
+                        email = _texto_email_propiedad(props, email_prop)
+                        if email:
+                            break
+
                 for alias_prop in ("Nombre_Slack", "Slack", "Usuario Slack", "Nombre Slack", "Alias", "Email"):
                     if alias_prop in props:
                         valor_alias = _texto_propiedad(props, alias_prop)
                         if valor_alias:
                             aliases.append(valor_alias.strip())
-                registros.append({"nombre": nombre, "aliases": aliases})
+                registros.append({"nombre": nombre, "email": email.strip(), "aliases": aliases})
             if not resp.get("has_more"):
                 break
             cursor = resp.get("next_cursor")
@@ -482,6 +506,11 @@ def _obtener_registros_empleados() -> list[dict]:
 def obtener_lista_empleados() -> list[str]:
     """Lee los nombres canonicos de empleados desde Notion."""
     return [registro["nombre"] for registro in _obtener_registros_empleados()]
+
+
+def obtener_registros_empleados() -> list[dict]:
+    """Lee empleados con nombre, email y aliases desde Notion."""
+    return _obtener_registros_empleados()
 
 
 def _tokens_nombre(nombre):

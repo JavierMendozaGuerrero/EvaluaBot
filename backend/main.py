@@ -5,6 +5,7 @@ import threading
 from . import config
 from .api_server import iniciar_api_backend
 from .clients import Document
+from .notion_service import aplicar_estetica_notion
 from .ca_reviews import ciclo_envio_ca  # noqa: F401 — registra el handler de Slack al importar
 from .slack_bot import enviar_evaluaciones_programadas, start_socket_mode
 from .web_server import iniciar_servidor_web
@@ -26,6 +27,11 @@ def main():
     logging.basicConfig(level=logging.INFO)
     if not validar_configuracion():
         sys.exit(1)
+
+    try:
+        aplicar_estetica_notion()
+    except Exception:
+        logging.exception("No se pudo aplicar la estetica inicial de Notion")
 
     threading.Thread(target=enviar_evaluaciones_programadas, daemon=True).start()
     threading.Thread(target=ciclo_envio_ca, daemon=True).start()

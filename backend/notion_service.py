@@ -229,6 +229,7 @@ def _resolver_ruta_lista_empleados(origen_id):
     pagina_listas_id = _page_or_database_link_by_name(origen_id, config.NOTION_DATA_LISTS_PAGE_NAME)
     if pagina_listas_id:
         logging.info("Pagina de listas de datos encontrada: %s", config.NOTION_DATA_LISTS_PAGE_NAME)
+        _decorar_pagina_notion(pagina_listas_id, config.NOTION_DATA_LISTS_PAGE_NAME)
         lista_empleados_id = _page_or_database_link_by_name(pagina_listas_id, config.NOTION_EMPLOYEES_DATABASE_NAME)
         if lista_empleados_id:
             logging.info("Link a lista de empleados encontrado: %s", config.NOTION_EMPLOYEES_DATABASE_NAME)
@@ -317,10 +318,104 @@ def _parent_bbdd_referencia():
     return {"type": "page_id", "page_id": parent["page_id"]}
 
 
+_NOTION_PAGE_STYLE = {
+    config.NOTION_DATA_LISTS_PAGE_NAME: {
+        "emoji": "🗂️",
+        "color": "green",
+        "title": "Zona operativa para administracion",
+        "body": "Aqui viven las listas maestras que se mantienen a mano: empleados, usuarios, CA y datos de soporte.",
+    },
+    config.NOTION_INDIVIDUAL_EVALUATIONS_PAGE_NAME: {
+        "emoji": "📊",
+        "color": "blue",
+        "title": "Evaluaciones individuales",
+        "body": "Espacio generado por el bot. Cada tabla recoge feedback recibido sobre una persona evaluada.",
+    },
+    config.NOTION_CA_TRACKING_PAGE_NAME: {
+        "emoji": "💬",
+        "color": "purple",
+        "title": "Seguimiento Career Advisor",
+        "body": "Opiniones y revisiones de CA generadas desde Slack. Pensado para consulta, no para mantenimiento diario.",
+    },
+}
+
+
+def _bloque_texto(texto, negrita=False):
+    return [{
+        "type": "text",
+        "text": {"content": texto},
+        "annotations": {
+            "bold": negrita,
+            "italic": False,
+            "strikethrough": False,
+            "underline": False,
+            "code": False,
+            "color": "default",
+        },
+    }]
+
+
+def _decorar_pagina_notion(page_id, nombre_pagina):
+    estilo = _NOTION_PAGE_STYLE.get(nombre_pagina)
+    if not estilo:
+        return
+    try:
+        notion.pages.update(
+            page_id=page_id,
+            icon={"type": "emoji", "emoji": estilo["emoji"]},
+        )
+    except Exception:
+        logging.exception("No se pudo actualizar el icono de la pagina %s", nombre_pagina)
+
+    try:
+        for bloque in _iter_blocks(page_id):
+            if bloque.get("type") == "callout":
+                texto = "".join(
+                    item.get("plain_text", "")
+                    for item in bloque.get("callout", {}).get("rich_text", [])
+                )
+                if "Evaluabot" in texto:
+                    return
+        notion.blocks.children.append(
+            block_id=page_id,
+            children=[
+                {
+                    "object": "block",
+                    "type": "callout",
+                    "callout": {
+                        "rich_text": _bloque_texto(f"Evaluabot · {estilo['title']}", negrita=True)
+                        + _bloque_texto(f"\n{estilo['body']}"),
+                        "icon": {"type": "emoji", "emoji": estilo["emoji"]},
+                        "color": f"{estilo['color']}_background",
+                    },
+                },
+                {"object": "block", "type": "divider", "divider": {}},
+            ],
+        )
+    except Exception:
+        logging.exception("No se pudo decorar la pagina de Notion %s", nombre_pagina)
+
+
+def aplicar_estetica_notion():
+    parent_raiz = _parent_bbdd_referencia()
+    for nombre_pagina in (
+        config.NOTION_DATA_LISTS_PAGE_NAME,
+        config.NOTION_INDIVIDUAL_EVALUATIONS_PAGE_NAME,
+        config.NOTION_CA_TRACKING_PAGE_NAME,
+    ):
+        page_id = _page_or_database_link_by_name(parent_raiz["page_id"], nombre_pagina)
+        if page_id:
+            _decorar_pagina_notion(page_id, nombre_pagina)
+            continue
+        if nombre_pagina != config.NOTION_DATA_LISTS_PAGE_NAME:
+            _parent_bbdd_en_pagina(nombre_pagina, crear=True)
+
+
 def _parent_bbdd_en_pagina(nombre_pagina, crear=False):
     parent_raiz = _parent_bbdd_referencia()
     page_id = _page_or_database_link_by_name(parent_raiz["page_id"], nombre_pagina)
     if page_id:
+        _decorar_pagina_notion(page_id, nombre_pagina)
         return {"type": "page_id", "page_id": page_id}
     if not crear:
         return parent_raiz
@@ -329,6 +424,7 @@ def _parent_bbdd_en_pagina(nombre_pagina, crear=False):
         parent=parent_raiz,
         properties={"title": {"title": [{"type": "text", "text": {"content": nombre_pagina}}]}},
     )
+    _decorar_pagina_notion(pagina["id"], nombre_pagina)
     return {"type": "page_id", "page_id": pagina["id"]}
 
 

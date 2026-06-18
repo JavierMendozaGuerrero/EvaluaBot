@@ -6,7 +6,14 @@ from http.server import BaseHTTPRequestHandler
 from socketserver import TCPServer
 
 from . import config
-from .notion_service import listar_bbdd_evaluados
+from .notion_service import (
+    listar_bbdd_evaluados,
+    obtener_advisees,
+    obtener_datos_empleados_por_nombres,
+    obtener_opiniones_ca_por_advisee,
+    guardar_objetivos,
+    obtener_objetivos,
+)
 from .reports import generar_archivo_trayectoria, generar_archivos_informe
 from .slack_bot import enviar_revision_pendiente, preguntas_revision_html
 from .state import evaluaciones_pendientes, lock
@@ -96,6 +103,34 @@ class ApiHandler(BaseHTTPRequestHandler):
                     opciones.append({"value": bbdd["evaluado"], "label": bbdd["evaluado"]})
                 self.responder_json({"evaluados": opciones})
                 return
+            if ruta == "/api/mis-advisees":
+                sesion = self.sesion_actual()
+                if not sesion:
+                    raise PermissionError("Inicia sesión para acceder.")
+                ca_nombre = sesion.get("persona", "")
+                advisee_nombres = obtener_advisees(ca_nombre)
+                advisees = obtener_datos_empleados_por_nombres(advisee_nombres)
+                self.responder_json({"advisees": advisees})
+                return
+            if ruta == "/api/opiniones-ca":
+                sesion = self.sesion_actual()
+                if not sesion:
+                    raise PermissionError("Inicia sesión para acceder.")
+                query_params = urllib.parse.parse_qs(parsed.query)
+                advisee = query_params.get("advisee", [""])[0]
+                ca_nombre = sesion.get("persona", "")
+                opiniones = obtener_opiniones_ca_por_advisee(ca_nombre, advisee)
+                self.responder_json({"opiniones": opiniones})
+                return
+            if ruta == "/api/objetivos":
+                sesion = self.sesion_actual()
+                if not sesion:
+                    raise PermissionError("Inicia sesión para acceder.")
+                query_params = urllib.parse.parse_qs(parsed.query)
+                nombre = query_params.get("nombre", [""])[0]
+                objetivos = obtener_objetivos(nombre)
+                self.responder_json({"objetivos": objetivos})
+                return
             if ruta == "/api/revision-pendiente":
                 sesion = self.sesion_actual()
                 validar_admin_sesion(sesion)
@@ -143,7 +178,8 @@ class ApiHandler(BaseHTTPRequestHandler):
                 raise PermissionError("Inicia sesión para acceder.")
             if ruta == "/api/generar":
                 evaluado = datos.get("evaluado", "__todas__")
-                validar_acceso_sesion(sesion, evaluado)
+                advisees_ca = obtener_advisees(sesion.get("persona", ""))
+                validar_acceso_sesion(sesion, evaluado, extra_permitidos=advisees_ca)
                 total, slug, desde_cache = generar_archivos_informe(evaluado)
                 self.responder_json(
                     {
@@ -156,9 +192,20 @@ class ApiHandler(BaseHTTPRequestHandler):
                 return
             if ruta == "/api/trayectoria":
                 evaluado = datos.get("evaluado", "__todas__")
-                validar_acceso_sesion(sesion, evaluado)
+                advisees_ca = obtener_advisees(sesion.get("persona", ""))
+                validar_acceso_sesion(sesion, evaluado, extra_permitidos=advisees_ca)
                 total, slug = generar_archivo_trayectoria(evaluado)
                 self.responder_json({"total": total, "htmlUrl": self.url_archivo(f"trayectoria_{slug}.html", evaluado)})
+                return
+            if ruta == "/api/objetivos":
+                ca_nombre = sesion.get("persona", "")
+                nombre = datos.get("nombre", "")
+                texto = datos.get("objetivos", "").strip()
+                if not nombre or not texto:
+                    self.responder_json({"error": "Faltan campos obligatorios."}, 400)
+                    return
+                guardar_objetivos(ca_nombre, nombre, texto)
+                self.responder_json({"ok": True})
                 return
             if ruta == "/api/revision-pendiente/enviar":
                 validar_admin_sesion(sesion)
@@ -184,7 +231,8 @@ class ApiHandler(BaseHTTPRequestHandler):
         datos = urllib.parse.parse_qs(query)
         evaluado = datos.get("evaluado", [""])[0]
         sesion = self.sesion_actual()
-        validar_acceso_sesion(sesion, evaluado)
+        advisees_ca = obtener_advisees(sesion.get("persona", "") if sesion else "")
+        validar_acceso_sesion(sesion, evaluado, extra_permitidos=advisees_ca)
         nombre_autorizado = "Todas las personas" if evaluado == "__todas__" else evaluado
         slug = slug_archivo(nombre_autorizado)
         if not (nombre_archivo.startswith(f"informe_{slug}.") or nombre_archivo.startswith(f"trayectoria_{slug}.")):

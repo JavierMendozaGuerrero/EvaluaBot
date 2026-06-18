@@ -64,6 +64,219 @@ function PasswordInput({ value, onChange, placeholder = "", required = true, min
   );
 }
 
+function InformesAdvisee({ token, advisee, onBack }) {
+  const [status, setStatus] = useState("");
+  const [links, setLinks] = useState(null);
+
+  async function generate(kind) {
+    setLinks(null);
+    setStatus(kind === "generar" ? "Claude esta generando el informe..." : "Preparando trayectoria visual...");
+    try {
+      const data = await apiRequest(`/api/${kind}`, { token, method: "POST", body: { evaluado: advisee.nombre } });
+      setStatus(kind === "generar" ? `Informe listo con ${data.total} evaluaciones.` : `Trayectoria lista con ${data.total} evaluaciones.`);
+      setLinks(data);
+    } catch (err) {
+      setStatus(err.message);
+    }
+  }
+
+  async function openFile(path, filename) {
+    if (!filename.endsWith(".docx")) {
+      window.open(apiUrl(`${path}&token=${encodeURIComponent(token)}`), "_blank", "noopener,noreferrer");
+      return;
+    }
+    try {
+      const response = await fetch(apiUrl(path), { headers: { Authorization: `Bearer ${token}` } });
+      if (!response.ok) {
+        const data = await response.json().catch(() => ({}));
+        throw new Error(data.error || "No se pudo descargar el archivo.");
+      }
+      const blob = await response.blob();
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = filename;
+      link.click();
+      URL.revokeObjectURL(url);
+    } catch (err) {
+      setStatus(err.message);
+    }
+  }
+
+  return (
+    <main className="page">
+      <nav className="nav">
+        <a className="brand" href="/">igeneris</a>
+        <button className="link-button" onClick={onBack}>← Volver</button>
+      </nav>
+      <section className="hero dashboard-hero">
+        <div>
+          {advisee.foto
+            ? <img src={advisee.foto} alt={advisee.nombre} className="objetivos-foto" />
+            : <div className="objetivos-foto objetivos-foto-placeholder">{advisee.nombre.charAt(0)}</div>
+          }
+          <p className="kicker">Informes</p>
+          <h1>{advisee.nombre}</h1>
+        </div>
+        <div className="panel">
+          <p className="lead">Genera el informe ejecutivo o la trayectoria visual a partir del feedback recogido.</p>
+          <div className="actions">
+            <button onClick={() => generate("generar")}>Generar informe</button>
+            <button className="secondary" onClick={() => generate("trayectoria")}>Generar trayectoria</button>
+          </div>
+        </div>
+      </section>
+
+      {status && <section className="status panel"><p>{status}</p></section>}
+      {links && (
+        <section className="result panel">
+          <h2>Resultado</h2>
+          <div className="actions">
+            {links.htmlUrl && <button onClick={() => openFile(links.htmlUrl, "informe.html")}>Abrir web</button>}
+            {links.docxUrl && <button className="secondary" onClick={() => openFile(links.docxUrl, "informe.docx")}>Descargar Word</button>}
+          </div>
+        </section>
+      )}
+    </main>
+  );
+}
+
+function MisObjetivosPage({ token, persona, onBack }) {
+  const [objetivos, setObjetivos] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState("");
+
+  useEffect(() => {
+    apiRequest(`/api/objetivos?nombre=${encodeURIComponent(persona)}`, { token })
+      .then((data) => setObjetivos(data.objetivos || []))
+      .catch((err) => setError(err.message))
+      .finally(() => setLoading(false));
+  }, [token, persona]);
+
+  return (
+    <main className="page">
+      <nav className="nav">
+        <a className="brand" href="/">igeneris</a>
+        <button className="link-button" onClick={onBack}>← Volver</button>
+      </nav>
+      <section className="hero dashboard-hero">
+        <div>
+          <p className="kicker">Desarrollo personal</p>
+          <h1>Mis objetivos.</h1>
+        </div>
+      </section>
+      <section className="objetivos-historial panel">
+        {error && <p className="error">{error}</p>}
+        {loading ? (
+          <p>Cargando...</p>
+        ) : objetivos.length ? (
+          <div className="objetivos-list">
+            {objetivos.map((obj, i) => (
+              <article key={i} className="objetivo-item">
+                <p className="opinion-fecha fine">{obj.fecha ? obj.fecha.slice(0, 10) : "Sin fecha"}{obj.ca ? ` — ${obj.ca}` : ""}</p>
+                <p className="objetivo-texto">{obj.objetivos}</p>
+              </article>
+            ))}
+          </div>
+        ) : (
+          <p>Todavia no tienes objetivos registrados.</p>
+        )}
+      </section>
+    </main>
+  );
+}
+
+function ObjetivosPage({ token, advisee, caName, onBack }) {
+  const [objetivos, setObjetivos] = useState([]);
+  const [texto, setTexto] = useState("");
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState("");
+  const [success, setSuccess] = useState("");
+
+  useEffect(() => {
+    apiRequest(`/api/objetivos?nombre=${encodeURIComponent(advisee.nombre)}`, { token })
+      .then((data) => setObjetivos(data.objetivos || []))
+      .catch((err) => setError(err.message))
+      .finally(() => setLoading(false));
+  }, [token, advisee.nombre]);
+
+  async function guardar(e) {
+    e.preventDefault();
+    if (!texto.trim()) return;
+    setError("");
+    setSuccess("");
+    setSaving(true);
+    try {
+      await apiRequest("/api/objetivos", { token, method: "POST", body: { nombre: advisee.nombre, objetivos: texto.trim() } });
+      const data = await apiRequest(`/api/objetivos?nombre=${encodeURIComponent(advisee.nombre)}`, { token });
+      setObjetivos(data.objetivos || []);
+      setTexto("");
+      setSuccess("Objetivos guardados correctamente.");
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <main className="page">
+      <nav className="nav">
+        <a className="brand" href="/">igeneris</a>
+        <button className="link-button" onClick={onBack}>← Volver</button>
+      </nav>
+      <section className="hero dashboard-hero">
+        <div>
+          {advisee.foto
+            ? <img src={advisee.foto} alt={advisee.nombre} className="objetivos-foto" />
+            : <div className="objetivos-foto objetivos-foto-placeholder">{advisee.nombre.charAt(0)}</div>
+          }
+          <p className="kicker">Objetivos</p>
+          <h1>{advisee.nombre}</h1>
+        </div>
+        <form className="panel" onSubmit={guardar}>
+          <h2>Nuevos objetivos</h2>
+          {error && <p className="error">{error}</p>}
+          {success && <p className="fine">{success}</p>}
+          <label>Redacta los objetivos</label>
+          <textarea
+            className="objetivos-textarea"
+            value={texto}
+            onChange={(e) => setTexto(e.target.value)}
+            rows={8}
+            placeholder="Escribe aqui los objetivos para este periodo..."
+          />
+          <div className="actions">
+            <button type="submit" disabled={saving || !texto.trim()}>
+              {saving ? "Guardando..." : "Guardar objetivos"}
+            </button>
+          </div>
+        </form>
+      </section>
+
+      <section className="objetivos-historial panel">
+        <p className="kicker">Historial</p>
+        <h2>Objetivos anteriores</h2>
+        {loading ? (
+          <p>Cargando...</p>
+        ) : objetivos.length ? (
+          <div className="objetivos-list">
+            {objetivos.map((obj, i) => (
+              <article key={i} className="objetivo-item">
+                <p className="opinion-fecha fine">{obj.fecha ? obj.fecha.slice(0, 10) : "Sin fecha"}</p>
+                <p className="objetivo-texto">{obj.objetivos}</p>
+              </article>
+            ))}
+          </div>
+        ) : (
+          <p>No hay objetivos anteriores para {advisee.nombre}.</p>
+        )}
+      </section>
+    </main>
+  );
+}
+
 function AuthScreen({ onLogin }) {
   const resetToken = getResetToken();
   const [mode, setMode] = useState(resetToken ? "reset" : "login");
@@ -191,12 +404,15 @@ function AuthScreen({ onLogin }) {
   );
 }
 
-function Dashboard({ token, user, onLogout }) {
+function Dashboard({ token, user, onLogout, onNavigate }) {
   const [evaluados, setEvaluados] = useState([]);
   const [evaluado, setEvaluado] = useState("");
   const [status, setStatus] = useState("");
   const [links, setLinks] = useState(null);
   const [revision, setRevision] = useState(null);
+  const [advisees, setAdvisees] = useState([]);
+  const [opinionesModal, setOpinionesModal] = useState(null);
+  const [loadingOpiniones, setLoadingOpiniones] = useState(false);
 
   useEffect(() => {
     apiRequest("/api/evaluados", { token })
@@ -205,6 +421,12 @@ function Dashboard({ token, user, onLogout }) {
         setEvaluado(data.evaluados?.[0]?.value || "");
       })
       .catch((err) => setStatus(err.message));
+  }, [token]);
+
+  useEffect(() => {
+    apiRequest("/api/mis-advisees", { token })
+      .then((data) => setAdvisees(data.advisees || []))
+      .catch(() => {});
   }, [token]);
 
   useEffect(() => {
@@ -251,27 +473,37 @@ function Dashboard({ token, user, onLogout }) {
     }
   }
 
-  async function openFile(path, filename) {
-    setStatus("Abriendo archivo protegido...");
+  async function loadOpiniones(adviseeNombre) {
+    setLoadingOpiniones(true);
     try {
-      const response = await fetch(apiUrl(path), {
-        headers: { Authorization: `Bearer ${token}` },
-      });
+      const data = await apiRequest(`/api/opiniones-ca?advisee=${encodeURIComponent(adviseeNombre)}`, { token });
+      setOpinionesModal({ nombre: adviseeNombre, opiniones: data.opiniones || [] });
+    } catch (err) {
+      setStatus(err.message);
+    } finally {
+      setLoadingOpiniones(false);
+    }
+  }
+
+  async function openFile(path, filename) {
+    if (!filename.endsWith(".docx")) {
+      window.open(apiUrl(`${path}&token=${encodeURIComponent(token)}`), "_blank", "noopener,noreferrer");
+      return;
+    }
+    setStatus("Descargando archivo...");
+    try {
+      const response = await fetch(apiUrl(path), { headers: { Authorization: `Bearer ${token}` } });
       if (!response.ok) {
         const data = await response.json().catch(() => ({}));
-        throw new Error(data.error || "No se pudo abrir el archivo.");
+        throw new Error(data.error || "No se pudo descargar el archivo.");
       }
       const blob = await response.blob();
       const url = URL.createObjectURL(blob);
-      if (filename.endsWith(".docx")) {
-        const link = document.createElement("a");
-        link.href = url;
-        link.download = filename;
-        link.click();
-        URL.revokeObjectURL(url);
-      } else {
-        window.open(url, "_blank", "noopener,noreferrer");
-      }
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = filename;
+      link.click();
+      URL.revokeObjectURL(url);
       setStatus("Archivo listo.");
     } catch (err) {
       setStatus(err.message);
@@ -285,6 +517,7 @@ function Dashboard({ token, user, onLogout }) {
         <div className="nav-links">
           <span>{user?.username}</span>
           <span>{role}</span>
+          <button className="link-button" onClick={() => onNavigate({ type: "mis-objetivos" })}>Mis objetivos</button>
           <button className="link-button" onClick={onLogout}>Cerrar sesion</button>
         </div>
       </nav>
@@ -330,6 +563,64 @@ function Dashboard({ token, user, onLogout }) {
         </section>
       )}
 
+      {advisees.length > 0 && (
+        <section className="advisees-section panel">
+          <p className="kicker">Career Advisor</p>
+          <h2>Mis advisees</h2>
+          <div className="advisees-list">
+            {advisees.map((a) => (
+              <div key={a.nombre} className="advisee-card">
+                {a.foto
+                  ? <img src={a.foto} alt={a.nombre} className="advisee-foto" />
+                  : <div className="advisee-foto advisee-foto-placeholder">{a.nombre.charAt(0)}</div>
+                }
+                <span className="advisee-nombre">{a.nombre}</span>
+                <button className="secondary advisee-btn" onClick={() => loadOpiniones(a.nombre)} disabled={loadingOpiniones}>
+                  Opiniones
+                </button>
+                <button className="secondary advisee-btn" onClick={() => onNavigate({ type: "objetivos", advisee: a })}>
+                  Meter objetivos
+                </button>
+                <button className="secondary advisee-btn" onClick={() => onNavigate({ type: "informes-advisee", advisee: a })}>
+                  Ver informes
+                </button>
+              </div>
+            ))}
+          </div>
+        </section>
+      )}
+
+      {opinionesModal && (
+        <section className="opiniones-modal panel">
+          <div className="opiniones-header">
+            <div>
+              <p className="kicker">Career Advisor</p>
+              <h2>Opiniones sobre {opinionesModal.nombre}</h2>
+            </div>
+            <button className="secondary" onClick={() => setOpinionesModal(null)}>Cerrar</button>
+          </div>
+          {opinionesModal.opiniones.length ? (
+            <div className="opiniones-list">
+              {opinionesModal.opiniones.map((op, i) => (
+                <article key={i} className="opinion-item">
+                  <p className="opinion-fecha fine">{op.fecha ? op.fecha.slice(0, 10) : "Sin fecha"}</p>
+                  {op.resumen_advisee && (
+                    <div className="opinion-resumen">
+                      <p className="fine"><strong>Evaluaciones vistas:</strong></p>
+                      <pre className="opinion-pre">{op.resumen_advisee}</pre>
+                    </div>
+                  )}
+                  <p className="fine"><strong>Opinión del CA:</strong></p>
+                  <p className="opinion-texto">{op.opinion || "—"}</p>
+                </article>
+              ))}
+            </div>
+          ) : (
+            <p>No hay opiniones guardadas sobre {opinionesModal.nombre}.</p>
+          )}
+        </section>
+      )}
+
       {user?.is_admin && revision && (
         <section className="review panel">
           <p className="kicker">Revision previa</p>
@@ -358,6 +649,7 @@ function App() {
   const resetToken = getResetToken();
   const [token, setToken] = useState(localStorage.getItem("evaluabot_token") || "");
   const [user, setUser] = useState(null);
+  const [page, setPage] = useState(null);
 
   useEffect(() => {
     if (resetToken) return;
@@ -373,7 +665,42 @@ function App() {
   if (resetToken || !token || !user) {
     return <AuthScreen onLogin={(newToken, newUser) => { setToken(newToken); setUser(newUser); }} />;
   }
-  return <Dashboard token={token} user={user} onLogout={() => { localStorage.removeItem("evaluabot_token"); setToken(""); setUser(null); }} />;
+  if (page?.type === "informes-advisee") {
+    return (
+      <InformesAdvisee
+        token={token}
+        advisee={page.advisee}
+        onBack={() => setPage(null)}
+      />
+    );
+  }
+  if (page?.type === "mis-objetivos") {
+    return (
+      <MisObjetivosPage
+        token={token}
+        persona={user?.persona || user?.username || ""}
+        onBack={() => setPage(null)}
+      />
+    );
+  }
+  if (page?.type === "objetivos") {
+    return (
+      <ObjetivosPage
+        token={token}
+        advisee={page.advisee}
+        caName={user?.persona || ""}
+        onBack={() => setPage(null)}
+      />
+    );
+  }
+  return (
+    <Dashboard
+      token={token}
+      user={user}
+      onLogout={() => { localStorage.removeItem("evaluabot_token"); setToken(""); setUser(null); setPage(null); }}
+      onNavigate={setPage}
+    />
+  );
 }
 
 createRoot(document.getElementById("root")).render(<App />);

@@ -439,15 +439,18 @@ def obtener_sesion_por_token(token):
     return sesiones_web.get(token)
 
 
-def validar_acceso_sesion(sesion, evaluado):
+def validar_acceso_sesion(sesion, evaluado, extra_permitidos=None):
     if not sesion:
         raise PermissionError("Inicia sesión para acceder.")
     if sesion.get("is_admin"):
         return
     if evaluado == "__todas__":
         raise PermissionError("Solo Ana puede generar informes globales.")
-    if normalizar_nombre(sesion.get("persona")) != normalizar_nombre(evaluado):
-        raise PermissionError("Solo puedes ver las evaluaciones hechas sobre ti.")
+    if normalizar_nombre(sesion.get("persona")) == normalizar_nombre(evaluado):
+        return
+    if extra_permitidos and normalizar_nombre(evaluado) in [normalizar_nombre(n) for n in extra_permitidos]:
+        return
+    raise PermissionError("Solo puedes ver las evaluaciones hechas sobre ti.")
 
 
 def validar_admin_sesion(sesion):

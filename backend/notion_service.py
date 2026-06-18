@@ -722,3 +722,314 @@ def obtener_evaluaciones_por_evaluado(evaluado):
         if bbdd["evaluado"] == evaluado:
             return obtener_evaluaciones_de_bbdd(bbdd["id"], bbdd["evaluado"])
     raise RuntimeError(f"No se encontró una tabla de evaluaciones para {evaluado}.")
+
+
+# ---------------------------------------------------------------------------
+# Advisees y opiniones CA (para la web)
+# ---------------------------------------------------------------------------
+
+def _extraer_url_foto(prop: dict) -> str:
+    tipo = prop.get("type", "")
+    if tipo == "url":
+        return prop.get("url") or ""
+    if tipo == "files":
+        for archivo in (prop.get("files") or []):
+            if archivo.get("type") == "external":
+                return archivo.get("external", {}).get("url", "")
+            if archivo.get("type") == "file":
+                return archivo.get("file", {}).get("url", "")
+    if tipo in ("rich_text", "title"):
+        return "".join(p.get("plain_text", "") for p in prop.get(tipo, [])).strip()
+    return ""
+
+
+_cache_lista_ca: dict = {"db_id": None}
+_cache_advisees_por_ca: dict = {}
+
+
+def obtener_advisees(ca_nombre: str) -> list[str]:
+    """Retorna los advisees de un CA desde 'Lista CA' (columna CA y columnas A1, A2, ...)."""
+    ca_norm = normalizar_nombre(ca_nombre)
+    logging.info(f"[advisees] Buscando advisees para CA: '{ca_nombre}' (norm: '{ca_norm}')")
+    with lock:
+        if ca_norm in _cache_advisees_por_ca:
+            return _cache_advisees_por_ca[ca_norm]
+    try:
+        with lock:
+            db_id = _cache_lista_ca["db_id"]
+        if not db_id:
+            resultado = notion.search(
+                query="Lista CA",
+                filter={"value": _tipo_objeto_busqueda_bbdd(), "property": "object"},
+                page_size=50,
+            )
+            titulos_encontrados = []
+            candidatos = []
+            for bbdd in resultado.get("results", []):
+                titulo = _extraer_titulo_bbdd(bbdd)
+                titulos_encontrados.append(titulo)
+                titulo_norm = normalizar_nombre(titulo)
+                if titulo_norm == "lista ca":
+                    db_id = _data_source_id(bbdd)
+                    logging.info(f"[advisees] Base de datos CA encontrada (exacto): '{titulo}' (id: {db_id})")
+                    with lock:
+                        _cache_lista_ca["db_id"] = db_id
+                    break
+                if titulo_norm.startswith("lista ca"):
+                    candidatos.append((titulo, _data_source_id(bbdd)))
+            if not db_id and candidatos:
+                titulo, db_id = candidatos[0]
+                logging.info(f"[advisees] Base de datos CA encontrada (startswith): '{titulo}' (id: {db_id})")
+                with lock:
+                    _cache_lista_ca["db_id"] = db_id
+            if not db_id:
+                logging.warning(f"[advisees] No se encontró 'Lista CA'. Resultados: {titulos_encontrados}")
+        if not db_id:
+            return []
+        cursor = None
+        while True:
+            kwargs: dict = {"page_size": 100}
+            if cursor:
+                kwargs["start_cursor"] = cursor
+            resp = _query_bbdd(db_id, **kwargs)
+            for fila in resp.get("results", []):
+                props = fila.get("properties", {})
+                prop_ca = props.get("CA", {})
+                nombre_ca = "".join(
+                    p.get("plain_text", "")
+                    for p in (prop_ca.get("rich_text") or prop_ca.get("title") or [])
+                ).strip()
+                logging.info(f"[advisees] Fila encontrada con CA='{nombre_ca}' (norm: '{normalizar_nombre(nombre_ca)}')")
+                if normalizar_nombre(nombre_ca) != ca_norm:
+                    continue
+                pares = []
+                for col_name, prop_val in props.items():
+                    if not re.match(r'^A\d+$', col_name):
+                        continue
+                    nombre_a = "".join(
+                        p.get("plain_text", "")
+                        for p in (prop_val.get("rich_text") or prop_val.get("title") or [])
+                    ).strip()
+                    if nombre_a:
+                        pares.append((int(col_name[1:]), nombre_a))
+                pares.sort(key=lambda x: x[0])
+                advisees = [nombre for _, nombre in pares]
+                with lock:
+                    _cache_advisees_por_ca[ca_norm] = advisees
+                return advisees
+            if not resp.get("has_more"):
+                break
+            cursor = resp.get("next_cursor")
+        with lock:
+            _cache_advisees_por_ca[ca_norm] = []
+        return []
+    except Exception:
+        logging.exception(f"Error obteniendo advisees de '{ca_nombre}'")
+        return []
+
+
+def obtener_datos_empleados_por_nombres(nombres: list[str]) -> list[dict]:
+    """Retorna {nombre, foto, email} para cada nombre desde 'Lista de empleados'."""
+    if not nombres:
+        return []
+    nombres_norm = {normalizar_nombre(n): n for n in nombres}
+    try:
+        db_id, _ = _retrieve_bbdd(config.NOTION_EMPLOYEES_DATABASE_ID)
+        resultado = []
+        cursor = None
+        while True:
+            kwargs: dict = {"page_size": 100}
+            if cursor:
+                kwargs["start_cursor"] = cursor
+            resp = _query_bbdd(db_id, **kwargs)
+            for fila in resp.get("results", []):
+                props = fila.get("properties", {})
+                prop_nombre = props.get("Nombre", {})
+                nombre = "".join(
+                    p.get("plain_text", "")
+                    for p in (prop_nombre.get("rich_text") or prop_nombre.get("title") or [])
+                ).strip()
+                if normalizar_nombre(nombre) not in nombres_norm:
+                    continue
+                foto = _extraer_url_foto(props.get("Foto", {}))
+                prop_correo = props.get("Correo", props.get("correo", props.get("email", props.get("Email", {}))))
+                correo = prop_correo.get("email") or prop_correo.get("url") or "".join(
+                    p.get("plain_text", "")
+                    for p in (prop_correo.get("rich_text") or prop_correo.get("title") or [])
+                ).strip()
+                resultado.append({"nombre": nombre, "foto": foto or "", "email": correo or ""})
+            if not resp.get("has_more"):
+                break
+            cursor = resp.get("next_cursor")
+        return resultado
+    except Exception:
+        logging.exception("Error obteniendo datos de empleados por nombres")
+        return [{"nombre": n, "foto": "", "email": ""} for n in nombres]
+
+
+def obtener_opiniones_ca_por_advisee(ca_nombre: str, advisee: str) -> list[dict]:
+    """Retorna las opiniones guardadas por el CA sobre el advisee, ordenadas por fecha desc."""
+    titulo = f"Opiniones CA - {ca_nombre.strip()}"
+    advisee_norm = normalizar_nombre(advisee)
+    try:
+        resultado = notion.search(
+            query=titulo,
+            filter={"value": _tipo_objeto_busqueda_bbdd(), "property": "object"},
+            page_size=10,
+        )
+        db_id = None
+        for bbdd in resultado.get("results", []):
+            if _extraer_titulo_bbdd(bbdd) == titulo:
+                db_id = _data_source_id(bbdd)
+                break
+        if not db_id:
+            return []
+        opiniones = []
+        cursor = None
+        while True:
+            kwargs: dict = {"page_size": 100}
+            if cursor:
+                kwargs["start_cursor"] = cursor
+            resp = _query_bbdd(db_id, **kwargs)
+            for fila in resp.get("results", []):
+                props = fila.get("properties", {})
+                advisee_texto = "".join(
+                    p.get("plain_text", "")
+                    for p in props.get("Advisee", {}).get("rich_text", [])
+                ).strip()
+                if normalizar_nombre(advisee_texto) != advisee_norm:
+                    continue
+                opinion = "".join(
+                    p.get("plain_text", "")
+                    for p in props.get("Opinion", {}).get("rich_text", [])
+                ).strip()
+                resumen = "".join(
+                    p.get("plain_text", "")
+                    for p in props.get("Resumen_advisee", {}).get("rich_text", [])
+                ).strip()
+                fecha = (props.get("Fecha", {}).get("date") or {}).get("start", "")
+                opiniones.append({"fecha": fecha, "opinion": opinion, "resumen_advisee": resumen})
+            if not resp.get("has_more"):
+                break
+            cursor = resp.get("next_cursor")
+        return sorted(opiniones, key=lambda x: x.get("fecha", ""), reverse=True)
+    except Exception:
+        logging.exception(f"Error obteniendo opiniones de '{ca_nombre}' sobre '{advisee}'")
+        return []
+
+
+_PROPS_OBJETIVOS = {
+    "Name":      {"title": {}},
+    "Fecha":     {"date": {}},
+    "CA":        {"rich_text": {}},
+    "Objetivos": {"rich_text": {}},
+    "Nombre":    {"rich_text": {}},
+}
+
+_cache_objetivos_db: dict = {"db_id": None}
+
+
+def _obtener_o_crear_bbdd_objetivos() -> str:
+    with lock:
+        db_id = _cache_objetivos_db["db_id"]
+    if db_id:
+        return db_id
+
+    titulo = "Objetivos empleados"
+    resultado = notion.search(
+        query=titulo,
+        filter={"value": _tipo_objeto_busqueda_bbdd(), "property": "object"},
+        page_size=20,
+    )
+    for bbdd in resultado.get("results", []):
+        if normalizar_nombre(_extraer_titulo_bbdd(bbdd)) == normalizar_nombre(titulo):
+            db_id = _data_source_id(bbdd)
+            with lock:
+                _cache_objetivos_db["db_id"] = db_id
+            return db_id
+
+    parent = None
+    try:
+        res_pages = notion.search(
+            query="Listas de datos",
+            filter={"value": "page", "property": "object"},
+            page_size=10,
+        )
+        for page in res_pages.get("results", []):
+            if normalizar_nombre(_extraer_titulo_pagina(page)) == "listas de datos":
+                parent = {"type": "page_id", "page_id": page["id"]}
+                break
+    except Exception:
+        pass
+    if parent is None:
+        parent = _parent_bbdd_referencia()
+
+    if _usa_data_sources():
+        nueva = notion.databases.create(
+            parent=parent,
+            title=[{"type": "text", "text": {"content": titulo}}],
+            initial_data_source={
+                "title": [{"type": "text", "text": {"content": titulo}}],
+                "properties": _PROPS_OBJETIVOS,
+            },
+        )
+        nueva = notion.databases.retrieve(database_id=nueva["id"])
+    else:
+        nueva = notion.databases.create(
+            parent=parent,
+            title=[{"type": "text", "text": {"content": titulo}}],
+            properties=_PROPS_OBJETIVOS,
+        )
+
+    db_id = _data_source_id(nueva)
+    with lock:
+        _cache_objetivos_db["db_id"] = db_id
+    return db_id
+
+
+def guardar_objetivos(ca_nombre: str, advisee_nombre: str, texto: str) -> None:
+    db_id = _obtener_o_crear_bbdd_objetivos()
+    fecha_iso = datetime.now(timezone.utc).isoformat()
+    fecha_str = datetime.now(config.ZONA_HORARIA_MADRID).strftime("%Y-%m-%d")
+    _crear_pagina_en_bbdd(
+        db_id,
+        {
+            "Name":      {"title":     [{"text": {"content": f"Objetivos {advisee_nombre} {fecha_str}"}}]},
+            "Fecha":     {"date":      {"start": fecha_iso}},
+            "CA":        {"rich_text": [{"text": {"content": ca_nombre[:2000]}}]},
+            "Objetivos": {"rich_text": [{"text": {"content": texto[:2000]}}]},
+            "Nombre":    {"rich_text": [{"text": {"content": advisee_nombre[:2000]}}]},
+        },
+    )
+
+
+def obtener_objetivos(advisee_nombre: str) -> list[dict]:
+    try:
+        db_id = _obtener_o_crear_bbdd_objetivos()
+        nombre_norm = normalizar_nombre(advisee_nombre)
+        resultados = []
+        cursor = None
+        while True:
+            kwargs: dict = {"page_size": 100}
+            if cursor:
+                kwargs["start_cursor"] = cursor
+            resp = _query_bbdd(db_id, **kwargs)
+            for pagina in resp.get("results", []):
+                props = pagina.get("properties", {})
+                nombre_val = "".join(
+                    p.get("plain_text", "") for p in (props.get("Nombre", {}).get("rich_text") or [])
+                ).strip()
+                if normalizar_nombre(nombre_val) != nombre_norm:
+                    continue
+                fecha_prop = props.get("Fecha", {}).get("date") or {}
+                ca_val = "".join(p.get("plain_text", "") for p in (props.get("CA", {}).get("rich_text") or [])).strip()
+                objetivos_val = "".join(p.get("plain_text", "") for p in (props.get("Objetivos", {}).get("rich_text") or [])).strip()
+                resultados.append({"fecha": fecha_prop.get("start", ""), "ca": ca_val, "objetivos": objetivos_val})
+            if not resp.get("has_more"):
+                break
+            cursor = resp.get("next_cursor")
+        resultados.sort(key=lambda x: x["fecha"] or "", reverse=True)
+        return resultados
+    except Exception:
+        logging.exception(f"Error obteniendo objetivos de '{advisee_nombre}'")
+        return []

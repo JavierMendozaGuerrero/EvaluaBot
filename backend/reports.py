@@ -75,6 +75,7 @@ def guardar_informe_html(informe, evaluaciones, evaluado):
     cuerpo = "<br>".join(html.escape(linea) for linea in informe.splitlines())
     slug = slug_archivo(evaluado)
     ruta = os.path.join(config.CARPETA_WEB, f"informe_{slug}.html")
+    app_url = config.APP_PUBLIC_URL
     contenido = f"""<!DOCTYPE html>
 <html lang="es"><head><meta charset="utf-8"><title>Informe de evaluaciones</title>
 <style>{config.IGENERIS_CSS}
@@ -87,8 +88,8 @@ def guardar_informe_html(informe, evaluaciones, evaluado):
 .metric strong {{ font-size: clamp(24px, 4vw, 44px); letter-spacing: -0.04em; }}
 .informe {{ max-width: 820px; font-size: 18px; border-top: 1px solid var(--ink); padding-top: 28px; }}
 </style></head><body><main class="page shell">
-<nav class="nav"><a class="brand" href="/">igeneris</a><div class="nav-links"><a href="/">Centro</a></div></nav>
-<div class="top"><div><p class="kicker">Informe de evaluaciones</p><h1>Informe de evaluaciones</h1><p>Generado el {fecha}</p></div><div class="actions"><a class="button" href="/">Volver al centro</a></div></div>
+<nav class="nav"><a class="brand" href="javascript:void(0)" onclick="window.close()">igeneris</a><div class="nav-links"><button class="secondary" onclick="window.close()">Cerrar</button></div></nav>
+<div class="top"><div><p class="kicker">Informe de evaluaciones</p><h1>Informe de evaluaciones</h1><p>Generado el {fecha}</p></div><div class="actions"><button class="secondary" onclick="window.close()">Cerrar</button></div></div>
 <section class="summary"><div class="metric"><span>Evaluado</span><strong>{html.escape(evaluado)}</strong></div><div class="metric"><span>Evaluaciones</span><strong>{len(evaluaciones)}</strong></div><div class="metric"><span>Fuente</span><strong>Notion</strong></div></section>
 <article class="informe">{cuerpo}</article></main></body></html>"""
     with open(ruta, "w", encoding="utf-8") as f:
@@ -141,6 +142,7 @@ def guardar_trayectoria_react(evaluaciones, evaluado):
         raise RuntimeError("No hay evaluaciones en Notion para generar la trayectoria.")
     os.makedirs(config.CARPETA_WEB, exist_ok=True)
     slug = slug_archivo(evaluado)
+    app_url = config.APP_PUBLIC_URL
     ruta = os.path.join(config.CARPETA_WEB, f"trayectoria_{slug}.html")
     datos_json = (
         json.dumps(evaluaciones, ensure_ascii=False)
@@ -207,8 +209,8 @@ function render() {{
   document.getElementById("root").innerHTML = `
     <main class="page">
       <nav class="nav">
-        <a class="brand" href="/">igeneris</a>
-        <a href="/">Volver</a>
+        <a class="brand" href="javascript:void(0)" onclick="window.close()">igeneris</a>
+        <button class="secondary" onclick="window.close()">Cerrar</button>
       </nav>
       <section class="hero">
         <div>

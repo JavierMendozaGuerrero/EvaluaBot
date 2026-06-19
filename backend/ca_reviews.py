@@ -37,6 +37,8 @@ from .utils import normalizar_nombre
 
 ca_ts: set = set()
 ca_ts_expirados: set = set()
+ca_hora: dict = {}
+ca_ultimo_recordatorio: dict = {}
 conversaciones_ca: dict = {}
 _lock = threading.Lock()
 _cache_bbdd: dict = {}
@@ -461,6 +463,7 @@ def enviar_pregunta_inicial_ca() -> None:
             ca_ts_expirados.update(ca_ts)
             ca_ts.clear()
             ca_ts.add(resp["ts"])
+            ca_hora[resp["ts"]] = time.time()
         logging.info(f"Mensaje CA enviado, ts={resp['ts']}")
     except Exception:
         logging.exception("Error enviando mensaje CA")
@@ -741,6 +744,30 @@ def manejar_mensaje_ca(event, logger) -> None:
 # ---------------------------------------------------------------------------
 # Ciclo principal
 # ---------------------------------------------------------------------------
+
+_RECORDATORIO_CA_SEGUNDOS = 120
+
+
+def ciclo_recordatorios_ca() -> None:
+    while True:
+        time.sleep(30)
+        ahora = time.time()
+        with _lock:
+            pendientes = [
+                ts for ts in ca_ts
+                if ahora - max(ca_hora.get(ts, ahora), ca_ultimo_recordatorio.get(ts, 0) or ca_hora.get(ts, ahora)) >= _RECORDATORIO_CA_SEGUNDOS
+            ]
+        for ts in pendientes:
+            try:
+                slack_app.client.chat_postMessage(
+                    channel=config.CHANNEL_ID,
+                    text="*📋 Recuerda realizar tu revisión de Career Advisor.* Si eres CA de alguien, entra en el hilo de la notificación y responde.",
+                )
+                with _lock:
+                    ca_ultimo_recordatorio[ts] = time.time()
+            except Exception:
+                logging.exception("Error enviando recordatorio CA")
+
 
 def ciclo_envio_ca() -> None:
     time.sleep(60)

@@ -8,7 +8,7 @@ from . import config
 from .ca_reviews import ca_ts, ca_ts_expirados, manejar_mensaje_ca
 from .clients import slack_app
 from .notion_service import buscar_empleado_en_lista, guardar_en_notion, obtener_nombre_por_id_usuario, sugerir_empleados_parecidos
-from .state import avisos_responder_en_hilo, conversaciones, evaluacion_ts, evaluacion_ts_expirados, lock
+from .state import avisos_responder_en_hilo, conversaciones, evaluacion_hora, evaluacion_ultimo_recordatorio, evaluacion_ts, evaluacion_ts_expirados, lock
 from .utils import normalizar_nombre
 
 
@@ -27,6 +27,7 @@ def enviar_una_evaluacion():
             evaluacion_ts_expirados.update(evaluacion_ts)
             evaluacion_ts.clear()
             evaluacion_ts.add(resp["ts"])
+            evaluacion_hora[resp["ts"]] = time.time()
         logging.info(f"Evaluación iniciada, ts={resp['ts']}")
     except Exception:
         logging.exception("Error enviando mensaje de evaluación")
@@ -491,6 +492,30 @@ def handle_message_events(event, logger):
     # fallback: keep the conversation alive with the current prompt
     if pregunta:
         slack_app.client.chat_postMessage(channel=config.CHANNEL_ID, thread_ts=thread_ts, text=pregunta)
+
+
+_RECORDATORIO_PROYECTO_SEGUNDOS = 120
+
+
+def ciclo_recordatorios_proyecto():
+    while True:
+        time.sleep(30)
+        ahora = time.time()
+        with lock:
+            pendientes = [
+                ts for ts in evaluacion_ts
+                if ahora - max(evaluacion_hora.get(ts, ahora), evaluacion_ultimo_recordatorio.get(ts, 0) or evaluacion_hora.get(ts, ahora)) >= _RECORDATORIO_PROYECTO_SEGUNDOS
+            ]
+        for ts in pendientes:
+            try:
+                slack_app.client.chat_postMessage(
+                    channel=config.CHANNEL_ID,
+                    text="*⏰ Recuerda realizar tu evaluación de proyecto.* Si aún no has respondido, entra en el hilo de la notificación y hazlo.",
+                )
+                with lock:
+                    evaluacion_ultimo_recordatorio[ts] = time.time()
+            except Exception:
+                logging.exception("Error enviando recordatorio de evaluación de proyecto")
 
 
 def start_socket_mode():

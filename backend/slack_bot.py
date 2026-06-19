@@ -235,6 +235,7 @@ def handle_message_events(event, logger):
                 "modo": "esperando_proyecto",
                 "respuestas": {},
                 "proyecto_actual": None,
+                "evaluados_en_sesion": set(),
             }
             conversaciones[clave_conv] = estado
 
@@ -264,13 +265,21 @@ def handle_message_events(event, logger):
             if texto:
                 empleado = None if _parece_saludo(texto) else buscar_empleado_en_lista(texto)
                 if empleado:
-                    estado["respuestas"]["evaluado"] = empleado
-                    estado["modo"] = "esperando_satisfaccion"
-                    accion = "pedir_satisfaccion"
-                    pregunta = (
-                        f"¿Cómo de satisfecho estás con *{empleado}* en *{estado['respuestas'].get('proyecto', '?')}*? "
-                        "Responde un número del 1 al 5."
-                    )
+                    clave_evaluacion = (normalizar_nombre(estado.get("proyecto_actual", "")), normalizar_nombre(empleado))
+                    if clave_evaluacion in estado.get("evaluados_en_sesion", set()):
+                        accion = "pedir_persona"
+                        pregunta = (
+                            f"Ya has evaluado a *{empleado}* en *{estado.get('proyecto_actual', '?')}* en este hilo. "
+                            "Dime el nombre de otro miembro del proyecto."
+                        )
+                    else:
+                        estado["respuestas"]["evaluado"] = empleado
+                        estado["modo"] = "esperando_satisfaccion"
+                        accion = "pedir_satisfaccion"
+                        pregunta = (
+                            f"¿Cómo de satisfecho estás con *{empleado}* en *{estado['respuestas'].get('proyecto', '?')}*? "
+                            "Responde un número del 1 al 5."
+                        )
                 elif _parece_saludo(texto):
                     accion = "pedir_persona"
                     pregunta = "Sigo aquí. Dime el nombre del miembro del proyecto."
@@ -446,6 +455,10 @@ def handle_message_events(event, logger):
         respuestas_finales = dict(estado["respuestas"])
         guardado = guardar_en_notion(nombre, respuestas_finales)
         if guardado:
+            with lock:
+                clave_guardada = (normalizar_nombre(respuestas_finales.get("proyecto", "")), normalizar_nombre(respuestas_finales.get("evaluado", "")))
+                estado.setdefault("evaluados_en_sesion", set()).add(clave_guardada)
+                estado["modo"] = "preguntar_mas_personas"
             slack_app.client.chat_postMessage(
                 channel=config.CHANNEL_ID,
                 thread_ts=thread_ts,
@@ -455,8 +468,6 @@ def handle_message_events(event, logger):
                     "¿Hay más miembros para evaluar aquí? (`sí` / `no`)"
                 ),
             )
-            with lock:
-                estado["modo"] = "preguntar_mas_personas"
             return
         slack_app.client.chat_postMessage(
             channel=config.CHANNEL_ID,

@@ -36,6 +36,7 @@ from .utils import normalizar_nombre
 # ---------------------------------------------------------------------------
 
 ca_ts: set = set()
+ca_ts_expirados: set = set()
 conversaciones_ca: dict = {}
 _lock = threading.Lock()
 _cache_bbdd: dict = {}
@@ -457,6 +458,8 @@ def enviar_pregunta_inicial_ca() -> None:
             ),
         )
         with _lock:
+            ca_ts_expirados.update(ca_ts)
+            ca_ts.clear()
             ca_ts.add(resp["ts"])
         logging.info(f"Mensaje CA enviado, ts={resp['ts']}")
     except Exception:
@@ -473,7 +476,18 @@ def manejar_mensaje_ca(event, logger) -> None:
     channel = event.get("channel")
     texto = (event.get("text") or "").strip()
 
-    if not thread_ts or thread_ts not in ca_ts:
+    if not thread_ts:
+        return
+    with _lock:
+        es_activo = thread_ts in ca_ts
+        es_expirado = thread_ts in ca_ts_expirados
+    if es_expirado and not es_activo:
+        slack_app.client.chat_postMessage(
+            channel=channel, thread_ts=thread_ts,
+            text="⏰ Esta revisión CA ha caducado porque ya hay una más reciente activa. Responde en el hilo nuevo.",
+        )
+        return
+    if not es_activo:
         return
 
     clave = (thread_ts, user_id)

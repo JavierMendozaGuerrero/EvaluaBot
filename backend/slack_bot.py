@@ -5,10 +5,10 @@ from datetime import datetime, timedelta
 from slack_bolt.adapter.socket_mode import SocketModeHandler
 
 from . import config
-from .ca_reviews import ca_ts, manejar_mensaje_ca
+from .ca_reviews import ca_ts, ca_ts_expirados, manejar_mensaje_ca
 from .clients import slack_app
 from .notion_service import buscar_empleado_en_lista, guardar_en_notion, obtener_nombre_por_id_usuario, sugerir_empleados_parecidos
-from .state import avisos_responder_en_hilo, conversaciones, evaluacion_ts, lock
+from .state import avisos_responder_en_hilo, conversaciones, evaluacion_ts, evaluacion_ts_expirados, lock
 from .utils import normalizar_nombre
 
 
@@ -24,6 +24,8 @@ def enviar_una_evaluacion():
             ),
         )
         with lock:
+            evaluacion_ts_expirados.update(evaluacion_ts)
+            evaluacion_ts.clear()
             evaluacion_ts.add(resp["ts"])
         logging.info(f"Evaluación iniciada, ts={resp['ts']}")
     except Exception:
@@ -182,7 +184,7 @@ def handle_message_events(event, logger):
         return
     thread_ts = event.get("thread_ts")
     channel = event.get("channel")
-    if thread_ts in ca_ts:
+    if thread_ts in ca_ts or thread_ts in ca_ts_expirados:
         manejar_mensaje_ca(event, logger)
         return
 
@@ -202,8 +204,16 @@ def handle_message_events(event, logger):
                 )
         return
     with lock:
-        if thread_ts not in evaluacion_ts:
-            return
+        es_activo = thread_ts in evaluacion_ts
+        es_expirado = thread_ts in evaluacion_ts_expirados
+    if es_expirado and not es_activo:
+        slack_app.client.chat_postMessage(
+            channel=channel, thread_ts=thread_ts,
+            text="⏰ Esta evaluación ha caducado porque ya hay una más reciente activa. Responde en el hilo nuevo.",
+        )
+        return
+    if not es_activo:
+        return
     clave_conv = (thread_ts, event.get("user"))
 
     user_id = event.get("user")

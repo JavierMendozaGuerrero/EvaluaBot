@@ -3,6 +3,7 @@ import threading
 
 lock = threading.Lock()
 evaluacion_ts = set()
+evaluacion_ts_expirados = set()
 conversaciones = {}
 bbdd_por_evaluado = {}
 sesiones_web = {}

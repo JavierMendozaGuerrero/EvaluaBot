@@ -16,6 +16,7 @@ from .notion_service import (
     obtener_objetivos,
 )
 from .reports import generar_archivo_trayectoria, generar_archivos_informe
+from .skill_informes_anual import generar_informe_anual, obtener_empleados_evaluacion_anual
 from .users import (
     autenticar_usuario,
     cambiar_password_con_token,
@@ -140,6 +141,15 @@ class ApiHandler(BaseHTTPRequestHandler):
                 objetivos = obtener_objetivos(nombre)
                 self.responder_json({"objetivos": objetivos})
                 return
+            if ruta == "/api/evaluados-anual":
+                sesion = self.sesion_actual()
+                if not sesion:
+                    raise PermissionError("Inicia sesión para acceder.")
+                if not sesion.get("is_admin"):
+                    raise PermissionError("Solo administradores pueden acceder a las evaluaciones anuales.")
+                nombres = obtener_empleados_evaluacion_anual()
+                self.responder_json({"evaluados": [{"value": n, "label": n} for n in nombres]})
+                return
             if ruta.startswith("/api/files/"):
                 self.servir_archivo_protegido(ruta.removeprefix("/api/files/"), parsed.query)
                 return
@@ -177,20 +187,28 @@ class ApiHandler(BaseHTTPRequestHandler):
                 raise PermissionError("Inicia sesión para acceder.")
             if ruta == "/api/generar":
                 evaluado = datos.get("evaluado", "")
+                cargo = datos.get("cargo", "").strip()
                 advisees_ca = obtener_advisees(
                     sesion.get("persona", ""),
                     ca_aliases=[sesion.get("username", ""), sesion.get("email", "")],
                 )
                 validar_acceso_sesion(sesion, evaluado, extra_permitidos=advisees_ca)
-                total, slug, desde_cache = generar_archivos_informe(evaluado)
-                self.responder_json(
-                    {
-                        "total": total,
-                        "desdeCache": desde_cache,
-                        "htmlUrl": self.url_archivo(f"informe_{slug}.html", evaluado),
-                        "docxUrl": self.url_archivo(f"informe_{slug}.docx", evaluado),
-                    }
-                )
+                respuesta = {}
+                try:
+                    total, slug, desde_cache = generar_archivos_informe(evaluado)
+                    respuesta["total"] = total
+                    respuesta["desdeCache"] = desde_cache
+                    respuesta["htmlUrl"] = self.url_archivo(f"informe_{slug}.html", evaluado)
+                except Exception:
+                    logging.exception("No se pudo generar el informe HTML para %s", evaluado)
+                try:
+                    slug_anual = generar_informe_anual(evaluado, cargo=cargo)
+                    respuesta["docxAnualUrl"] = self.url_archivo(f"informe_anual_{slug_anual}.docx", evaluado)
+                except Exception:
+                    logging.exception("No se pudo generar el informe anual IGENERIS para %s", evaluado)
+                if not respuesta:
+                    raise RuntimeError("No se pudo generar ningún informe para esta persona.")
+                self.responder_json(respuesta)
                 return
             if ruta == "/api/trayectoria":
                 evaluado = datos.get("evaluado", "")
@@ -211,6 +229,19 @@ class ApiHandler(BaseHTTPRequestHandler):
                     return
                 guardar_objetivos(ca_nombre, nombre, texto)
                 self.responder_json({"ok": True})
+                return
+            if ruta == "/api/generar-anual":
+                if not sesion.get("is_admin"):
+                    raise PermissionError("Solo administradores pueden generar informes anuales.")
+                evaluado = datos.get("evaluado", "").strip()
+                cargo = datos.get("cargo", "").strip()
+                if not evaluado:
+                    self.responder_json({"error": "Selecciona un empleado."}, 400)
+                    return
+                slug = generar_informe_anual(evaluado, cargo=cargo)
+                self.responder_json({
+                    "docxUrl": self.url_archivo(f"informe_anual_{slug}.docx", evaluado),
+                })
                 return
             self.responder_json({"error": "No encontrado"}, 404)
         except PermissionError as error:
@@ -234,7 +265,7 @@ class ApiHandler(BaseHTTPRequestHandler):
         validar_acceso_sesion(sesion, evaluado, extra_permitidos=advisees_ca)
         nombre_autorizado = evaluado
         slug = slug_archivo(nombre_autorizado)
-        if not (nombre_archivo.startswith(f"informe_{slug}.") or nombre_archivo.startswith(f"trayectoria_{slug}.")):
+        if not (nombre_archivo.startswith(f"informe_{slug}.") or nombre_archivo.startswith(f"trayectoria_{slug}.") or nombre_archivo.startswith(f"informe_anual_{slug}.")):
             raise PermissionError("El archivo solicitado no corresponde con la persona autorizada.")
         ruta = os.path.join(config.CARPETA_WEB, os.path.basename(nombre_archivo))
         if not os.path.exists(ruta):

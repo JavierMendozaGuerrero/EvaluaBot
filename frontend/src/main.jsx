@@ -406,6 +406,11 @@ function Dashboard({ token, user, onLogout, onNavigate }) {
   const [advisees, setAdvisees] = useState([]);
   const [opinionesModal, setOpinionesModal] = useState(null);
   const [loadingOpiniones, setLoadingOpiniones] = useState(false);
+  const [evaluadosAnual, setEvaluadosAnual] = useState([]);
+  const [evaluadoAnual, setEvaluadoAnual] = useState("");
+  const [cargoAnual, setCargoAnual] = useState("");
+  const [statusAnual, setStatusAnual] = useState("");
+  const [linkAnual, setLinkAnual] = useState(null);
   const isAdmin = Boolean(user?.is_admin);
 
   useEffect(() => {
@@ -423,6 +428,17 @@ function Dashboard({ token, user, onLogout, onNavigate }) {
       .catch(() => {});
   }, [token]);
 
+  useEffect(() => {
+    if (!isAdmin) return;
+    apiRequest("/api/evaluados-anual", { token })
+      .then((data) => {
+        const lista = data.evaluados || [];
+        setEvaluadosAnual(lista);
+        if (lista.length) setEvaluadoAnual(lista[0].value);
+      })
+      .catch(() => {});
+  }, [token, isAdmin]);
+
   const role = isAdmin ? "Admin" : "";
   const ownEvaluado = user?.persona || user?.username || "";
   const targetEvaluado = isAdmin ? evaluado : (evaluado || ownEvaluado);
@@ -432,11 +448,41 @@ function Dashboard({ token, user, onLogout, onNavigate }) {
     setLinks(null);
     setStatus(kind === "generar" ? "Claude esta generando el informe..." : "Preparando trayectoria visual...");
     try {
-      const data = await apiRequest(`/api/${kind}`, { token, method: "POST", body: { evaluado: targetEvaluado } });
+      const body = { evaluado: targetEvaluado };
+      if (kind === "generar" && cargoAnual) body.cargo = cargoAnual;
+      const data = await apiRequest(`/api/${kind}`, { token, method: "POST", body });
       setStatus(kind === "generar" ? `Informe listo con ${data.total} evaluaciones.` : `Trayectoria lista con ${data.total} evaluaciones.`);
       setLinks(data);
     } catch (err) {
       setStatus(err.message);
+    }
+  }
+
+  async function generateAnual() {
+    setLinkAnual(null);
+    setStatusAnual("Claude está interpretando el texto del evaluador...");
+    try {
+      const data = await apiRequest("/api/generar-anual", { token, method: "POST", body: { evaluado: evaluadoAnual, cargo: cargoAnual } });
+      setStatusAnual("Informe anual generado.");
+      setLinkAnual(data.docxUrl);
+    } catch (err) {
+      setStatusAnual(err.message);
+    }
+  }
+
+  async function downloadAnual(path) {
+    try {
+      const response = await fetch(apiUrl(path), { headers: { Authorization: `Bearer ${token}` } });
+      if (!response.ok) throw new Error("Error al descargar el archivo.");
+      const blob = await response.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `informe_anual_${evaluadoAnual.replace(/\s+/g, "_")}.docx`;
+      a.click();
+      URL.revokeObjectURL(url);
+    } catch (err) {
+      setStatusAnual(err.message);
     }
   }
 
@@ -508,10 +554,10 @@ function Dashboard({ token, user, onLogout, onNavigate }) {
 
       <section className="tools">
         <article className="tool">
-          <p className="kicker">Informe</p>
-          <h2>Documento ejecutivo</h2>
-          <p>Analisis con Claude y descarga en Word cuando hay evaluaciones nuevas.</p>
-          <button onClick={() => generate("generar")} disabled={!targetEvaluado}>Generar informe</button>
+          <p className="kicker">Informe anual</p>
+          <h2>Informe anual{targetEvaluado ? ` de ${targetEvaluado}` : ""}</h2>
+          <p>Realiza una base para la realizacion del informe anual de evaluaciones.</p>
+          <button onClick={() => generate("generar")} disabled={!targetEvaluado}>Generar informe anual</button>
         </article>
         <article className="tool wrapped">
           <p className="kicker">Trayectoria</p>
@@ -527,7 +573,7 @@ function Dashboard({ token, user, onLogout, onNavigate }) {
           <h2>Resultado</h2>
           <div className="actions">
             {links.htmlUrl && <button onClick={() => openFile(links.htmlUrl, "informe.html")}>Abrir web</button>}
-            {links.docxUrl && <button className="secondary" onClick={() => openFile(links.docxUrl, "informe.docx")}>Descargar Word</button>}
+            {links.docxAnualUrl && <button className="secondary" onClick={() => downloadAnual(links.docxAnualUrl)}>Descargar informe anual</button>}
           </div>
         </section>
       )}

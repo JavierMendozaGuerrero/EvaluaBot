@@ -7,7 +7,8 @@ from slack_bolt.adapter.socket_mode import SocketModeHandler
 from . import config
 from .ca_reviews import ca_ts, ca_ts_expirados, manejar_mensaje_ca
 from .clients import slack_app
-from .notion_service import buscar_empleado_en_lista, guardar_en_notion, obtener_nombre_por_id_usuario, sugerir_empleados_parecidos
+from .hierarchy import comparar_jerarquia, sufijo_preguntas
+from .notion_service import buscar_empleado_en_lista, buscar_empleado_y_cargo, guardar_en_notion, obtener_cargo_por_slack_id, obtener_nombre_por_id_usuario, sugerir_empleados_parecidos
 from .state import avisos_responder_en_hilo, conversaciones, evaluacion_hora, evaluacion_ultimo_recordatorio, evaluacion_ts, evaluacion_ts_expirados, lock
 from .utils import normalizar_nombre
 
@@ -100,10 +101,13 @@ def clave_modificacion(texto):
     return OPCIONES_MODIFICACION.get(normalizar_nombre(texto))
 
 
-def texto_pregunta_por_clave(clave):
+def texto_pregunta_por_clave(clave, sufijo=""):
     for pregunta in config.PREGUNTAS:
         if pregunta["clave"] == clave:
-            return pregunta["texto"]
+            texto = pregunta["texto"]
+            if sufijo and clave in ("satisfaccion", "mejor_aspecto", "peor_aspecto"):
+                texto += sufijo
+            return texto
     return "Escribe la nueva respuesta."
 
 
@@ -264,7 +268,10 @@ def handle_message_events(event, logger):
 
         elif modo == "esperando_persona":
             if texto:
-                empleado = None if _parece_saludo(texto) else buscar_empleado_en_lista(texto)
+                if _parece_saludo(texto):
+                    empleado, cargo_evaluado = None, None
+                else:
+                    empleado, cargo_evaluado = buscar_empleado_y_cargo(texto)
                 if empleado:
                     clave_evaluacion = (normalizar_nombre(estado.get("proyecto_actual", "")), normalizar_nombre(empleado))
                     if clave_evaluacion in estado.get("evaluados_en_sesion", set()):
@@ -275,11 +282,17 @@ def handle_message_events(event, logger):
                         )
                     else:
                         estado["respuestas"]["evaluado"] = empleado
+                        if estado.get("cargo_evaluador") is None:
+                            estado["cargo_evaluador"] = obtener_cargo_por_slack_id(user_id)
+                        relacion = comparar_jerarquia(estado.get("cargo_evaluador") or "", cargo_evaluado or "")
+                        estado["relacion_jerarquica"] = relacion
+                        estado["sufijo_jerarquico"] = sufijo_preguntas(relacion)
                         estado["modo"] = "esperando_satisfaccion"
                         accion = "pedir_satisfaccion"
+                        sufijo = estado["sufijo_jerarquico"]
                         pregunta = (
                             f"¿Cómo de satisfecho estás con *{empleado}* en *{estado['respuestas'].get('proyecto', '?')}*? "
-                            "Responde un número del 1 al 5."
+                            f"Responde un número del 1 al 5.{sufijo}"
                         )
                 elif _parece_saludo(texto):
                     accion = "pedir_persona"
@@ -292,26 +305,29 @@ def handle_message_events(event, logger):
                 pregunta = "¿Qué miembro del proyecto quieres evaluar?"
 
         elif modo == "esperando_satisfaccion":
+            sufijo = estado.get("sufijo_jerarquico", "")
             if _es_valor_satisfaccion(texto):
                 estado["respuestas"]["satisfaccion"] = texto
                 estado["modo"] = "esperando_mejor"
                 accion = "pedir_mejor"
-                pregunta = "¿Cuál es el mejor aspecto de esa persona?"
+                pregunta = f"¿Cuál es el mejor aspecto de esa persona?{sufijo}"
             else:
                 accion = "pedir_satisfaccion"
-                pregunta = "Responde un número del 1 al 5 para la satisfacción."
+                pregunta = f"Responde un número del 1 al 5 para la satisfacción.{sufijo}"
 
         elif modo == "esperando_mejor":
+            sufijo = estado.get("sufijo_jerarquico", "")
             if texto:
                 estado["respuestas"]["mejor_aspecto"] = texto
                 estado["modo"] = "esperando_peor"
                 accion = "pedir_peor"
-                pregunta = "¿Cuál es el peor aspecto de esa persona?"
+                pregunta = f"¿Cuál es el peor aspecto de esa persona?{sufijo}"
             else:
                 accion = "pedir_mejor"
-                pregunta = "¿Cuál es el mejor aspecto de esa persona?"
+                pregunta = f"¿Cuál es el mejor aspecto de esa persona?{sufijo}"
 
         elif modo == "esperando_peor":
+            sufijo = estado.get("sufijo_jerarquico", "")
             if texto:
                 estado["respuestas"]["peor_aspecto"] = texto
                 estado["modo"] = "confirmacion"
@@ -319,7 +335,7 @@ def handle_message_events(event, logger):
                 pregunta = resumen_respuestas(estado["respuestas"])
             else:
                 accion = "pedir_peor"
-                pregunta = "¿Cuál es el peor aspecto de esa persona?"
+                pregunta = f"¿Cuál es el peor aspecto de esa persona?{sufijo}"
 
         elif modo == "confirmacion":
             if respuesta_es_confirmacion(texto):
@@ -342,7 +358,7 @@ def handle_message_events(event, logger):
                 estado["campo_modificando"] = clave
                 estado["modo"] = "modificando_respuesta"
                 accion = "pedir_valor_modificacion"
-                pregunta = texto_pregunta_por_clave(clave)
+                pregunta = texto_pregunta_por_clave(clave, sufijo=estado.get("sufijo_jerarquico", ""))
             else:
                 accion = "pedir_modificacion"
                 pregunta = texto_menu_modificacion()
@@ -352,12 +368,17 @@ def handle_message_events(event, logger):
             if clave and texto:
                 valor = texto
                 if clave == "evaluado":
-                    empleado = buscar_empleado_en_lista(texto)
+                    empleado, cargo_evaluado = buscar_empleado_y_cargo(texto)
                     if not empleado:
                         accion = "pedir_valor_modificacion"
                         pregunta = _mensaje_empleado_no_encontrado(texto)
                     else:
                         valor = empleado
+                        if estado.get("cargo_evaluador") is None:
+                            estado["cargo_evaluador"] = obtener_cargo_por_slack_id(user_id)
+                        relacion = comparar_jerarquia(estado.get("cargo_evaluador") or "", cargo_evaluado or "")
+                        estado["relacion_jerarquica"] = relacion
+                        estado["sufijo_jerarquico"] = sufijo_preguntas(relacion)
                 if accion != "pedir_valor_modificacion":
                     estado["respuestas"][clave] = valor
                     if clave == "proyecto":
@@ -368,7 +389,7 @@ def handle_message_events(event, logger):
                     pregunta = resumen_respuestas(estado["respuestas"])
             else:
                 accion = "pedir_valor_modificacion"
-                pregunta = texto_pregunta_por_clave(clave) if clave else texto_menu_modificacion()
+                pregunta = texto_pregunta_por_clave(clave, sufijo=estado.get("sufijo_jerarquico", "")) if clave else texto_menu_modificacion()
 
         elif modo == "guardar":
             accion = "guardar"
@@ -454,7 +475,8 @@ def handle_message_events(event, logger):
     if accion == "guardar":
         nombre = _nombre_real(user_id, logger)
         respuestas_finales = dict(estado["respuestas"])
-        guardado = guardar_en_notion(nombre, respuestas_finales)
+        relacion = estado.get("relacion_jerarquica", "igual")
+        guardado = guardar_en_notion(nombre, respuestas_finales, relacion=relacion)
         if guardado:
             with lock:
                 clave_guardada = (normalizar_nombre(respuestas_finales.get("proyecto", "")), normalizar_nombre(respuestas_finales.get("evaluado", "")))

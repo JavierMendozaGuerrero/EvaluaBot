@@ -33,10 +33,16 @@ def _propiedades_bbdd_evaluaciones():
         "Name": {"title": {}},
         "Evaluador": {"rich_text": {}},
         "Proyecto": {"rich_text": {}},
-        "Satisfaccion": {"rich_text": {}},
-        "Mejor aspecto": {"rich_text": {}},
-        "Peor aspecto": {"rich_text": {}},
         "Fecha": {"date": {}},
+        "Satisfaccion de superiores": {"rich_text": {}},
+        "Satisfaccion de iguales": {"rich_text": {}},
+        "Satisfaccion de inferiores": {"rich_text": {}},
+        "Mejor aspecto de superiores": {"rich_text": {}},
+        "Mejor aspecto de iguales": {"rich_text": {}},
+        "Mejor aspecto de inferiores": {"rich_text": {}},
+        "Peor aspecto de superiores": {"rich_text": {}},
+        "Peor aspecto de iguales": {"rich_text": {}},
+        "Peor aspecto de inferiores": {"rich_text": {}},
     }
 
 
@@ -503,23 +509,27 @@ def obtener_o_crear_bbdd_evaluado(nombre_evaluado):
     return database_id
 
 
-def guardar_en_notion(nombre, respuestas):
+def guardar_en_notion(nombre, respuestas, relacion="igual"):
     nombre_evaluado = respuestas.get("evaluado", "").strip()
     proyecto = respuestas.get("proyecto", "").strip()
     try:
         database_id = obtener_o_crear_bbdd_evaluado(nombre_evaluado)
         asegurar_propiedades_bbdd(database_id)
         fecha = datetime.now(timezone.utc)
+        satisfaccion = respuestas.get("satisfaccion", "")
+        mejor = respuestas.get("mejor_aspecto", "")
+        peor = respuestas.get("peor_aspecto", "")
+        suf_col = {"superior": "de superiores", "inferior": "de inferiores"}.get(relacion, "de iguales")
         _crear_pagina_en_bbdd(
             database_id,
             {
                 "Name": {"title": [{"text": {"content": f"Evaluacion {fecha.strftime('%Y-%m-%d %H:%M')}"}}]},
                 "Evaluador": {"rich_text": [{"text": {"content": nombre}}]},
                 "Proyecto": {"rich_text": [{"text": {"content": proyecto}}]},
-                "Satisfaccion": {"rich_text": [{"text": {"content": respuestas.get("satisfaccion", "")}}]},
-                "Mejor aspecto": {"rich_text": [{"text": {"content": respuestas.get("mejor_aspecto", "")}}]},
-                "Peor aspecto": {"rich_text": [{"text": {"content": respuestas.get("peor_aspecto", "")}}]},
                 "Fecha": {"date": {"start": fecha.isoformat()}},
+                f"Satisfaccion {suf_col}": {"rich_text": [{"text": {"content": satisfaccion}}]},
+                f"Mejor aspecto {suf_col}": {"rich_text": [{"text": {"content": mejor}}]},
+                f"Peor aspecto {suf_col}": {"rich_text": [{"text": {"content": peor}}]},
             },
         )
         return True
@@ -625,7 +635,22 @@ def _obtener_registros_empleados() -> list[dict]:
                         valor_alias = _texto_propiedad(props, alias_prop)
                         if valor_alias:
                             aliases.append(valor_alias.strip())
-                registros.append({"nombre": nombre, "email": email.strip(), "aliases": aliases})
+
+                cargo = ""
+                for cargo_prop in ("Cargo", "Puesto", "Rol", "Role"):
+                    if cargo_prop in props:
+                        cargo = _texto_propiedad(props, cargo_prop)
+                        if cargo:
+                            break
+
+                id_usuario = ""
+                for id_prop in ("ID_usuario", "ID usuario", "Slack ID"):
+                    if id_prop in props:
+                        id_usuario = _texto_propiedad(props, id_prop)
+                        if id_usuario:
+                            break
+
+                registros.append({"nombre": nombre, "email": email.strip(), "aliases": aliases, "cargo": cargo, "id_usuario": id_usuario})
             if not resp.get("has_more"):
                 break
             cursor = resp.get("next_cursor")
@@ -724,6 +749,26 @@ def buscar_empleado_en_lista(nombre: str):
         if nombre_limpio == _normalizar_para_match(registro["nombre"]):
             return registro["nombre"]
     logging.info("Empleado no encontrado en la lista de Notion: %s", nombre)
+    return None
+
+
+def buscar_empleado_y_cargo(nombre: str) -> tuple[str | None, str | None]:
+    """Devuelve (nombre_canonico, cargo) del empleado que coincide, o (None, None) si no existe."""
+    nombre_limpio = _normalizar_para_match(nombre)
+    if not nombre_limpio:
+        return None, None
+    for registro in _obtener_registros_empleados():
+        if nombre_limpio == _normalizar_para_match(registro["nombre"]):
+            return registro["nombre"], registro.get("cargo") or None
+    logging.info("Empleado no encontrado en la lista de Notion: %s", nombre)
+    return None, None
+
+
+def obtener_cargo_por_slack_id(user_id: str) -> str | None:
+    """Devuelve el cargo del empleado cuyo ID_usuario coincide con user_id."""
+    for registro in _obtener_registros_empleados():
+        if registro.get("id_usuario") == user_id:
+            return registro.get("cargo") or None
     return None
 
 

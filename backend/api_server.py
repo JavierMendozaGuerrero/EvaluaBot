@@ -285,7 +285,7 @@ class ApiHandler(BaseHTTPRequestHandler):
 def iniciar_api_backend():
     os.makedirs(config.CARPETA_WEB, exist_ok=True)
     try:
-        with ReusableTCPServer(("", config.PUERTO_WEB), ApiHandler) as httpd:
+        with ReusableTCPServer(("0.0.0.0", config.PUERTO_WEB), ApiHandler) as httpd:
             logging.info(f"API backend disponible en http://localhost:{config.PUERTO_WEB}")
             httpd.serve_forever()
     except OSError as error:

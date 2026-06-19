@@ -7,9 +7,11 @@ No requiere ninguna base de Notion adicional. Usa las bases existentes:
 """
 
 import hashlib
+import html as html_lib
 import json
 import logging
 import os
+from datetime import datetime, timezone
 
 from . import config
 from .clients import Document, anthropic_client
@@ -276,6 +278,122 @@ def _tabla_dims(doc, dims, comentarios):
     return tabla
 
 
+# ── HTML: generación ─────────────────────────────────────────────────────────
+
+def guardar_informe_anual_html(emp_data: dict, comentarios: dict, cargo: str = "") -> str:
+    def esc(v):
+        return html_lib.escape(str(v or ""))
+
+    def bullets_html(texto):
+        lineas = [ln.strip(" •-–") for ln in (texto or "").strip().splitlines() if ln.strip()]
+        return "<br>".join(f"• {esc(ln)}" for ln in lineas) if lineas else "—"
+
+    def filas_dims(dims):
+        filas = ""
+        for clave, etiqueta in dims:
+            filas += f"<tr><td>{esc(etiqueta)}</td><td class='nc'>X</td><td>{bullets_html(comentarios.get(clave,''))}</td></tr>"
+        return filas
+
+    cargo_lower = cargo.strip().lower()
+    requiere_liderazgo = any(c in cargo_lower for c in _REQUIERE_LIDERAZGO)
+
+    cargo_row = f"<tr><td><strong>Cargo</strong></td><td>{esc(cargo)}</td></tr>" if cargo else ""
+
+    liderazgo_bloque = ""
+    if requiere_liderazgo:
+        liderazgo_bloque = f"""
+        <h2 class="sec">LIDERAZGO</h2>
+        <table class="et"><thead><tr><th>Dimensión</th><th class="nc">Nota</th><th>Comentarios del evaluador</th></tr></thead>
+        <tbody>{filas_dims(_DIMS_LIDERAZGO)}</tbody></table>"""
+
+    objetivos_html = ""
+    objetivos = emp_data.get("objetivos", [])
+    if objetivos:
+        obj = objetivos[0]
+        meta = ""
+        ca_obj = esc(obj.get("ca", ""))
+        fecha_obj = esc((obj.get("fecha") or "")[:10])
+        if ca_obj or fecha_obj:
+            meta = f"<p class='fine'>Definidos por {ca_obj} — {fecha_obj}</p>"
+        objetivos_html = f"{meta}<p>{bullets_html(obj.get('objetivos',''))}</p>"
+    else:
+        objetivos_html = "<p>Sin objetivos registrados.</p>"
+
+    fecha = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+
+    contenido = f"""<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Informe anual — {esc(emp_data['empleado'])}</title>
+<style>
+{config.IGENERIS_CSS}
+.shell {{ max-width: 960px; margin: 0 auto; padding-bottom: 60px; }}
+.top {{ padding-top: clamp(42px, 8vw, 92px); margin-bottom: 36px; }}
+.it {{ width: 100%; border-collapse: collapse; margin-bottom: 24px; font-size: 14px; }}
+.it td {{ border: 1px solid var(--ink); padding: 8px 14px; }}
+.et {{ width: 100%; border-collapse: collapse; margin-bottom: 24px; font-size: 14px; }}
+.et th, .et td {{ border: 1px solid var(--ink); padding: 8px 12px; vertical-align: top; }}
+.et th {{ background: var(--soft); font-weight: 700; font-size: 12px; text-transform: uppercase; letter-spacing: .05em; }}
+.et td:first-child {{ width: 200px; font-weight: 500; }}
+.nc {{ width: 60px; text-align: center; }}
+.sec {{ font-size: 13px; text-transform: uppercase; letter-spacing: .08em; border-bottom: 2px solid var(--ink); padding-bottom: 6px; margin: 32px 0 14px; color: var(--ink); }}
+.rg {{ display: grid; grid-template-columns: 130px 1fr; border: 1px solid var(--ink); font-size: 14px; }}
+.rg > div {{ padding: 14px 16px; }}
+.rg > div:first-child {{ border-right: 1px solid var(--ink); text-align: center; font-weight: 700; }}
+</style>
+</head>
+<body>
+<main class="page shell">
+<nav class="nav">
+  <a class="brand" href="javascript:void(0)" onclick="window.close()">igeneris</a>
+  <div class="nav-links"><button class="secondary" onclick="window.close()">Cerrar</button></div>
+</nav>
+<div class="top">
+  <p class="kicker">Evaluación anual 2025</p>
+  <h1>{esc(emp_data['empleado'])}</h1>
+  <p>Generado el {fecha}</p>
+</div>
+
+<table class="it">
+  <tr><td><strong>Nombre</strong></td><td>{esc(emp_data['empleado'])}</td></tr>
+  {cargo_row}
+  <tr><td><strong>Career Advisor</strong></td><td>{esc(emp_data.get('ca') or '—')}</td></tr>
+</table>
+
+<h2 class="sec">CALIFICACIÓN 2025</h2>
+<table class="et">
+  <thead><tr><th>Dimensión</th><th class="nc">Nota</th><th>Comentarios del evaluador</th></tr></thead>
+  <tbody>{filas_dims(_DIMS_PROYECTOS)}</tbody>
+</table>
+
+{liderazgo_bloque}
+
+<h2 class="sec">CONTRIBUTION TO THE FIRM</h2>
+<p>{bullets_html(comentarios.get('contribution_to_firm',''))}</p>
+
+<h2 class="sec">RESULTADO</h2>
+<div class="rg">
+  <div>Nota global<br><strong>X / 5</strong></div>
+  <div>{esc(comentarios.get('resultado','—'))}</div>
+</div>
+
+<h2 class="sec">OBJETIVOS 2026</h2>
+{objetivos_html}
+</main>
+</body>
+</html>"""
+
+    os.makedirs(config.CARPETA_WEB, exist_ok=True)
+    slug = slug_archivo(emp_data["empleado"])
+    ruta = os.path.join(config.CARPETA_WEB, f"informe_anual_{slug}.html")
+    with open(ruta, "w", encoding="utf-8") as f:
+        f.write(contenido)
+    logging.info("Informe anual HTML guardado: %s", ruta)
+    return slug
+
+
 # ── Word: generación ─────────────────────────────────────────────────────────
 
 def guardar_informe_anual_word(emp_data: dict, comentarios: dict, cargo: str = "") -> str:
@@ -424,13 +542,15 @@ def generar_informe_anual(evaluado: str, cargo: str = "") -> str:
     slug = slug_archivo(evaluado)
     huella = _huella_datos(emp_data)
     ruta_docx = os.path.join(config.CARPETA_WEB, f"informe_anual_{slug}.docx")
+    ruta_html = os.path.join(config.CARPETA_WEB, f"informe_anual_{slug}.html")
     cache = _leer_cache(slug)
 
-    if cache and cache.get("huella") == huella and os.path.exists(ruta_docx):
+    if cache and cache.get("huella") == huella and os.path.exists(ruta_docx) and os.path.exists(ruta_html):
         logging.info("Informe anual en caché para %s, reutilizando.", evaluado)
         return slug
 
     comentarios = interpretar_evaluaciones_anual(emp_data, cargo=cargo)
     slug = guardar_informe_anual_word(emp_data, comentarios, cargo=cargo)
+    guardar_informe_anual_html(emp_data, comentarios, cargo=cargo)
     _escribir_cache(slug, huella)
     return slug

@@ -198,12 +198,12 @@ class ApiHandler(BaseHTTPRequestHandler):
                     total, slug, desde_cache = generar_archivos_informe(evaluado)
                     respuesta["total"] = total
                     respuesta["desdeCache"] = desde_cache
-                    respuesta["htmlUrl"] = self.url_archivo(f"informe_{slug}.html", evaluado)
                 except Exception:
                     logging.exception("No se pudo generar el informe HTML para %s", evaluado)
                 try:
                     slug_anual = generar_informe_anual(evaluado, cargo=cargo)
                     respuesta["docxAnualUrl"] = self.url_archivo(f"informe_anual_{slug_anual}.docx", evaluado)
+                    respuesta["htmlUrl"] = self.url_archivo(f"informe_anual_{slug_anual}.html", evaluado)
                 except Exception:
                     logging.exception("No se pudo generar el informe anual IGENERIS para %s", evaluado)
                 if not respuesta:
@@ -241,6 +241,7 @@ class ApiHandler(BaseHTTPRequestHandler):
                 slug = generar_informe_anual(evaluado, cargo=cargo)
                 self.responder_json({
                     "docxUrl": self.url_archivo(f"informe_anual_{slug}.docx", evaluado),
+                    "htmlUrl": self.url_archivo(f"informe_anual_{slug}.html", evaluado),
                 })
                 return
             self.responder_json({"error": "No encontrado"}, 404)

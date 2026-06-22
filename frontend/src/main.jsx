@@ -133,7 +133,7 @@ function InformesAdvisee({ token, advisee, onBack }) {
           <h2>Resultado</h2>
           <div className="actions">
             {links.htmlUrl && <button onClick={() => openFile(links.htmlUrl, "informe.html")}>Abrir web</button>}
-            {links.docxUrl && <button className="secondary" onClick={() => openFile(links.docxUrl, "informe.docx")}>Descargar Word</button>}
+            {links.docxAnualUrl && <button className="secondary" onClick={() => openFile(links.docxAnualUrl, `informe_${advisee.nombre.replace(/\s+/g, "_")}.docx`)}>Descargar Word</button>}
           </div>
         </section>
       )}
@@ -411,6 +411,11 @@ function Dashboard({ token, user, onLogout, onNavigate }) {
   const [cargoAnual, setCargoAnual] = useState("");
   const [statusAnual, setStatusAnual] = useState("");
   const [linkAnual, setLinkAnual] = useState(null);
+  const [accesoActivo, setAccesoActivo] = useState(false);
+  const [togglingAcceso, setTogglingAcceso] = useState(false);
+  const [informeFinalEmpleado, setInformeFinalEmpleado] = useState(null);
+  const [adminModo, setAdminModo] = useState("borrador");
+  const [informeFinalAdmin, setInformeFinalAdmin] = useState(null);
   const isAdmin = Boolean(user?.is_admin);
 
   useEffect(() => {
@@ -438,6 +443,29 @@ function Dashboard({ token, user, onLogout, onNavigate }) {
       })
       .catch(() => {});
   }, [token, isAdmin]);
+
+  useEffect(() => {
+    apiRequest("/api/acceso-advisees", { token })
+      .then((data) => setAccesoActivo(data.activo || false))
+      .catch(() => {});
+  }, [token]);
+
+  useEffect(() => {
+    if (isAdmin) return;
+    const persona = user?.persona || "";
+    if (!persona) return;
+    apiRequest(`/api/informe-final?evaluado=${encodeURIComponent(persona)}`, { token })
+      .then((data) => setInformeFinalEmpleado(data))
+      .catch(() => setInformeFinalEmpleado({ disponible: false, mensaje: "No se pudo cargar el informe." }));
+  }, [token, isAdmin, user?.persona]);
+
+  useEffect(() => {
+    if (!isAdmin || adminModo !== "final" || !evaluado) return;
+    setInformeFinalAdmin(null);
+    apiRequest(`/api/informe-final?evaluado=${encodeURIComponent(evaluado)}`, { token })
+      .then((data) => setInformeFinalAdmin(data))
+      .catch(() => setInformeFinalAdmin({ disponible: false, mensaje: "No se pudo cargar el informe." }));
+  }, [token, isAdmin, adminModo, evaluado]);
 
   const role = isAdmin ? "Admin" : "";
   const ownEvaluado = user?.persona || user?.username || "";
@@ -523,6 +551,18 @@ function Dashboard({ token, user, onLogout, onNavigate }) {
     }
   }
 
+  async function toggleAcceso() {
+    setTogglingAcceso(true);
+    try {
+      const data = await apiRequest("/api/acceso-advisees", { token, method: "POST", body: { activo: !accesoActivo } });
+      setAccesoActivo(data.activo);
+    } catch (err) {
+      setStatus(err.message);
+    } finally {
+      setTogglingAcceso(false);
+    }
+  }
+
   return (
     <main className="page">
       <nav className="nav">
@@ -537,7 +577,7 @@ function Dashboard({ token, user, onLogout, onNavigate }) {
 
       <section className="hero dashboard-hero">
         <div>
-          <p className="kicker">People analytics</p>
+          <p className="kicker">Desarrollo de talento</p>
           <h1>Centro de evaluaciones.</h1>
         </div>
         {isAdmin && (
@@ -552,23 +592,82 @@ function Dashboard({ token, user, onLogout, onNavigate }) {
         )}
       </section>
 
-      <section className="tools">
-        <article className="tool">
-          <p className="kicker">Informe anual</p>
-          <h2>Informe anual{targetEvaluado ? ` de ${targetEvaluado}` : ""}</h2>
-          <p>Realiza una base para la realizacion del informe anual de evaluaciones.</p>
-          <button onClick={() => generate("generar")} disabled={!targetEvaluado}>Generar informe anual</button>
-        </article>
-        <article className="tool wrapped">
-          <p className="kicker">Trayectoria</p>
-          <h2>Vista tipo wrapped</h2>
-          <p>Navega por fechas, proyecto, satisfaccion y comentarios clave.</p>
-          <button className="secondary" onClick={() => generate("trayectoria")} disabled={!targetEvaluado}>Generar trayectoria</button>
-        </article>
-      </section>
+      {isAdmin ? (
+        <>
+          <div className="actions" style={{ marginTop: "24px" }}>
+            <button onClick={() => setAdminModo("borrador")} className={adminModo === "borrador" ? "" : "secondary"}>Borrador de Claude</button>
+            <button onClick={() => setAdminModo("final")} className={adminModo === "final" ? "" : "secondary"}>Versión final CA</button>
+          </div>
+          {adminModo === "borrador" ? (
+            <section className="tools">
+              <article className="tool">
+                <p className="kicker">Informe anual</p>
+                <h2>Informe anual{targetEvaluado ? ` de ${targetEvaluado}` : ""}</h2>
+                <p>Realiza una base para la realizacion del informe anual de evaluaciones.</p>
+                <button onClick={() => generate("generar")} disabled={!targetEvaluado}>Generar informe anual</button>
+              </article>
+              <article className="tool wrapped">
+                <p className="kicker">Trayectoria</p>
+                <h2>Vista tipo wrapped</h2>
+                <p>Navega por fechas, proyecto, satisfaccion y comentarios clave.</p>
+                <button className="secondary" onClick={() => generate("trayectoria")} disabled={!targetEvaluado}>Generar trayectoria</button>
+              </article>
+            </section>
+          ) : (
+            <section className="tools panel" style={{ marginTop: "24px" }}>
+              <p className="kicker">Versión final CA</p>
+              <h2>Informe final{targetEvaluado ? ` de ${targetEvaluado}` : ""}</h2>
+              {!targetEvaluado ? (
+                <p className="fine">Selecciona una persona evaluada.</p>
+              ) : informeFinalAdmin === null ? (
+                <p>Cargando...</p>
+              ) : informeFinalAdmin?.disponible ? (
+                <div className="actions">
+                  {informeFinalAdmin.htmlUrl && <button onClick={() => openFile(informeFinalAdmin.htmlUrl, "informe_final.html")}>Abrir versión web</button>}
+                  {informeFinalAdmin.docxUrl && <button className="secondary" onClick={() => openFile(informeFinalAdmin.docxUrl, "informe_final.docx")}>Descargar Word</button>}
+                </div>
+              ) : (
+                <p className="fine">{informeFinalAdmin?.mensaje || "No hay informe final disponible."}</p>
+              )}
+            </section>
+          )}
+        </>
+      ) : (
+        <section className="tools" style={{ marginTop: "24px" }}>
+          <article className="tool">
+            <p className="kicker">Mi informe final</p>
+            <h2>Informe final</h2>
+            <p>El informe anual elaborado por tu CA con el feedback recibido durante el año.</p>
+            {informeFinalEmpleado === null ? (
+              <p className="fine">Cargando...</p>
+            ) : informeFinalEmpleado?.disponible ? (
+              <div className="actions">
+                {informeFinalEmpleado.htmlUrl && <button onClick={() => openFile(informeFinalEmpleado.htmlUrl, "informe_final.html")}>Ver web</button>}
+                {informeFinalEmpleado.docxUrl && <button className="secondary" onClick={() => openFile(informeFinalEmpleado.docxUrl, "informe_final.docx")}>Descargar Word</button>}
+              </div>
+            ) : (
+              <p className="fine">No tienes acceso.</p>
+            )}
+          </article>
+          <article className="tool wrapped">
+            <p className="kicker">Resumen del año</p>
+            <h2>Tu trayectoria</h2>
+            <p>Navega por fechas, proyecto, satisfacción y comentarios clave de tus evaluaciones.</p>
+            {informeFinalEmpleado === null ? (
+              <p className="fine">Cargando...</p>
+            ) : informeFinalEmpleado?.accesoActivo ? (
+              <button className="secondary" onClick={() => generate("trayectoria")} disabled={!ownEvaluado}>
+                {status && status.includes("trayectoria") ? "Generando..." : "Ver trayectoria"}
+              </button>
+            ) : (
+              <p className="fine">No tienes acceso.</p>
+            )}
+          </article>
+        </section>
+      )}
 
       {status && <section className="status panel"><p>{status}</p></section>}
-      {links && (
+      {links && adminModo === "borrador" && (
         <section className="result panel">
           <h2>Resultado</h2>
           <div className="actions">
@@ -580,8 +679,22 @@ function Dashboard({ token, user, onLogout, onNavigate }) {
 
       {advisees.length > 0 && (
         <section className="advisees-section panel">
-          <p className="kicker">Career Advisor</p>
-          <h2>Mis advisees</h2>
+          <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", flexWrap: "wrap", gap: "12px", marginBottom: "18px" }}>
+            <div>
+              <p className="kicker">Career Advisor</p>
+              <h2 style={{ margin: 0 }}>Mis advisees</h2>
+            </div>
+            {!isAdmin && (
+              <button
+                className={accesoActivo ? "" : "secondary"}
+                onClick={toggleAcceso}
+                disabled={togglingAcceso}
+                style={{ alignSelf: "center" }}
+              >
+                {togglingAcceso ? "..." : accesoActivo ? "Acceso activo — revocar" : "Dar acceso a mis advisees"}
+              </button>
+            )}
+          </div>
           <div className="advisees-list">
             {advisees.map((a) => (
               <div key={a.nombre} className="advisee-card">
@@ -598,6 +711,9 @@ function Dashboard({ token, user, onLogout, onNavigate }) {
                 </button>
                 <button className="secondary advisee-btn" onClick={() => onNavigate({ type: "informes-advisee", advisee: a })}>
                   Ver informes
+                </button>
+                <button className="secondary advisee-btn" onClick={() => onNavigate({ type: "subir-informe", advisee: a })}>
+                  Subir informe
                 </button>
               </div>
             ))}
@@ -636,6 +752,122 @@ function Dashboard({ token, user, onLogout, onNavigate }) {
         </section>
       )}
 
+    </main>
+  );
+}
+
+function SubirInformePage({ token, advisee, onBack }) {
+  const [file, setFile] = useState(null);
+  const [status, setStatus] = useState("");
+  const [links, setLinks] = useState(null);
+  const [uploading, setUploading] = useState(false);
+  const [informeActual, setInformeActual] = useState(null);
+
+  useEffect(() => {
+    apiRequest(`/api/informe-final?evaluado=${encodeURIComponent(advisee.nombre)}`, { token })
+      .then((data) => { if (data.disponible) setInformeActual(data); })
+      .catch(() => {});
+  }, [token, advisee.nombre]);
+
+  async function subir(e) {
+    e.preventDefault();
+    if (!file) return;
+    setUploading(true);
+    setStatus("Subiendo informe...");
+    setLinks(null);
+    try {
+      const formData = new FormData();
+      formData.append("evaluado", advisee.nombre);
+      formData.append("archivo", file);
+      const response = await fetch(apiUrl("/api/subir-informe-final"), {
+        method: "POST",
+        headers: { Authorization: `Bearer ${token}` },
+        body: formData,
+      });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(data.error || "No se pudo subir el informe.");
+      setStatus("Informe subido correctamente.");
+      setInformeActual(data);
+      setLinks(null);
+    } catch (err) {
+      setStatus(err.message);
+    } finally {
+      setUploading(false);
+    }
+  }
+
+  async function openFile(path, filename) {
+    if (!filename.endsWith(".docx")) {
+      window.open(apiUrl(`${path}&token=${encodeURIComponent(token)}`), "_blank", "noopener,noreferrer");
+      return;
+    }
+    try {
+      const response = await fetch(apiUrl(path), { headers: { Authorization: `Bearer ${token}` } });
+      if (!response.ok) throw new Error("No se pudo descargar el archivo.");
+      const blob = await response.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = filename;
+      a.click();
+      URL.revokeObjectURL(url);
+    } catch (err) {
+      setStatus(err.message);
+    }
+  }
+
+  return (
+    <main className="page">
+      <nav className="nav">
+        <a className="brand" href="/">igeneris</a>
+        <button className="link-button" onClick={onBack}>← Volver</button>
+      </nav>
+      <section className="hero dashboard-hero">
+        <div>
+          {advisee.foto
+            ? <img src={advisee.foto} alt={advisee.nombre} className="objetivos-foto" />
+            : <div className="objetivos-foto objetivos-foto-placeholder">{advisee.nombre.charAt(0)}</div>
+          }
+          <p className="kicker">Informe final</p>
+          <h1>{advisee.nombre}</h1>
+        </div>
+        {informeActual && (
+          <div className="panel" style={{ marginBottom: "24px" }}>
+            <h2>Versión actual</h2>
+            <p className="fine">Ya hay un informe final subido. Puedes descargarlo o subir uno nuevo para reemplazarlo.</p>
+            <div className="actions">
+              {informeActual.htmlUrl && <button onClick={() => openFile(informeActual.htmlUrl, "informe_final.html")}>Abrir versión web</button>}
+              {informeActual.docxUrl && <button className="secondary" onClick={() => openFile(informeActual.docxUrl, "informe_final.docx")}>Descargar Word</button>}
+            </div>
+          </div>
+        )}
+        <form className="panel" onSubmit={subir}>
+          <h2>Subir versión final</h2>
+          <p>Sube el Word con tu versión final. Se convierte a HTML automáticamente y se guarda en Notion. Se mantienen las 2 versiones más recientes.</p>
+          <label>Archivo Word (.docx)</label>
+          <input
+            type="file"
+            accept=".docx,application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+            onChange={(e) => setFile(e.target.files?.[0] || null)}
+            required
+          />
+          {status && <p className={status.includes("Error") || status.includes("pudo") ? "error" : "fine"}>{status}</p>}
+          <div className="actions">
+            <button type="submit" disabled={uploading || !file}>
+              {uploading ? "Subiendo..." : "Subir informe"}
+            </button>
+          </div>
+        </form>
+      </section>
+      {links && (
+        <section className="result panel">
+          <h2>Informe subido</h2>
+          <div className="actions">
+            {links.htmlUrl && <button onClick={() => openFile(links.htmlUrl, "informe_final.html")}>Abrir versión web</button>}
+            {links.docxUrl && <button className="secondary" onClick={() => openFile(links.docxUrl, "informe_final.docx")}>Descargar Word</button>}
+          </div>
+        </section>
+      )}
     </main>
   );
 }
@@ -684,6 +916,15 @@ function App() {
         token={token}
         advisee={page.advisee}
         caName={user?.persona || ""}
+        onBack={() => setPage(null)}
+      />
+    );
+  }
+  if (page?.type === "subir-informe") {
+    return (
+      <SubirInformePage
+        token={token}
+        advisee={page.advisee}
         onBack={() => setPage(null)}
       />
     );

@@ -12,12 +12,17 @@ from .notion_service import obtener_evaluaciones_por_evaluado
 from .utils import slug_archivo
 
 
+_NIVEL_LABEL = {"superior": "Superior", "igual": "Igual nivel", "inferior": "Subordinado"}
+
+
 def _evaluaciones_para_prompt(evaluaciones):
     lineas = []
     for e in evaluaciones:
+        nivel = _NIVEL_LABEL.get(e.get("relacion", ""), "")
+        nivel_str = f" | Nivel evaluador: {nivel}" if nivel else ""
         lineas.append(
             f"- Evaluado: {e['evaluado']} | "
-            f"Evaluador: {e.get('persona_que_evalua') or e.get('nombre') or 'Desconocido'} | "
+            f"Evaluador: {e.get('persona_que_evalua') or e.get('nombre') or 'Desconocido'}{nivel_str} | "
             f"Proyecto: {e.get('proyecto') or 'Sin proyecto'} | "
             f"Satisfacción: {e['satisfaccion']} | Mejor aspecto: {e['mejor_aspecto']} | "
             f"Peor aspecto: {e['peor_aspecto']} | Fecha: {e['fecha']}"
@@ -201,6 +206,10 @@ function fecha(value) {{
   return value ? String(value).slice(0, 10) : "Sin fecha";
 }}
 
+function nivelLabel(relacion) {{
+  return {{ "superior": "Superior", "igual": "Igual nivel", "inferior": "Subordinado" }}[relacion] || "";
+}}
+
 function render() {{
   const lista = agrupadas.get(persona) || [];
   const actual = lista[indice];
@@ -234,7 +243,7 @@ function render() {{
             </div>
           </aside>
           <article class="main-card">
-            <p>${{fecha(actual.fecha)}}</p>
+            <p>${{fecha(actual.fecha)}}${{nivelLabel(actual.relacion) ? ` &nbsp;·&nbsp; <span style="font-size:13px;opacity:.7">${{nivelLabel(actual.relacion)}}</span>` : ""}}</p>
             <div class="score">${{escapeHtml(actual.satisfaccion || "-")}}/5</div>
             <p>Proyecto: ${{escapeHtml(actual.proyecto || "Sin proyecto")}}</p>
             <div class="quote-grid">

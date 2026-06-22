@@ -3,4 +3,5 @@ slack_sdk
 notion-client
 anthropic
 python-docx
+mammoth
 tzdata; platform_system == "Windows"

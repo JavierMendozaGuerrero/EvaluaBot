@@ -58,6 +58,7 @@ NOTION_USERS_DATABASE_NAME = os.environ.get("NOTION_USERS_DATABASE_NAME", "Usuar
 NOTION_PARENT_PAGE_ID = os.environ.get("NOTION_PARENT_PAGE_ID", "").strip()
 NOTION_ANNUAL_DATABASE_ID = os.environ.get("NOTION_ANNUAL_DATABASE_ID", "").strip()
 NOTION_ANNUAL_DATABASE_NAME = os.environ.get("NOTION_ANNUAL_DATABASE_NAME", "Evaluaciones anuales").strip()
+NOTION_QUESTIONS_DATABASE_NAME = os.environ.get("NOTION_QUESTIONS_DATABASE_NAME", "Preguntas").strip()
 ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY", "").strip()
 PREGUNTAS = [
     {"clave": "proyecto", "texto": "1️⃣ ¿En qué proyecto estás trabajando ahora?"},

@@ -886,6 +886,70 @@ def obtener_cargo_por_slack_id(user_id: str) -> str | None:
     return None
 
 
+_cache_preguntas: dict = {}
+
+
+def _normalizar_clave_pregunta(clave: str) -> str | None:
+    norm = normalizar_nombre(clave)
+    if "satisfac" in norm:
+        return "satisfaccion"
+    if "mejor" in norm:
+        return "mejor_aspecto"
+    if "peor" in norm:
+        return "peor_aspecto"
+    return None
+
+
+def obtener_preguntas_desde_notion(tipo: str) -> dict:
+    """Devuelve las preguntas del tipo dado ('Same Level', 'Top-Bottom', 'Bottom-Top').
+    Resultado: {'satisfaccion': '...', 'mejor_aspecto': '...', 'peor_aspecto': '...'}
+    """
+    with lock:
+        if tipo in _cache_preguntas:
+            return _cache_preguntas[tipo]
+    try:
+        resultado = notion.search(
+            query=config.NOTION_QUESTIONS_DATABASE_NAME,
+            filter={"value": _tipo_objeto_busqueda_bbdd(), "property": "object"},
+            page_size=10,
+        )
+        db_id = None
+        for bbdd in resultado.get("results", []):
+            if normalizar_nombre(_extraer_titulo_bbdd(bbdd)) == normalizar_nombre(config.NOTION_QUESTIONS_DATABASE_NAME):
+                db_id = _data_source_id(bbdd)
+                break
+        if not db_id:
+            logging.warning("No se encontró la base de preguntas '%s'", config.NOTION_QUESTIONS_DATABASE_NAME)
+            return {}
+
+        preguntas = {}
+        tipo_norm = normalizar_nombre(tipo)
+        cursor = None
+        while True:
+            kwargs: dict = {"page_size": 100}
+            if cursor:
+                kwargs["start_cursor"] = cursor
+            resp = _query_bbdd(db_id, **kwargs)
+            for fila in resp.get("results", []):
+                props = fila.get("properties", {})
+                if normalizar_nombre(_texto_propiedad(props, "Tipo")) != tipo_norm:
+                    continue
+                texto = _texto_propiedad(props, "Pregunta")
+                clave = _normalizar_clave_pregunta(_texto_propiedad(props, "Clave"))
+                if texto and clave:
+                    preguntas[clave] = texto
+            if not resp.get("has_more"):
+                break
+            cursor = resp.get("next_cursor")
+
+        with lock:
+            _cache_preguntas[tipo] = preguntas
+        return preguntas
+    except Exception:
+        logging.exception("Error leyendo preguntas desde Notion para tipo '%s'", tipo)
+        return {}
+
+
 def sugerir_empleados_parecidos(nombre: str, limite: int = 8) -> list[str]:
     candidatos = []
     for registro in _obtener_registros_empleados():
@@ -984,15 +1048,39 @@ def obtener_evaluaciones_de_bbdd(database_id, evaluado):
                 nombre_tecnico = titulo_items[0]["text"]["content"] if titulo_items else ""
                 evaluador = _texto_rich_text(props, "Evaluador") or _texto_rich_text(props, "Persona que evalua") or nombre_tecnico or "Desconocido"
                 fecha = (props.get("Fecha", {}).get("date") or {}).get("start", "")
+                sat_sup  = _texto_rich_text(props, "Satisfaccion de superiores")
+                sat_igu  = _texto_rich_text(props, "Satisfaccion de iguales")
+                sat_inf  = _texto_rich_text(props, "Satisfaccion de inferiores")
+                mej_sup  = _texto_rich_text(props, "Mejor aspecto de superiores")
+                mej_igu  = _texto_rich_text(props, "Mejor aspecto de iguales")
+                mej_inf  = _texto_rich_text(props, "Mejor aspecto de inferiores")
+                peor_sup = _texto_rich_text(props, "Peor aspecto de superiores")
+                peor_igu = _texto_rich_text(props, "Peor aspecto de iguales")
+                peor_inf = _texto_rich_text(props, "Peor aspecto de inferiores")
+                if sat_sup or mej_sup or peor_sup:
+                    relacion = "superior"
+                    sat_act, mej_act, peor_act = sat_sup, mej_sup, peor_sup
+                elif sat_inf or mej_inf or peor_inf:
+                    relacion = "inferior"
+                    sat_act, mej_act, peor_act = sat_inf, mej_inf, peor_inf
+                elif sat_igu or mej_igu or peor_igu:
+                    relacion = "igual"
+                    sat_act, mej_act, peor_act = sat_igu, mej_igu, peor_igu
+                else:
+                    relacion = ""
+                    sat_act  = _texto_rich_text(props, "Satisfaccion")
+                    mej_act  = _texto_rich_text(props, "Mejor aspecto")
+                    peor_act = _texto_rich_text(props, "Peor aspecto")
                 evaluaciones.append({
                     "nombre": evaluador,
                     "evaluado": evaluado,
                     "persona_evaluada": evaluado,
                     "persona_que_evalua": evaluador,
                     "proyecto": _texto_rich_text(props, "Proyecto"),
-                    "satisfaccion": _texto_rich_text(props, "Satisfaccion"),
-                    "mejor_aspecto": _texto_rich_text(props, "Mejor aspecto"),
-                    "peor_aspecto": _texto_rich_text(props, "Peor aspecto"),
+                    "satisfaccion": sat_act,
+                    "mejor_aspecto": mej_act,
+                    "peor_aspecto": peor_act,
+                    "relacion": relacion,
                     "fecha": fecha,
                 })
             if resultado.get("has_more"):
@@ -1444,3 +1532,336 @@ def obtener_objetivos(advisee_nombre: str) -> list[dict]:
     except Exception:
         logging.exception(f"Error obteniendo objetivos de '{advisee_nombre}'")
         return []
+
+
+# ---------------------------------------------------------------------------
+# Lista CA: helpers para acceso y búsqueda de CA por empleado
+# ---------------------------------------------------------------------------
+
+def _obtener_db_id_lista_ca() -> str | None:
+    with lock:
+        db_id = _cache_lista_ca["db_id"]
+    if db_id:
+        return db_id
+    try:
+        resultado = notion.search(
+            query="Lista CA",
+            filter={"value": _tipo_objeto_busqueda_bbdd(), "property": "object"},
+            page_size=10,
+        )
+        for bbdd in resultado.get("results", []):
+            titulo = normalizar_nombre(_extraer_titulo_bbdd(bbdd))
+            if titulo == "lista ca" or titulo.startswith("lista ca"):
+                db_id = _data_source_id(bbdd)
+                with lock:
+                    _cache_lista_ca["db_id"] = db_id
+                return db_id
+    except Exception:
+        logging.exception("Error buscando 'Lista CA'")
+    return None
+
+
+def _asegurar_columna_acceso_lista_ca(db_id: str) -> None:
+    try:
+        bbdd = notion.databases.retrieve(database_id=db_id)
+        if "Acceso habilitado" not in bbdd.get("properties", {}):
+            notion.databases.update(database_id=db_id, properties={"Acceso habilitado": {"checkbox": {}}})
+    except Exception:
+        logging.exception("No se pudo asegurar columna 'Acceso habilitado' en Lista CA")
+
+
+def _ca_fila_por_nombre(db_id: str, ca_norms) -> dict | None:
+    if isinstance(ca_norms, str):
+        ca_norms = {ca_norms}
+    cursor = None
+    while True:
+        kwargs: dict = {"page_size": 100}
+        if cursor:
+            kwargs["start_cursor"] = cursor
+        resp = _query_bbdd(db_id, **kwargs)
+        for fila in resp.get("results", []):
+            props = fila.get("properties", {})
+            prop_ca = props.get("CA", {})
+            nombre_ca = "".join(
+                p.get("plain_text", "")
+                for p in (prop_ca.get("rich_text") or prop_ca.get("title") or [])
+            ).strip()
+            if normalizar_nombre(nombre_ca) in ca_norms:
+                return fila
+        if not resp.get("has_more"):
+            break
+        cursor = resp.get("next_cursor")
+    return None
+
+
+def obtener_ca_de_empleado(empleado_nombre: str) -> str | None:
+    """Busca quién es el CA de un empleado revisando las columnas A1, A2... de Lista CA."""
+    empleado_norm = normalizar_nombre(empleado_nombre)
+    db_id = _obtener_db_id_lista_ca()
+    if not db_id:
+        return None
+    try:
+        cursor = None
+        while True:
+            kwargs: dict = {"page_size": 100}
+            if cursor:
+                kwargs["start_cursor"] = cursor
+            resp = _query_bbdd(db_id, **kwargs)
+            for fila in resp.get("results", []):
+                props = fila.get("properties", {})
+                for col_name, prop_val in props.items():
+                    if not re.match(r"^A\d+$", col_name):
+                        continue
+                    nombre_a = "".join(
+                        p.get("plain_text", "")
+                        for p in (prop_val.get("rich_text") or prop_val.get("title") or [])
+                    ).strip()
+                    if normalizar_nombre(nombre_a) == empleado_norm:
+                        prop_ca = props.get("CA", {})
+                        ca = "".join(
+                            p.get("plain_text", "")
+                            for p in (prop_ca.get("rich_text") or prop_ca.get("title") or [])
+                        ).strip()
+                        return ca or None
+            if not resp.get("has_more"):
+                break
+            cursor = resp.get("next_cursor")
+    except Exception:
+        logging.exception("Error buscando CA de '%s'", empleado_nombre)
+    return None
+
+
+_cache_acceso_ca_db: dict = {"db_id": None}
+
+
+def _norm_ca(nombre: str) -> str:
+    sin_acentos = unicodedata.normalize("NFD", nombre).encode("ascii", "ignore").decode("ascii")
+    return " ".join(sin_acentos.strip().lower().split())
+
+
+def _obtener_o_crear_bbdd_acceso_ca() -> str:
+    with lock:
+        db_id = _cache_acceso_ca_db["db_id"]
+    if db_id:
+        return db_id
+    titulo = "Acceso CA"
+    resultado = notion.search(
+        query=titulo,
+        filter={"value": _tipo_objeto_busqueda_bbdd(), "property": "object"},
+        page_size=10,
+    )
+    for bbdd in resultado.get("results", []):
+        if normalizar_nombre(_extraer_titulo_bbdd(bbdd)) == "acceso ca":
+            db_id = _data_source_id(bbdd)
+            with lock:
+                _cache_acceso_ca_db["db_id"] = db_id
+            return db_id
+    parent = _parent_bbdd_referencia()
+    props = {"Name": {"title": {}}, "Activo": {"checkbox": {}}}
+    if _usa_data_sources():
+        nueva = notion.databases.create(
+            parent=parent,
+            title=[{"type": "text", "text": {"content": titulo}}],
+            initial_data_source={"title": [{"type": "text", "text": {"content": titulo}}], "properties": props},
+        )
+        nueva = notion.databases.retrieve(database_id=nueva["id"])
+    else:
+        nueva = notion.databases.create(
+            parent=parent,
+            title=[{"type": "text", "text": {"content": titulo}}],
+            properties=props,
+        )
+    db_id = _data_source_id(nueva)
+    with lock:
+        _cache_acceso_ca_db["db_id"] = db_id
+    logging.info("Base de datos 'Acceso CA' creada en Notion")
+    return db_id
+
+
+def _acceso_ca_fila(db_id: str, ca_keys: set) -> dict | None:
+    cursor = None
+    while True:
+        kwargs: dict = {"page_size": 100}
+        if cursor:
+            kwargs["start_cursor"] = cursor
+        resp = _query_bbdd(db_id, **kwargs)
+        for fila in resp.get("results", []):
+            nombre = _extraer_titulo_pagina(fila)
+            if _norm_ca(nombre) in ca_keys:
+                return fila
+        if not resp.get("has_more"):
+            break
+        cursor = resp.get("next_cursor")
+    return None
+
+
+def ca_tiene_acceso_activo(ca_nombre: str, ca_aliases=None) -> bool:
+    ca_keys = {_norm_ca(n) for n in [ca_nombre, *(ca_aliases or [])] if n}
+    try:
+        db_id = _obtener_o_crear_bbdd_acceso_ca()
+        fila = _acceso_ca_fila(db_id, ca_keys)
+        if not fila:
+            return False
+        return bool(fila.get("properties", {}).get("Activo", {}).get("checkbox", False))
+    except Exception:
+        logging.exception("Error verificando acceso de CA '%s'", ca_nombre)
+        return False
+
+
+def toggle_acceso_advisees(ca_nombre: str, activo: bool, ca_aliases=None) -> bool:
+    ca_keys = {_norm_ca(n) for n in [ca_nombre, *(ca_aliases or [])] if n}
+    try:
+        db_id = _obtener_o_crear_bbdd_acceso_ca()
+        fila = _acceso_ca_fila(db_id, ca_keys)
+        if fila:
+            notion.pages.update(page_id=fila["id"], properties={"Activo": {"checkbox": activo}})
+        else:
+            _crear_pagina_en_bbdd(db_id, {
+                "Name": {"title": [{"text": {"content": ca_nombre}}]},
+                "Activo": {"checkbox": activo},
+            })
+        return True
+    except Exception:
+        logging.exception("Error actualizando acceso de CA '%s'", ca_nombre)
+        return False
+
+
+# ---------------------------------------------------------------------------
+# Informes Finales
+# ---------------------------------------------------------------------------
+
+_PROPS_INFORMES_FINALES = {
+    "Name": {"title": {}},
+    "CA": {"rich_text": {}},
+    "Fecha": {"date": {}},
+    "Archivo_docx": {"rich_text": {}},
+    "Archivo_html": {"rich_text": {}},
+    "URL": {"url": {}},
+}
+
+_cache_informes_finales_db: dict = {"db_id": None}
+
+
+def _obtener_o_crear_bbdd_informes_finales() -> str:
+    with lock:
+        db_id = _cache_informes_finales_db["db_id"]
+    if db_id:
+        return db_id
+    titulo = "Informes Finales"
+    resultado = notion.search(
+        query=titulo,
+        filter={"value": _tipo_objeto_busqueda_bbdd(), "property": "object"},
+        page_size=10,
+    )
+    for bbdd in resultado.get("results", []):
+        if normalizar_nombre(_extraer_titulo_bbdd(bbdd)) == normalizar_nombre(titulo):
+            db_id = _data_source_id(bbdd)
+            with lock:
+                _cache_informes_finales_db["db_id"] = db_id
+            return db_id
+    parent = _parent_bbdd_referencia()
+    if _usa_data_sources():
+        nueva = notion.databases.create(
+            parent=parent,
+            title=[{"type": "text", "text": {"content": titulo}}],
+            initial_data_source={"title": [{"type": "text", "text": {"content": titulo}}], "properties": _PROPS_INFORMES_FINALES},
+        )
+        nueva = notion.databases.retrieve(database_id=nueva["id"])
+    else:
+        nueva = notion.databases.create(
+            parent=parent,
+            title=[{"type": "text", "text": {"content": titulo}}],
+            properties=_PROPS_INFORMES_FINALES,
+        )
+    db_id = _data_source_id(nueva)
+    with lock:
+        _cache_informes_finales_db["db_id"] = db_id
+    logging.info("Base de datos 'Informes Finales' creada en Notion")
+    return db_id
+
+
+def guardar_informe_final(ca_nombre: str, advisee: str, docx_filename: str, html_filename: str, url: str) -> None:
+    db_id = _obtener_o_crear_bbdd_informes_finales()
+    advisee_norm = normalizar_nombre(advisee)
+
+    existentes = []
+    cursor = None
+    while True:
+        kwargs: dict = {"page_size": 100}
+        if cursor:
+            kwargs["start_cursor"] = cursor
+        resp = _query_bbdd(db_id, **kwargs)
+        for fila in resp.get("results", []):
+            props = fila.get("properties", {})
+            nombre_val = " ".join(p.get("plain_text", "") for p in props.get("Name", {}).get("title", [])).strip()
+            if normalizar_nombre(nombre_val) != advisee_norm:
+                continue
+            existentes.append({
+                "page_id": fila["id"],
+                "fecha": (props.get("Fecha", {}).get("date") or {}).get("start", ""),
+                "docx": _texto_rich_text(props, "Archivo_docx"),
+                "html": _texto_rich_text(props, "Archivo_html"),
+            })
+        if not resp.get("has_more"):
+            break
+        cursor = resp.get("next_cursor")
+
+    existentes.sort(key=lambda x: x["fecha"])
+    while len(existentes) >= 2:
+        oldest = existentes.pop(0)
+        try:
+            notion.pages.update(page_id=oldest["page_id"], archived=True)
+        except Exception:
+            logging.exception("No se pudo archivar informe final antiguo %s", oldest["page_id"])
+        for fname in (oldest.get("docx", ""), oldest.get("html", "")):
+            if fname:
+                try:
+                    ruta = os.path.join(config.CARPETA_WEB, os.path.basename(fname))
+                    if os.path.exists(ruta):
+                        os.remove(ruta)
+                except Exception:
+                    logging.exception("No se pudo borrar archivo antiguo: %s", fname)
+
+    fecha = datetime.now(timezone.utc)
+    _crear_pagina_en_bbdd(db_id, {
+        "Name": {"title": [{"text": {"content": advisee}}]},
+        "CA": {"rich_text": [{"text": {"content": ca_nombre}}]},
+        "Fecha": {"date": {"start": fecha.isoformat()}},
+        "Archivo_docx": {"rich_text": [{"text": {"content": docx_filename}}]},
+        "Archivo_html": {"rich_text": [{"text": {"content": html_filename}}]},
+        "URL": {"url": url},
+    })
+
+
+def obtener_informe_final_reciente(advisee: str) -> dict | None:
+    """Devuelve {docx, html} del informe final más reciente del advisee, o None."""
+    try:
+        db_id = _obtener_o_crear_bbdd_informes_finales()
+        advisee_norm = normalizar_nombre(advisee)
+        registros = []
+        cursor = None
+        while True:
+            kwargs: dict = {"page_size": 100}
+            if cursor:
+                kwargs["start_cursor"] = cursor
+            resp = _query_bbdd(db_id, **kwargs)
+            for fila in resp.get("results", []):
+                props = fila.get("properties", {})
+                nombre_val = " ".join(p.get("plain_text", "") for p in props.get("Name", {}).get("title", [])).strip()
+                if normalizar_nombre(nombre_val) != advisee_norm:
+                    continue
+                registros.append({
+                    "fecha": (props.get("Fecha", {}).get("date") or {}).get("start", ""),
+                    "docx": _texto_rich_text(props, "Archivo_docx"),
+                    "html": _texto_rich_text(props, "Archivo_html"),
+                })
+            if not resp.get("has_more"):
+                break
+            cursor = resp.get("next_cursor")
+        if not registros:
+            return None
+        registros.sort(key=lambda x: x["fecha"], reverse=True)
+        return registros[0]
+    except Exception:
+        logging.exception("Error obteniendo informe final de '%s'", advisee)
+        return None

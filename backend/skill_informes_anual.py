@@ -125,18 +125,31 @@ def _formatear_contexto(emp_data: dict) -> str:
 
     evaluaciones = emp_data.get("evaluaciones", [])
     if evaluaciones:
-        bloques.append("\n=== EVALUACIONES DE PROYECTO ===")
+        _GRUPOS = [
+            ("superior", "EVALUACIONES DE SUPERIORES (valoran su gestión o trabajo desde arriba)"),
+            ("igual",    "EVALUACIONES DE IGUALES (mismo nivel jerárquico)"),
+            ("inferior", "EVALUACIONES DE SUBORDINADOS (personas que reportan a él/ella)"),
+            ("",         "EVALUACIONES (sin nivel especificado — datos anteriores al sistema de jerarquía)"),
+        ]
+        por_rel: dict = {"superior": [], "igual": [], "inferior": [], "": []}
         for ev in evaluaciones:
-            proyecto  = ev.get("proyecto") or "Sin proyecto"
-            evaluador = ev.get("persona_que_evalua") or ev.get("nombre") or "Desconocido"
-            fecha     = (ev.get("fecha") or "")[:10]
-            sat       = ev.get("satisfaccion", "")
-            mejor     = ev.get("mejor_aspecto", "")
-            peor      = ev.get("peor_aspecto", "")
-            bloques.append(
-                f"[{fecha}] Proyecto: {proyecto} | Evaluador: {evaluador} | "
-                f"Satisfacción: {sat}/5 | Mejor: {mejor} | Peor: {peor}"
-            )
+            por_rel.setdefault(ev.get("relacion", ""), []).append(ev)
+        for rel_key, encabezado in _GRUPOS:
+            evs = por_rel.get(rel_key, [])
+            if not evs:
+                continue
+            bloques.append(f"\n=== {encabezado} ===")
+            for ev in evs:
+                proyecto  = ev.get("proyecto") or "Sin proyecto"
+                evaluador = ev.get("persona_que_evalua") or ev.get("nombre") or "Desconocido"
+                fecha     = (ev.get("fecha") or "")[:10]
+                sat       = ev.get("satisfaccion", "")
+                mejor     = ev.get("mejor_aspecto", "")
+                peor      = ev.get("peor_aspecto", "")
+                bloques.append(
+                    f"[{fecha}] Proyecto: {proyecto} | Evaluador: {evaluador} | "
+                    f"Satisfacción: {sat}/5 | Mejor: {mejor} | Peor: {peor}"
+                )
 
     return "\n".join(bloques) if bloques else "(Sin datos de evaluación disponibles)"
 

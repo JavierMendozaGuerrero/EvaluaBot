@@ -1,9 +1,17 @@
+import cgi
+import io
 import json
 import logging
 import os
+import time
 import urllib.parse
 from http.server import BaseHTTPRequestHandler
 from socketserver import TCPServer
+
+try:
+    import mammoth
+except ImportError:
+    mammoth = None
 
 from . import config
 from .notion_service import (
@@ -14,6 +22,11 @@ from .notion_service import (
     listar_advisees_con_opiniones_ca,
     guardar_objetivos,
     obtener_objetivos,
+    guardar_informe_final,
+    obtener_informe_final_reciente,
+    obtener_ca_de_empleado,
+    ca_tiene_acceso_activo,
+    toggle_acceso_advisees,
 )
 from .reports import generar_archivo_trayectoria, generar_archivos_informe
 from .skill_informes_anual import generar_informe_anual, obtener_empleados_evaluacion_anual
@@ -59,6 +72,16 @@ class ApiHandler(BaseHTTPRequestHandler):
         if not longitud:
             return {}
         return json.loads(self.rfile.read(longitud).decode("utf-8"))
+
+    def leer_multipart(self):
+        longitud = int(self.headers.get("Content-Length", 0))
+        body = self.rfile.read(longitud)
+        environ = {
+            "REQUEST_METHOD": "POST",
+            "CONTENT_TYPE": self.headers.get("Content-Type", ""),
+            "CONTENT_LENGTH": str(longitud),
+        }
+        return cgi.FieldStorage(fp=io.BytesIO(body), headers=self.headers, environ=environ)
 
     def responder_json(self, payload, status=200):
         body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
@@ -150,6 +173,56 @@ class ApiHandler(BaseHTTPRequestHandler):
                 nombres = obtener_empleados_evaluacion_anual()
                 self.responder_json({"evaluados": [{"value": n, "label": n} for n in nombres]})
                 return
+            if ruta == "/api/acceso-advisees":
+                sesion = self.sesion_actual()
+                if not sesion:
+                    raise PermissionError("Inicia sesión para acceder.")
+                ca_aliases_sesion = [sesion.get("username", ""), sesion.get("email", "")]
+                activo = ca_tiene_acceso_activo(sesion.get("persona", ""), ca_aliases=ca_aliases_sesion)
+                self.responder_json({"activo": activo})
+                return
+            if ruta == "/api/informe-final":
+                sesion = self.sesion_actual()
+                if not sesion:
+                    raise PermissionError("Inicia sesión para acceder.")
+                query_params = urllib.parse.parse_qs(parsed.query)
+                evaluado = query_params.get("evaluado", [""])[0]
+                ca_nombre = sesion.get("persona", "")
+                advisees_ca = obtener_advisees(
+                    ca_nombre,
+                    ca_aliases=[sesion.get("username", ""), sesion.get("email", "")],
+                )
+                es_admin = sesion.get("is_admin", False)
+                es_ca = normalizar_nombre(evaluado) in [normalizar_nombre(a) for a in advisees_ca]
+                es_propio = normalizar_nombre(evaluado) == normalizar_nombre(ca_nombre)
+                if es_propio and not es_admin and not es_ca:
+                    ca_del_evaluado = obtener_ca_de_empleado(evaluado)
+                    acceso = bool(ca_del_evaluado and ca_tiene_acceso_activo(ca_del_evaluado))
+                    informe = obtener_informe_final_reciente(evaluado) if acceso else None
+                    if acceso and informe:
+                        self.responder_json({
+                            "disponible": True,
+                            "accesoActivo": True,
+                            "docxUrl": self.url_archivo(informe["docx"], evaluado),
+                            "htmlUrl": self.url_archivo(informe["html"], evaluado) if informe.get("html") else None,
+                        })
+                    elif acceso:
+                        self.responder_json({"disponible": False, "accesoActivo": True, "mensaje": "Tu CA aún no ha subido tu informe final."})
+                    else:
+                        self.responder_json({"disponible": False, "accesoActivo": False, "mensaje": "Tu CA aún no ha publicado tu informe final."})
+                    return
+                if not es_admin and not es_ca:
+                    raise PermissionError("No tienes permiso para ver este informe.")
+                informe = obtener_informe_final_reciente(evaluado)
+                if not informe:
+                    self.responder_json({"disponible": False, "mensaje": "No hay informe final disponible."})
+                    return
+                self.responder_json({
+                    "disponible": True,
+                    "docxUrl": self.url_archivo(informe["docx"], evaluado),
+                    "htmlUrl": self.url_archivo(informe["html"], evaluado) if informe.get("html") else None,
+                })
+                return
             if ruta.startswith("/api/files/"):
                 self.servir_archivo_protegido(ruta.removeprefix("/api/files/"), parsed.query)
                 return
@@ -163,7 +236,13 @@ class ApiHandler(BaseHTTPRequestHandler):
     def do_POST(self):
         ruta = urllib.parse.urlparse(self.path).path
         try:
-            datos = self.leer_json()
+            ct = self.headers.get("Content-Type", "")
+            if "multipart/form-data" in ct:
+                form = self.leer_multipart()
+                datos = {}
+            else:
+                datos = self.leer_json()
+                form = None
             if ruta == "/api/register":
                 registrar_usuario(datos.get("username", ""), datos.get("password", ""))
                 self.responder_json({"ok": True})
@@ -192,6 +271,8 @@ class ApiHandler(BaseHTTPRequestHandler):
                     sesion.get("persona", ""),
                     ca_aliases=[sesion.get("username", ""), sesion.get("email", "")],
                 )
+                if not sesion.get("is_admin") and normalizar_nombre(evaluado) not in [normalizar_nombre(a) for a in advisees_ca]:
+                    raise PermissionError("Solo administradores o CAs pueden generar informes.")
                 validar_acceso_sesion(sesion, evaluado, extra_permitidos=advisees_ca)
                 respuesta = {}
                 try:
@@ -216,6 +297,13 @@ class ApiHandler(BaseHTTPRequestHandler):
                     sesion.get("persona", ""),
                     ca_aliases=[sesion.get("username", ""), sesion.get("email", "")],
                 )
+                es_propio_tray = normalizar_nombre(evaluado) == normalizar_nombre(sesion.get("persona", ""))
+                if not sesion.get("is_admin") and normalizar_nombre(evaluado) not in [normalizar_nombre(a) for a in advisees_ca]:
+                    if not es_propio_tray:
+                        raise PermissionError("Solo administradores o CAs pueden generar informes.")
+                    ca_tray = obtener_ca_de_empleado(evaluado)
+                    if not (ca_tray and ca_tiene_acceso_activo(ca_tray)):
+                        raise PermissionError("Tu CA aún no ha publicado tu informe final.")
                 validar_acceso_sesion(sesion, evaluado, extra_permitidos=advisees_ca)
                 total, slug = generar_archivo_trayectoria(evaluado)
                 self.responder_json({"total": total, "htmlUrl": self.url_archivo(f"trayectoria_{slug}.html", evaluado)})
@@ -244,6 +332,59 @@ class ApiHandler(BaseHTTPRequestHandler):
                     "htmlUrl": self.url_archivo(f"informe_anual_{slug}.html", evaluado),
                 })
                 return
+            if ruta == "/api/acceso-advisees":
+                activo = datos.get("activo", False)
+                ca_aliases_sesion = [sesion.get("username", ""), sesion.get("email", "")]
+                exito = toggle_acceso_advisees(sesion.get("persona", ""), activo, ca_aliases=ca_aliases_sesion)
+                if not exito:
+                    raise RuntimeError("No se encontró tu fila en Lista CA. Contacta con el administrador.")
+                self.responder_json({"ok": True, "activo": activo})
+                return
+            if ruta == "/api/subir-informe-final":
+                if form is None:
+                    self.responder_json({"error": "Se esperaba multipart/form-data."}, 400)
+                    return
+                evaluado_subida = form.getvalue("evaluado", "")
+                archivo_field = form["archivo"] if "archivo" in form else None
+                if not evaluado_subida or archivo_field is None:
+                    self.responder_json({"error": "Faltan campos: evaluado y archivo."}, 400)
+                    return
+                advisees_ca = obtener_advisees(
+                    sesion.get("persona", ""),
+                    ca_aliases=[sesion.get("username", ""), sesion.get("email", "")],
+                )
+                if not sesion.get("is_admin") and normalizar_nombre(evaluado_subida) not in [normalizar_nombre(a) for a in advisees_ca]:
+                    raise PermissionError("Solo puedes subir informes para tus advisees.")
+                slug_ev = slug_archivo(evaluado_subida)
+                ts = int(time.time())
+                docx_filename = f"informe_final_{slug_ev}_{ts}.docx"
+                docx_path = os.path.join(config.CARPETA_WEB, docx_filename)
+                with open(docx_path, "wb") as f:
+                    f.write(archivo_field.file.read())
+                html_filename = None
+                if mammoth:
+                    html_filename = f"informe_final_{slug_ev}_{ts}.html"
+                    html_path = os.path.join(config.CARPETA_WEB, html_filename)
+                    with open(docx_path, "rb") as f:
+                        resultado = mammoth.convert_to_html(f)
+                    html_body = f"<!DOCTYPE html><html><head><meta charset='utf-8'><style>{config.IGENERIS_CSS}</style></head><body class='page'>{resultado.value}</body></html>"
+                    with open(html_path, "w", encoding="utf-8") as f:
+                        f.write(html_body)
+                url_notion = f"{config.APP_PUBLIC_URL}/api/files/{urllib.parse.quote(docx_filename)}?evaluado={urllib.parse.quote(evaluado_subida)}"
+                ca_subida = sesion.get("persona", "") if not sesion.get("is_admin") else ""
+                guardar_informe_final(
+                    ca_nombre=ca_subida,
+                    advisee=evaluado_subida,
+                    docx_filename=docx_filename,
+                    html_filename=html_filename or "",
+                    url=url_notion,
+                )
+                self.responder_json({
+                    "ok": True,
+                    "docxUrl": self.url_archivo(docx_filename, evaluado_subida),
+                    "htmlUrl": self.url_archivo(html_filename, evaluado_subida) if html_filename else None,
+                })
+                return
             self.responder_json({"error": "No encontrado"}, 404)
         except PermissionError as error:
             self.responder_json({"error": str(error)}, 403)
@@ -256,23 +397,46 @@ class ApiHandler(BaseHTTPRequestHandler):
         return f"/api/files/{urllib.parse.quote(nombre_archivo)}?{query}"
 
     def servir_archivo_protegido(self, nombre_archivo, query):
-        datos = urllib.parse.parse_qs(query)
-        evaluado = datos.get("evaluado", [""])[0]
+        params = urllib.parse.parse_qs(query)
+        evaluado = params.get("evaluado", [""])[0]
         sesion = self.sesion_actual()
+        if not sesion:
+            raise PermissionError("Inicia sesión para acceder.")
+        ca_nombre = sesion.get("persona", "")
         advisees_ca = obtener_advisees(
-            sesion.get("persona", "") if sesion else "",
-            ca_aliases=[sesion.get("username", ""), sesion.get("email", "")] if sesion else [],
+            ca_nombre,
+            ca_aliases=[sesion.get("username", ""), sesion.get("email", "")],
         )
-        validar_acceso_sesion(sesion, evaluado, extra_permitidos=advisees_ca)
-        nombre_autorizado = evaluado
-        slug = slug_archivo(nombre_autorizado)
-        if not (nombre_archivo.startswith(f"informe_{slug}.") or nombre_archivo.startswith(f"trayectoria_{slug}.") or nombre_archivo.startswith(f"informe_anual_{slug}.")):
+        es_admin = sesion.get("is_admin", False)
+        es_ca = normalizar_nombre(evaluado) in [normalizar_nombre(a) for a in advisees_ca]
+        es_propio = normalizar_nombre(evaluado) == normalizar_nombre(ca_nombre)
+        slug = slug_archivo(evaluado)
+        es_borrador = (
+            nombre_archivo.startswith(f"informe_{slug}.")
+            or nombre_archivo.startswith(f"informe_anual_{slug}.")
+        )
+        es_trayectoria = nombre_archivo.startswith(f"trayectoria_{slug}.")
+        es_final = nombre_archivo.startswith(f"informe_final_{slug}_")
+        if not es_borrador and not es_trayectoria and not es_final:
             raise PermissionError("El archivo solicitado no corresponde con la persona autorizada.")
+        if es_borrador and not es_admin and not es_ca:
+            raise PermissionError("Solo el CA o un administrador pueden ver los borradores generados.")
+        if (es_trayectoria or es_final) and not es_admin and not es_ca:
+            if es_propio:
+                ca_del_evaluado = obtener_ca_de_empleado(evaluado)
+                if not (ca_del_evaluado and ca_tiene_acceso_activo(ca_del_evaluado)):
+                    raise PermissionError("Tu CA aún no ha publicado tu informe.")
+            else:
+                raise PermissionError("No tienes permiso para ver este archivo.")
         ruta = os.path.join(config.CARPETA_WEB, os.path.basename(nombre_archivo))
         if not os.path.exists(ruta):
             self.responder_json({"error": "Archivo no encontrado"}, 404)
             return
-        content_type = "application/vnd.openxmlformats-officedocument.wordprocessingml.document" if nombre_archivo.endswith(".docx") else "text/html; charset=utf-8"
+        content_type = (
+            "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+            if nombre_archivo.endswith(".docx")
+            else "text/html; charset=utf-8"
+        )
         with open(ruta, "rb") as f:
             body = f.read()
         self.send_response(200)

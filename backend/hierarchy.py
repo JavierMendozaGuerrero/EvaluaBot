@@ -43,3 +43,12 @@ def sufijo_preguntas(relacion: str) -> str:
     if relacion == "inferior":
         return " -EVALUANDO A GENTE DE ARRIBA"
     return " -EVALUANDO A GENTE DE MI NIVEL"
+
+
+def tipo_relacion(relacion: str) -> str:
+    """Convierte la relación jerárquica al nombre de sección en la BD de Preguntas."""
+    if relacion == "superior":
+        return "Top-Bottom"
+    if relacion == "inferior":
+        return "Bottom-Top"
+    return "Same Level"

@@ -7,8 +7,8 @@ from slack_bolt.adapter.socket_mode import SocketModeHandler
 from . import config
 from .ca_reviews import ca_ts, ca_ts_expirados, manejar_mensaje_ca
 from .clients import slack_app
-from .hierarchy import comparar_jerarquia, sufijo_preguntas
-from .notion_service import buscar_empleado_en_lista, buscar_empleado_y_cargo, guardar_en_notion, obtener_cargo_por_slack_id, obtener_nombre_por_id_usuario, sugerir_empleados_parecidos
+from .hierarchy import comparar_jerarquia, tipo_relacion
+from .notion_service import buscar_empleado_en_lista, buscar_empleado_y_cargo, guardar_en_notion, obtener_cargo_por_slack_id, obtener_nombre_por_id_usuario, obtener_preguntas_desde_notion, sugerir_empleados_parecidos
 from .state import avisos_responder_en_hilo, conversaciones, evaluacion_hora, evaluacion_ultimo_recordatorio, evaluacion_ts, evaluacion_ts_expirados, lock
 from .utils import normalizar_nombre
 
@@ -101,13 +101,14 @@ def clave_modificacion(texto):
     return OPCIONES_MODIFICACION.get(normalizar_nombre(texto))
 
 
-def texto_pregunta_por_clave(clave, sufijo=""):
+def texto_pregunta_por_clave(clave, relacion="igual"):
+    if clave in ("satisfaccion", "mejor_aspecto", "peor_aspecto"):
+        preguntas = obtener_preguntas_desde_notion(tipo_relacion(relacion))
+        if preguntas.get(clave):
+            return preguntas[clave]
     for pregunta in config.PREGUNTAS:
         if pregunta["clave"] == clave:
-            texto = pregunta["texto"]
-            if sufijo and clave in ("satisfaccion", "mejor_aspecto", "peor_aspecto"):
-                texto += sufijo
-            return texto
+            return pregunta["texto"]
     return "Escribe la nueva respuesta."
 
 
@@ -286,13 +287,12 @@ def handle_message_events(event, logger):
                             estado["cargo_evaluador"] = obtener_cargo_por_slack_id(user_id)
                         relacion = comparar_jerarquia(estado.get("cargo_evaluador") or "", cargo_evaluado or "")
                         estado["relacion_jerarquica"] = relacion
-                        estado["sufijo_jerarquico"] = sufijo_preguntas(relacion)
                         estado["modo"] = "esperando_satisfaccion"
                         accion = "pedir_satisfaccion"
-                        sufijo = estado["sufijo_jerarquico"]
-                        pregunta = (
-                            f"¿Cómo de satisfecho estás con *{empleado}* en *{estado['respuestas'].get('proyecto', '?')}*? "
-                            f"Responde un número del 1 al 5.{sufijo}"
+                        preguntas = obtener_preguntas_desde_notion(tipo_relacion(relacion))
+                        pregunta = preguntas.get(
+                            "satisfaccion",
+                            "¿Cómo de satisfecho estás con esa persona? (responde un número del 1 al 5)",
                         )
                 elif _parece_saludo(texto):
                     accion = "pedir_persona"
@@ -305,37 +305,37 @@ def handle_message_events(event, logger):
                 pregunta = "¿Qué miembro del proyecto quieres evaluar?"
 
         elif modo == "esperando_satisfaccion":
-            sufijo = estado.get("sufijo_jerarquico", "")
+            preguntas = obtener_preguntas_desde_notion(tipo_relacion(estado.get("relacion_jerarquica", "igual")))
             if _es_valor_satisfaccion(texto):
                 estado["respuestas"]["satisfaccion"] = texto
                 estado["modo"] = "esperando_mejor"
                 accion = "pedir_mejor"
-                pregunta = f"¿Cuál es el mejor aspecto de esa persona?{sufijo}"
+                pregunta = preguntas.get("mejor_aspecto", "¿Cuál es el mejor aspecto de esa persona?")
             else:
                 accion = "pedir_satisfaccion"
-                pregunta = f"Responde un número del 1 al 5 para la satisfacción.{sufijo}"
+                pregunta = "Responde un número del 1 al 5 para la satisfacción."
 
         elif modo == "esperando_mejor":
-            sufijo = estado.get("sufijo_jerarquico", "")
+            preguntas = obtener_preguntas_desde_notion(tipo_relacion(estado.get("relacion_jerarquica", "igual")))
             if texto:
                 estado["respuestas"]["mejor_aspecto"] = texto
                 estado["modo"] = "esperando_peor"
                 accion = "pedir_peor"
-                pregunta = f"¿Cuál es el peor aspecto de esa persona?{sufijo}"
+                pregunta = preguntas.get("peor_aspecto", "¿Cuál es el peor aspecto de esa persona?")
             else:
                 accion = "pedir_mejor"
-                pregunta = f"¿Cuál es el mejor aspecto de esa persona?{sufijo}"
+                pregunta = preguntas.get("mejor_aspecto", "¿Cuál es el mejor aspecto de esa persona?")
 
         elif modo == "esperando_peor":
-            sufijo = estado.get("sufijo_jerarquico", "")
             if texto:
                 estado["respuestas"]["peor_aspecto"] = texto
                 estado["modo"] = "confirmacion"
                 accion = "mostrar_resumen"
                 pregunta = resumen_respuestas(estado["respuestas"])
             else:
+                preguntas = obtener_preguntas_desde_notion(tipo_relacion(estado.get("relacion_jerarquica", "igual")))
                 accion = "pedir_peor"
-                pregunta = f"¿Cuál es el peor aspecto de esa persona?{sufijo}"
+                pregunta = preguntas.get("peor_aspecto", "¿Cuál es el peor aspecto de esa persona?")
 
         elif modo == "confirmacion":
             if respuesta_es_confirmacion(texto):
@@ -358,7 +358,7 @@ def handle_message_events(event, logger):
                 estado["campo_modificando"] = clave
                 estado["modo"] = "modificando_respuesta"
                 accion = "pedir_valor_modificacion"
-                pregunta = texto_pregunta_por_clave(clave, sufijo=estado.get("sufijo_jerarquico", ""))
+                pregunta = texto_pregunta_por_clave(clave, relacion=estado.get("relacion_jerarquica", "igual"))
             else:
                 accion = "pedir_modificacion"
                 pregunta = texto_menu_modificacion()
@@ -378,7 +378,6 @@ def handle_message_events(event, logger):
                             estado["cargo_evaluador"] = obtener_cargo_por_slack_id(user_id)
                         relacion = comparar_jerarquia(estado.get("cargo_evaluador") or "", cargo_evaluado or "")
                         estado["relacion_jerarquica"] = relacion
-                        estado["sufijo_jerarquico"] = sufijo_preguntas(relacion)
                 if accion != "pedir_valor_modificacion":
                     estado["respuestas"][clave] = valor
                     if clave == "proyecto":
@@ -389,7 +388,7 @@ def handle_message_events(event, logger):
                     pregunta = resumen_respuestas(estado["respuestas"])
             else:
                 accion = "pedir_valor_modificacion"
-                pregunta = texto_pregunta_por_clave(clave, sufijo=estado.get("sufijo_jerarquico", "")) if clave else texto_menu_modificacion()
+                pregunta = texto_pregunta_por_clave(clave, relacion=estado.get("relacion_jerarquica", "igual")) if clave else texto_menu_modificacion()
 
         elif modo == "guardar":
             accion = "guardar"

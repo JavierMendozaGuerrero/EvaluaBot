@@ -1,6 +1,8 @@
 import logging
 import os
 import re
+import threading
+import time
 import unicodedata
 from datetime import datetime, timezone
 from difflib import SequenceMatcher
@@ -468,6 +470,118 @@ def obtener_parent_bbdd_evaluados():
     except RuntimeError as error:
         logging.warning(error)
         return None
+
+
+# ---------------------------------------------------------------------------
+# BD Preguntas — configurable desde Notion
+# ---------------------------------------------------------------------------
+
+NOTION_QUESTIONS_DATABASE_NAME = "Preguntas"
+_preguntas_cache: dict = {}
+_preguntas_cache_time: dict = {}
+_PREGUNTAS_CACHE_TTL = 300
+_lock_preguntas = threading.Lock()
+
+
+def _propiedades_bbdd_preguntas():
+    return {
+        "Texto": {"title": {}},
+        "Tipo": {"select": {"options": [
+            {"name": "Top-Bottom"},
+            {"name": "Bottom-Top"},
+            {"name": "Same Level"},
+        ]}},
+        "Clave": {"select": {"options": [
+            {"name": "satisfaccion"},
+            {"name": "mejor_aspecto"},
+            {"name": "peor_aspecto"},
+        ]}},
+    }
+
+
+def _obtener_o_crear_bbdd_preguntas():
+    bbdd_id = _buscar_bbdd_en_pagina(config.NOTION_DATA_LISTS_PAGE_NAME, NOTION_QUESTIONS_DATABASE_NAME)
+    if bbdd_id:
+        return bbdd_id
+    parent = _parent_bbdd_en_pagina(config.NOTION_DATA_LISTS_PAGE_NAME, crear=True)
+    if parent.get("type") != "page_id":
+        logging.warning("No se pudo localizar la página '%s'", config.NOTION_DATA_LISTS_PAGE_NAME)
+        return None
+    titulo = NOTION_QUESTIONS_DATABASE_NAME
+    props = _propiedades_bbdd_preguntas()
+    try:
+        if _usa_data_sources():
+            nueva = notion.databases.create(
+                parent={"type": "page_id", "page_id": parent["page_id"]},
+                title=[{"type": "text", "text": {"content": titulo}}],
+                initial_data_source={"title": [{"type": "text", "text": {"content": titulo}}], "properties": props},
+            )
+            nueva = notion.databases.retrieve(database_id=nueva["id"])
+        else:
+            nueva = notion.databases.create(
+                parent={"type": "page_id", "page_id": parent["page_id"]},
+                title=[{"type": "text", "text": {"content": titulo}}],
+                properties=props,
+            )
+        bbdd_id = _data_source_id(nueva)
+        logging.info("BD '%s' creada en Notion: %s", titulo, bbdd_id)
+        _poblar_bbdd_preguntas(bbdd_id)
+        return bbdd_id
+    except Exception:
+        logging.exception("Error creando BD de Preguntas en Notion")
+        return None
+
+
+_PREGUNTAS_INICIALES = [
+    ("Top-Bottom", "satisfaccion", "¿Cómo de satisfecho estás con el desempeño de esta persona? (responde un número del 1 al 5)"),
+    ("Top-Bottom", "mejor_aspecto", "¿Cuál es el mejor aspecto de esta persona en su rol?"),
+    ("Top-Bottom", "peor_aspecto", "¿Cuál es el principal aspecto a mejorar de esta persona?"),
+    ("Bottom-Top", "satisfaccion", "¿Cómo de satisfecho estás con esta persona como líder? (responde un número del 1 al 5)"),
+    ("Bottom-Top", "mejor_aspecto", "¿Cuál es el mejor aspecto de esta persona como líder?"),
+    ("Bottom-Top", "peor_aspecto", "¿Cuál es el principal aspecto a mejorar de esta persona como líder?"),
+    ("Same Level", "satisfaccion", "¿Cómo de satisfecho estás trabajando con esta persona? (responde un número del 1 al 5)"),
+    ("Same Level", "mejor_aspecto", "¿Cuál es el mejor aspecto de esta persona como compañero?"),
+    ("Same Level", "peor_aspecto", "¿Cuál es el principal aspecto a mejorar de esta persona como compañero?"),
+]
+
+
+def _poblar_bbdd_preguntas(bbdd_id):
+    for tipo, clave, texto in _PREGUNTAS_INICIALES:
+        try:
+            _crear_pagina_en_bbdd(bbdd_id, {
+                "Texto": {"title": [{"text": {"content": texto}}]},
+                "Tipo": {"select": {"name": tipo}},
+                "Clave": {"select": {"name": clave}},
+            })
+        except Exception:
+            logging.exception("Error creando fila '%s'/'%s' en BD Preguntas", tipo, clave)
+
+
+def obtener_preguntas_desde_notion(tipo: str) -> dict:
+    """Devuelve {clave: texto} para el tipo dado (Top-Bottom / Bottom-Top / Same Level). Caché 5 min."""
+    ahora = time.time()
+    with _lock_preguntas:
+        if tipo in _preguntas_cache and (ahora - _preguntas_cache_time.get(tipo, 0)) < _PREGUNTAS_CACHE_TTL:
+            return _preguntas_cache[tipo]
+    try:
+        bbdd_id = _obtener_o_crear_bbdd_preguntas()
+        if not bbdd_id:
+            return {}
+        resp = _query_bbdd(bbdd_id, filter={"property": "Tipo", "select": {"equals": tipo}})
+        preguntas = {}
+        for pagina in resp.get("results", []):
+            props = pagina.get("properties", {})
+            clave = ((props.get("Clave") or {}).get("select") or {}).get("name", "")
+            titulo = "".join(t.get("plain_text", "") for t in (props.get("Texto") or {}).get("title", []))
+            if clave and titulo:
+                preguntas[clave] = titulo
+        with _lock_preguntas:
+            _preguntas_cache[tipo] = preguntas
+            _preguntas_cache_time[tipo] = ahora
+        return preguntas
+    except Exception:
+        logging.exception("Error obteniendo preguntas de Notion para tipo '%s'", tipo)
+        return {}
 
 
 def obtener_o_crear_bbdd_evaluado(nombre_evaluado):

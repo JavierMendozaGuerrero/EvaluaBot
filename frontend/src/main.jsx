@@ -28,6 +28,11 @@ function isStrongPassword(password) {
   return password.length >= 8 && /[A-Z]/.test(password) && /[^A-Za-z0-9]/.test(password);
 }
 
+function initials(nombre) {
+  if (!nombre) return "?";
+  return nombre.trim().split(/\s+/).map((w) => w[0].toUpperCase()).slice(0, 2).join("");
+}
+
 function getResetToken() {
   const queryToken = new URLSearchParams(window.location.search).get("reset");
   if (queryToken) return queryToken;
@@ -61,6 +66,195 @@ function PasswordInput({ value, onChange, placeholder = "", required = true, min
         <span className={`eye-icon ${visible ? "is-visible" : ""}`} aria-hidden="true" />
       </button>
     </div>
+  );
+}
+
+function AdminRoleSelect({ user, onChoose, onLogout }) {
+  const persona = user?.persona || user?.username || "";
+  return (
+    <main className="page auth-page">
+      <nav className="nav">
+        <a className="brand" href="/"><img src="/src/logo.png" alt="igeneris" className="brand-logo" /></a>
+        <div className="nav-user">
+          <div className="nav-user-info">
+            <span className="nav-user-name">{persona}</span>
+            <button className="link-button" onClick={onLogout}>Cerrar sesión</button>
+          </div>
+        </div>
+      </nav>
+      <div className="role-select-body">
+        <p className="kicker">Bienvenida</p>
+        <h2>¿Cómo quieres entrar hoy?</h2>
+        <div className="role-select-grid">
+          <button className="role-card" onClick={() => onChoose("admin")}>
+            <span className="role-card-title">Administrador</span>
+            <span className="role-card-desc">Consulta evaluaciones e informes de cualquier empleado</span>
+          </button>
+          <button className="role-card secondary" onClick={() => onChoose("personal")}>
+            <span className="role-card-title">Perfil personal</span>
+            <span className="role-card-desc">Accede como cualquier otro empleado de la empresa</span>
+          </button>
+        </div>
+      </div>
+    </main>
+  );
+}
+
+function AdminPanel({ token, onBack }) {
+  const [evaluados, setEvaluados] = useState([]);
+  const [search, setSearch] = useState("");
+  const [selected, setSelected] = useState(null);
+  const [informeFinal, setInformeFinal] = useState(null);
+  const [statusMsg, setStatusMsg] = useState("");
+
+  useEffect(() => {
+    apiRequest("/api/evaluados", { token })
+      .then((data) => setEvaluados(data.evaluados || []))
+      .catch(() => {});
+  }, [token]);
+
+  useEffect(() => {
+    if (!selected) return;
+    setInformeFinal(null);
+    apiRequest(`/api/informe-final?evaluado=${encodeURIComponent(selected.nombre)}`, { token })
+      .then((data) => setInformeFinal(data))
+      .catch(() => setInformeFinal({ disponible: false, mensaje: "No se pudo cargar el informe." }));
+  }, [token, selected?.nombre]);
+
+  async function selectEmpleado(item) {
+    setStatusMsg("");
+    try {
+      const perfil = await apiRequest(`/api/perfil-empleado?nombre=${encodeURIComponent(item.value)}`, { token });
+      setSelected({ nombre: item.value, foto: perfil.foto || null, cargo: perfil.cargo || "" });
+    } catch {
+      setSelected({ nombre: item.value, foto: null, cargo: "" });
+    }
+  }
+
+  async function generarWrapped() {
+    if (!selected) return;
+    setStatusMsg("Preparando trayectoria visual...");
+    try {
+      const data = await apiRequest("/api/trayectoria", { token, method: "POST", body: { evaluado: selected.nombre } });
+      setStatusMsg("");
+      window.open(apiUrl(`${data.htmlUrl}&token=${encodeURIComponent(token)}`), "_blank", "noopener,noreferrer");
+    } catch (err) {
+      setStatusMsg(err.message);
+    }
+  }
+
+  async function openFile(path, filename) {
+    if (!filename.endsWith(".docx")) {
+      window.open(apiUrl(`${path}&token=${encodeURIComponent(token)}`), "_blank", "noopener,noreferrer");
+      return;
+    }
+    try {
+      const response = await fetch(apiUrl(path), { headers: { Authorization: `Bearer ${token}` } });
+      if (!response.ok) throw new Error("No se pudo descargar el archivo.");
+      const blob = await response.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = filename;
+      a.click();
+      URL.revokeObjectURL(url);
+    } catch (err) {
+      setStatusMsg(err.message);
+    }
+  }
+
+  const filtrados = evaluados.filter((e) =>
+    e.label.toLowerCase().includes(search.toLowerCase())
+  );
+
+  if (selected) {
+    return (
+      <main className="page">
+        <nav className="nav">
+          <a className="brand" href="/"><img src="/src/logo.png" alt="igeneris" className="brand-logo" /></a>
+          <button className="link-button" onClick={() => { setSelected(null); setInformeFinal(null); setStatusMsg(""); }}>← Volver</button>
+        </nav>
+        <div className="admin-employee-wrap">
+          <div className="admin-employee-layout">
+            <div className="admin-employee-actions">
+              <p className="kicker">Informes</p>
+              {informeFinal === null ? (
+                <p className="fine">Cargando...</p>
+              ) : informeFinal?.disponible ? (
+                <>
+                  {informeFinal.htmlUrl && (
+                    <button onClick={() => openFile(informeFinal.htmlUrl, "informe_final.html")}>
+                      Ver informe final
+                    </button>
+                  )}
+                  {informeFinal.docxUrl && (
+                    <button className="secondary" onClick={() => openFile(informeFinal.docxUrl, "informe_final.docx")}>
+                      Descargar Word
+                    </button>
+                  )}
+                </>
+              ) : (
+                <p className="fine">{informeFinal?.mensaje || "Sin informe final disponible."}</p>
+              )}
+              <button
+                className="secondary"
+                onClick={generarWrapped}
+                disabled={statusMsg === "Preparando trayectoria visual..."}
+              >
+                {statusMsg === "Preparando trayectoria visual..." ? "Generando..." : "Su wrapped"}
+              </button>
+              {statusMsg && statusMsg !== "Preparando trayectoria visual..." && (
+                <p className="fine error">{statusMsg}</p>
+              )}
+            </div>
+            <div className="admin-employee-profile">
+              {selected.foto
+                ? <img src={selected.foto} alt={selected.nombre} className="advisee-detail-foto" />
+                : <div className="advisee-detail-foto advisee-foto-placeholder">{selected.nombre.charAt(0)}</div>
+              }
+              <h2 className="advisee-detail-nombre">{selected.nombre}</h2>
+              {selected.cargo && <p className="fine" style={{ margin: 0 }}>{selected.cargo}</p>}
+            </div>
+          </div>
+        </div>
+      </main>
+    );
+  }
+
+  return (
+    <main className="page">
+      <nav className="nav">
+        <a className="brand" href="/"><img src="/src/logo.png" alt="igeneris" className="brand-logo" /></a>
+        <button className="link-button" onClick={onBack}>← Volver</button>
+      </nav>
+      <div className="admin-search-wrap">
+        <p className="kicker">Administrador</p>
+        <h2>Buscar empleado</h2>
+        <div className="admin-search-field">
+          <input
+            type="text"
+            placeholder="Escribe un nombre..."
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+          />
+        </div>
+        <div className="advisees-page-grid">
+          {filtrados.map((e) => (
+            <button
+              key={e.value}
+              className="advisee-page-card"
+              onClick={() => selectEmpleado(e)}
+            >
+              <div className="advisee-page-foto advisee-foto-placeholder">{e.label.charAt(0)}</div>
+              <span className="advisee-page-nombre">{e.label}</span>
+            </button>
+          ))}
+          {filtrados.length === 0 && search && (
+            <p className="fine" style={{ textAlign: "center", width: "100%" }}>No hay resultados para &ldquo;{search}&rdquo;.</p>
+          )}
+        </div>
+      </div>
+    </main>
   );
 }
 
@@ -106,7 +300,7 @@ function InformesAdvisee({ token, advisee, onBack }) {
   return (
     <main className="page">
       <nav className="nav">
-        <a className="brand" href="/">igeneris</a>
+        <a className="brand" href="/"><img src="/src/logo.png" alt="igeneris" className="brand-logo" /></a>
         <button className="link-button" onClick={onBack}>← Volver</button>
       </nav>
       <section className="hero dashboard-hero">
@@ -156,7 +350,7 @@ function MisObjetivosPage({ token, persona, onBack }) {
   return (
     <main className="page">
       <nav className="nav">
-        <a className="brand" href="/">igeneris</a>
+        <a className="brand" href="/"><img src="/src/logo.png" alt="igeneris" className="brand-logo" /></a>
         <button className="link-button" onClick={onBack}>← Volver</button>
       </nav>
       <section className="hero dashboard-hero">
@@ -223,7 +417,7 @@ function ObjetivosPage({ token, advisee, caName, onBack }) {
   return (
     <main className="page">
       <nav className="nav">
-        <a className="brand" href="/">igeneris</a>
+        <a className="brand" href="/"><img src="/src/logo.png" alt="igeneris" className="brand-logo" /></a>
         <button className="link-button" onClick={onBack}>← Volver</button>
       </nav>
       <section className="hero dashboard-hero">
@@ -339,21 +533,16 @@ function AuthScreen({ onLogin }) {
   return (
     <main className="page auth-page">
       <nav className="nav">
-        <a className="brand" href="/">igeneris</a>
-        <button className="link-button" onClick={() => { setError(""); setMessage(""); setMode(mode === "login" ? "register" : "login"); }}>
-          {mode === "login" ? "Registro" : "Login"}
-        </button>
+        <a className="brand" href="/"><img src="/src/logo.png" alt="igeneris" className="brand-logo" /></a>
       </nav>
-      <section className="hero">
-        <div>
-          <p className="kicker">Evaluaciones internas</p>
-          <h1>{mode === "forgot" ? "Recupera tu acceso." : mode === "reset" ? "Crea una contrasena nueva." : mode === "login" ? "Accede a tus informes." : "Registra tu usuario."}</h1>
-          <p className="lead">Consulta informes, trayectorias y feedback con permisos por persona.</p>
-        </div>
-        <form className="panel auth-form" onSubmit={submit}>
-          <h2>{mode === "forgot" ? "Enviar email" : mode === "reset" ? "Cambiar contrasena" : mode === "login" ? "Entrar" : "Crear cuenta"}</h2>
-          {error && <p className="error">{error}</p>}
-          {message && <p className="fine">{message}</p>}
+      <div className="auth-body">
+        <p className="kicker">Evaluaciones internas</p>
+        <h2 className="auth-heading">
+          {mode === "forgot" ? "Recupera tu acceso" : mode === "reset" ? "Nueva contraseña" : mode === "login" ? "Iniciar sesión" : "Crear cuenta"}
+        </h2>
+        {error && <p className="error">{error}</p>}
+        {message && <p className="fine">{message}</p>}
+        <form onSubmit={submit}>
           {mode === "forgot" ? (
             <>
               <label>Email</label>
@@ -361,44 +550,63 @@ function AuthScreen({ onLogin }) {
             </>
           ) : mode === "reset" ? (
             <>
-              <label>Nueva contrasena</label>
+              <label>Nueva contraseña</label>
               <PasswordInput value={form.newPassword} onChange={(e) => setForm({ ...form, newPassword: e.target.value })} minLength={8} />
-              <label>Repite la contrasena</label>
+              <label>Repite la contraseña</label>
               <PasswordInput value={form.confirmNewPassword} onChange={(e) => setForm({ ...form, confirmNewPassword: e.target.value })} minLength={8} />
             </>
           ) : (
             <>
               <label>{mode === "login" ? "Usuario o email" : "Usuario"}</label>
               <input value={form.username} onChange={(e) => setForm({ ...form, username: e.target.value })} required />
-              <label>Contrasena</label>
+              <label>Contraseña</label>
               <PasswordInput value={form.password} onChange={(e) => setForm({ ...form, password: e.target.value })} minLength={mode === "register" ? 8 : undefined} />
               {mode === "register" && (
                 <>
-                  <label>Repite la contrasena</label>
+                  <label>Repite la contraseña</label>
                   <PasswordInput value={form.confirmPassword} onChange={(e) => setForm({ ...form, confirmPassword: e.target.value })} minLength={8} />
                 </>
               )}
             </>
           )}
+          {mode === "login" && (
+            <label className="check-label">
+              <input type="checkbox" className="check-input" />
+              Recuérdame
+            </label>
+          )}
           {(mode === "register" || mode === "reset") && (
             <p className={(passwordInvalid || passwordsMismatch) ? "error fine" : "fine"}>
-              Minimo 8 caracteres, una mayuscula y un caracter especial. Las contrasenas deben coincidir.
+              Mínimo 8 caracteres, una mayúscula y un carácter especial. Las contraseñas deben coincidir.
             </p>
           )}
           <div className="actions">
             <button type="submit" disabled={!canSubmit}>
-              {loading ? "Procesando..." : mode === "forgot" ? "Enviar enlace" : mode === "reset" ? "Guardar contrasena" : mode === "login" ? "Entrar" : "Crear cuenta"}
+              {loading ? "Procesando..." : mode === "forgot" ? "Enviar enlace" : mode === "reset" ? "Guardar contraseña" : mode === "login" ? "Iniciar sesión" : "Crear cuenta"}
             </button>
-            {mode === "login" && <button type="button" className="secondary" onClick={() => { setError(""); setMessage(""); setMode("forgot"); }}>Olvide mi contrasena</button>}
-            {(mode === "forgot" || mode === "reset") && <button type="button" className="secondary" onClick={() => { window.history.replaceState({}, "", window.location.pathname); setError(""); setMessage(""); setMode("login"); }}>Volver</button>}
+            {mode === "login" && (
+              <button type="button" className="secondary" onClick={() => { setError(""); setMessage(""); setMode("forgot"); }}>
+                Olvidé mi contraseña
+              </button>
+            )}
+            {(mode === "forgot" || mode === "reset") && (
+              <button type="button" className="secondary" onClick={() => { window.history.replaceState({}, "", window.location.pathname); setError(""); setMessage(""); setMode("login"); }}>
+                Volver
+              </button>
+            )}
           </div>
         </form>
-      </section>
+        {mode === "login" && (
+          <p className="auth-legal">
+            Al acceder aceptas nuestra <a href="#">política de privacidad</a> y los <a href="#">términos y condiciones</a> de uso de la plataforma.
+          </p>
+        )}
+      </div>
     </main>
   );
 }
 
-function Dashboard({ token, user, onLogout, onNavigate }) {
+function Dashboard({ token, user, onLogout, onNavigate, onBackToRoleSelect = null }) {
   const [evaluados, setEvaluados] = useState([]);
   const [evaluado, setEvaluado] = useState("");
   const [status, setStatus] = useState("");
@@ -417,6 +625,10 @@ function Dashboard({ token, user, onLogout, onNavigate }) {
   const [adminModo, setAdminModo] = useState("borrador");
   const [informeFinalAdmin, setInformeFinalAdmin] = useState(null);
   const isAdmin = Boolean(user?.is_admin);
+  const [perfil, setPerfil] = useState({ foto: "", cargo: "" });
+  const [misObjetivos, setMisObjetivos] = useState([]);
+  const [informesOpen, setInformesOpen] = useState(false);
+  const [seccionActiva, setSeccionActiva] = useState(null);
 
   useEffect(() => {
     apiRequest("/api/evaluados", { token })
@@ -467,6 +679,20 @@ function Dashboard({ token, user, onLogout, onNavigate }) {
       .catch(() => setInformeFinalAdmin({ disponible: false, mensaje: "No se pudo cargar el informe." }));
   }, [token, isAdmin, adminModo, evaluado]);
 
+  useEffect(() => {
+    apiRequest("/api/mi-perfil", { token })
+      .then((data) => setPerfil(data))
+      .catch(() => {});
+  }, [token]);
+
+  useEffect(() => {
+    const persona = user?.persona;
+    if (!persona) return;
+    apiRequest(`/api/objetivos?nombre=${encodeURIComponent(persona)}`, { token })
+      .then((data) => setMisObjetivos(data.objetivos || []))
+      .catch(() => {});
+  }, [token, user?.persona]);
+
   const role = isAdmin ? "Admin" : "";
   const ownEvaluado = user?.persona || user?.username || "";
   const targetEvaluado = isAdmin ? evaluado : (evaluado || ownEvaluado);
@@ -474,13 +700,18 @@ function Dashboard({ token, user, onLogout, onNavigate }) {
 
   async function generate(kind) {
     setLinks(null);
-    setStatus(kind === "generar" ? "Claude esta generando el informe..." : "Preparando trayectoria visual...");
+    setStatus(kind === "generar" ? "Claude está generando el informe..." : "Preparando trayectoria visual...");
     try {
       const body = { evaluado: targetEvaluado };
       if (kind === "generar" && cargoAnual) body.cargo = cargoAnual;
       const data = await apiRequest(`/api/${kind}`, { token, method: "POST", body });
-      setStatus(kind === "generar" ? `Informe listo con ${data.total} evaluaciones.` : `Trayectoria lista con ${data.total} evaluaciones.`);
       setLinks(data);
+      if (kind === "trayectoria" && data.trayectoriaUrl) {
+        setStatus("");
+        window.open(apiUrl(`${data.trayectoriaUrl}&token=${encodeURIComponent(token)}`), "_blank", "noopener,noreferrer");
+      } else {
+        setStatus(kind === "generar" ? `Informe listo con ${data.total} evaluaciones.` : "");
+      }
     } catch (err) {
       setStatus(err.message);
     }
@@ -563,58 +794,149 @@ function Dashboard({ token, user, onLogout, onNavigate }) {
     }
   }
 
+  const persona = user?.persona || user?.username || "";
+
   return (
-    <main className="page">
+    <main className="page dash-page">
       <nav className="nav">
-        <a className="brand" href="/">igeneris</a>
-        <div className="nav-links">
-          <span>{user?.username}</span>
-          {role && <span>{role}</span>}
-          <button className="link-button" onClick={() => onNavigate({ type: "mis-objetivos" })}>Mis objetivos</button>
-          <button className="link-button" onClick={onLogout}>Cerrar sesion</button>
+        <div style={{ display: "flex", alignItems: "center", gap: "24px" }}>
+          <a className="brand" href="/"><img src="/src/logo.png" alt="igeneris" className="brand-logo" /></a>
+          {onBackToRoleSelect && (
+            <button className="link-button" onClick={onBackToRoleSelect}>← Volver</button>
+          )}
+        </div>
+        <div className="nav-user">
+          <div className="nav-user-info">
+            <span className="nav-user-name">{persona}</span>
+            <button className="link-button" onClick={onLogout}>Cerrar sesión</button>
+          </div>
+          <div className="nav-avatar">
+            {perfil.foto ? <img src={perfil.foto} alt="" /> : initials(persona)}
+          </div>
         </div>
       </nav>
 
-      <section className="hero dashboard-hero">
-        <div>
-          <p className="kicker">Desarrollo de talento</p>
-          <h1>Centro de evaluaciones.</h1>
-        </div>
-        {isAdmin && (
-          <div className="panel">
-            <p className="lead">Genera informes y trayectorias visuales a partir del feedback guardado en Notion.</p>
-            <label>Persona evaluada</label>
-            <select value={evaluado} onChange={(e) => setEvaluado(e.target.value)}>
-              {evaluados.map((item) => <option key={item.value} value={item.value}>{item.label}</option>)}
-            </select>
-            <p className="fine">Seleccion actual: {selectedLabel || "sin tabla disponible"}</p>
-          </div>
-        )}
-      </section>
+      <div className="profile-wrap">
+        <h2 className="profile-name">{persona}</h2>
+        <div className="profile-grid">
 
-      {isAdmin ? (
-        <>
-          <div className="actions" style={{ marginTop: "24px" }}>
+          <nav className="profile-menu">
+            <button className={`menu-item${informesOpen ? " active" : ""}`} onClick={() => setInformesOpen((v) => !v)}>
+              Mis informes
+            </button>
+            {informesOpen && (
+              <div className="submenu">
+                {informeFinalEmpleado === null ? (
+                  <p className="fine">Cargando...</p>
+                ) : informeFinalEmpleado?.disponible ? (
+                  <>
+                    {informeFinalEmpleado.htmlUrl && (
+                      <button className="secondary" onClick={() => openFile(informeFinalEmpleado.htmlUrl, "informe_final.html")}>
+                        Abrir en web
+                      </button>
+                    )}
+                    {informeFinalEmpleado.docxUrl && (
+                      <button className="secondary" onClick={() => openFile(informeFinalEmpleado.docxUrl, "informe_final.docx")}>
+                        Descargar Word
+                      </button>
+                    )}
+                  </>
+                ) : (
+                  <p className="fine">No tienes acceso.</p>
+                )}
+              </div>
+            )}
+            <button
+              className="menu-item"
+              onClick={() => generate("trayectoria")}
+              disabled={!ownEvaluado || status === "Preparando trayectoria visual..."}
+            >
+              {status === "Preparando trayectoria visual..." ? "Generando..." : "Mi wrapped"}
+            </button>
+            {advisees.length > 0 && (
+              <button
+                className="menu-item"
+                onClick={() => onNavigate({ type: "advisees-list", advisees })}
+              >
+                Mis advisees
+              </button>
+            )}
+            {isAdmin && !onBackToRoleSelect && (
+              <button
+                className={`menu-item${seccionActiva === "admin" ? " active" : ""}`}
+                onClick={() => setSeccionActiva((v) => v === "admin" ? null : "admin")}
+              >
+                Panel admin
+              </button>
+            )}
+          </nav>
+
+          <div className="profile-photo-wrap">
+            {perfil.foto
+              ? <img src={perfil.foto} alt={persona} className="profile-photo" />
+              : <div className="profile-photo-placeholder">{initials(persona)}</div>
+            }
+          </div>
+
+          <aside className="profile-info">
+            <p className="profile-info-label">Mi puesto</p>
+            <p className="profile-info-value">{perfil.cargo || "—"}</p>
+            <p className="profile-info-label" style={{ marginTop: "28px" }}>Mis objetivos</p>
+            {misObjetivos.length ? (
+              <p className="profile-obj-text">{misObjetivos[0].objetivos}</p>
+            ) : (
+              <p className="fine">Sin objetivos definidos.</p>
+            )}
+          </aside>
+
+        </div>
+      </div>
+
+      {status && status !== "Preparando trayectoria visual..." && (
+        <p className="dash-status fine">{status}</p>
+      )}
+
+      {isAdmin && !onBackToRoleSelect && seccionActiva === "admin" && (
+        <section className="panel" style={{ marginTop: "32px" }}>
+          <p className="kicker">Panel admin</p>
+          <h2>Gestión de evaluaciones</h2>
+          <label>Persona evaluada</label>
+          <select value={evaluado} onChange={(e) => setEvaluado(e.target.value)}>
+            {evaluados.map((item) => <option key={item.value} value={item.value}>{item.label}</option>)}
+          </select>
+          <p className="fine">Selección actual: {selectedLabel || "sin tabla disponible"}</p>
+          <div className="actions" style={{ marginTop: "20px" }}>
             <button onClick={() => setAdminModo("borrador")} className={adminModo === "borrador" ? "" : "secondary"}>Borrador de Claude</button>
             <button onClick={() => setAdminModo("final")} className={adminModo === "final" ? "" : "secondary"}>Versión final CA</button>
           </div>
           {adminModo === "borrador" ? (
-            <section className="tools">
-              <article className="tool">
-                <p className="kicker">Informe anual</p>
-                <h2>Informe anual{targetEvaluado ? ` de ${targetEvaluado}` : ""}</h2>
-                <p>Realiza una base para la realizacion del informe anual de evaluaciones.</p>
-                <button onClick={() => generate("generar")} disabled={!targetEvaluado}>Generar informe anual</button>
-              </article>
-              <article className="tool wrapped">
-                <p className="kicker">Trayectoria</p>
-                <h2>Vista tipo wrapped</h2>
-                <p>Navega por fechas, proyecto, satisfaccion y comentarios clave.</p>
-                <button className="secondary" onClick={() => generate("trayectoria")} disabled={!targetEvaluado}>Generar trayectoria</button>
-              </article>
-            </section>
+            <>
+              <div className="tools" style={{ marginTop: "24px" }}>
+                <article className="tool">
+                  <p className="kicker">Informe anual</p>
+                  <h2>Informe anual{targetEvaluado ? ` de ${targetEvaluado}` : ""}</h2>
+                  <p>Genera una base para el informe anual de evaluaciones.</p>
+                  <button onClick={() => generate("generar")} disabled={!targetEvaluado}>Generar informe anual</button>
+                </article>
+                <article className="tool wrapped">
+                  <p className="kicker">Trayectoria</p>
+                  <h2>Vista tipo wrapped</h2>
+                  <p>Navega por fechas, proyecto, satisfacción y comentarios clave.</p>
+                  <button className="secondary" onClick={() => generate("trayectoria")} disabled={!targetEvaluado}>Generar trayectoria</button>
+                </article>
+              </div>
+              {links && (
+                <section className="result panel" style={{ marginTop: "24px" }}>
+                  <h2>Resultado</h2>
+                  <div className="actions">
+                    {links.htmlUrl && <button onClick={() => openFile(links.htmlUrl, "informe.html")}>Abrir web</button>}
+                    {links.docxAnualUrl && <button className="secondary" onClick={() => downloadAnual(links.docxAnualUrl)}>Descargar informe anual</button>}
+                  </div>
+                </section>
+              )}
+            </>
           ) : (
-            <section className="tools panel" style={{ marginTop: "24px" }}>
+            <div className="panel" style={{ marginTop: "24px" }}>
               <p className="kicker">Versión final CA</p>
               <h2>Informe final{targetEvaluado ? ` de ${targetEvaluado}` : ""}</h2>
               {!targetEvaluado ? (
@@ -629,95 +951,8 @@ function Dashboard({ token, user, onLogout, onNavigate }) {
               ) : (
                 <p className="fine">{informeFinalAdmin?.mensaje || "No hay informe final disponible."}</p>
               )}
-            </section>
-          )}
-        </>
-      ) : (
-        <section className="tools" style={{ marginTop: "24px" }}>
-          <article className="tool">
-            <p className="kicker">Mi informe final</p>
-            <h2>Informe final</h2>
-            <p>El informe anual elaborado por tu CA con el feedback recibido durante el año.</p>
-            {informeFinalEmpleado === null ? (
-              <p className="fine">Cargando...</p>
-            ) : informeFinalEmpleado?.disponible ? (
-              <div className="actions">
-                {informeFinalEmpleado.htmlUrl && <button onClick={() => openFile(informeFinalEmpleado.htmlUrl, "informe_final.html")}>Ver web</button>}
-                {informeFinalEmpleado.docxUrl && <button className="secondary" onClick={() => openFile(informeFinalEmpleado.docxUrl, "informe_final.docx")}>Descargar Word</button>}
-              </div>
-            ) : (
-              <p className="fine">No tienes acceso.</p>
-            )}
-          </article>
-          <article className="tool wrapped">
-            <p className="kicker">Resumen del año</p>
-            <h2>Tu trayectoria</h2>
-            <p>Navega por fechas, proyecto, satisfacción y comentarios clave de tus evaluaciones.</p>
-            {informeFinalEmpleado === null ? (
-              <p className="fine">Cargando...</p>
-            ) : informeFinalEmpleado?.accesoActivo ? (
-              <button className="secondary" onClick={() => generate("trayectoria")} disabled={!ownEvaluado}>
-                {status && status.includes("trayectoria") ? "Generando..." : "Ver trayectoria"}
-              </button>
-            ) : (
-              <p className="fine">No tienes acceso.</p>
-            )}
-          </article>
-        </section>
-      )}
-
-      {status && <section className="status panel"><p>{status}</p></section>}
-      {links && adminModo === "borrador" && (
-        <section className="result panel">
-          <h2>Resultado</h2>
-          <div className="actions">
-            {links.htmlUrl && <button onClick={() => openFile(links.htmlUrl, "informe.html")}>Abrir web</button>}
-            {links.docxAnualUrl && <button className="secondary" onClick={() => downloadAnual(links.docxAnualUrl)}>Descargar informe anual</button>}
-          </div>
-        </section>
-      )}
-
-      {advisees.length > 0 && (
-        <section className="advisees-section panel">
-          <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", flexWrap: "wrap", gap: "12px", marginBottom: "18px" }}>
-            <div>
-              <p className="kicker">Career Advisor</p>
-              <h2 style={{ margin: 0 }}>Mis advisees</h2>
             </div>
-            {!isAdmin && (
-              <button
-                className={accesoActivo ? "" : "secondary"}
-                onClick={toggleAcceso}
-                disabled={togglingAcceso}
-                style={{ alignSelf: "center" }}
-              >
-                {togglingAcceso ? "..." : accesoActivo ? "Acceso activo — revocar" : "Dar acceso a mis advisees"}
-              </button>
-            )}
-          </div>
-          <div className="advisees-list">
-            {advisees.map((a) => (
-              <div key={a.nombre} className="advisee-card">
-                {a.foto
-                  ? <img src={a.foto} alt={a.nombre} className="advisee-foto" />
-                  : <div className="advisee-foto advisee-foto-placeholder">{a.nombre.charAt(0)}</div>
-                }
-                <span className="advisee-nombre">{a.nombre}</span>
-                <button className="secondary advisee-btn" onClick={() => loadOpiniones(a.nombre)} disabled={loadingOpiniones}>
-                  Opiniones
-                </button>
-                <button className="secondary advisee-btn" onClick={() => onNavigate({ type: "objetivos", advisee: a })}>
-                  Meter objetivos
-                </button>
-                <button className="secondary advisee-btn" onClick={() => onNavigate({ type: "informes-advisee", advisee: a })}>
-                  Ver informes
-                </button>
-                <button className="secondary advisee-btn" onClick={() => onNavigate({ type: "subir-informe", advisee: a })}>
-                  Subir informe
-                </button>
-              </div>
-            ))}
-          </div>
+          )}
         </section>
       )}
 
@@ -751,7 +986,6 @@ function Dashboard({ token, user, onLogout, onNavigate }) {
           )}
         </section>
       )}
-
     </main>
   );
 }
@@ -819,7 +1053,7 @@ function SubirInformePage({ token, advisee, onBack }) {
   return (
     <main className="page">
       <nav className="nav">
-        <a className="brand" href="/">igeneris</a>
+        <a className="brand" href="/"><img src="/src/logo.png" alt="igeneris" className="brand-logo" /></a>
         <button className="link-button" onClick={onBack}>← Volver</button>
       </nav>
       <section className="hero dashboard-hero">
@@ -872,11 +1106,126 @@ function SubirInformePage({ token, advisee, onBack }) {
   );
 }
 
+function AdviseesList({ advisees, onBack, onNavigate }) {
+  return (
+    <main className="page">
+      <nav className="nav">
+        <a className="brand" href="/"><img src="/src/logo.png" alt="igeneris" className="brand-logo" /></a>
+        <button className="link-button" onClick={onBack}>← Volver</button>
+      </nav>
+      <div className="advisees-page-wrap">
+        <p className="kicker">Career Advisor</p>
+        <h2>Mis advisees</h2>
+        <div className="advisees-page-grid">
+          {advisees.map((a) => (
+            <button
+              key={a.nombre}
+              className="advisee-page-card"
+              onClick={() => onNavigate({ type: "advisee-detail", advisee: a, advisees })}
+            >
+              {a.foto
+                ? <img src={a.foto} alt={a.nombre} className="advisee-page-foto" />
+                : <div className="advisee-page-foto advisee-foto-placeholder">{a.nombre.charAt(0)}</div>
+              }
+              <span className="advisee-page-nombre">{a.nombre}</span>
+            </button>
+          ))}
+        </div>
+      </div>
+    </main>
+  );
+}
+
+function AdviseeDetail({ token, advisee, advisees, onBack, onNavigate }) {
+  const [gestionOpen, setGestionOpen] = useState(false);
+  const [opiniones, setOpiniones] = useState(null);
+  const [loadingOpiniones, setLoadingOpiniones] = useState(false);
+
+  async function cargarOpiniones() {
+    if (opiniones !== null) { setOpiniones(null); return; }
+    setLoadingOpiniones(true);
+    try {
+      const data = await apiRequest(`/api/opiniones-ca?advisee=${encodeURIComponent(advisee.nombre)}`, { token });
+      setOpiniones(data.opiniones || []);
+    } catch {
+      setOpiniones([]);
+    } finally {
+      setLoadingOpiniones(false);
+    }
+  }
+
+  return (
+    <main className="page">
+      <nav className="nav">
+        <a className="brand" href="/"><img src="/src/logo.png" alt="igeneris" className="brand-logo" /></a>
+        <button className="link-button" onClick={onBack}>← Mis advisees</button>
+      </nav>
+      <div className="advisee-detail-wrap">
+        <div className="advisee-detail-layout">
+          <div className="advisee-detail-left">
+            {advisee.foto
+              ? <img src={advisee.foto} alt={advisee.nombre} className="advisee-detail-foto" />
+              : <div className="advisee-detail-foto advisee-foto-placeholder">{advisee.nombre.charAt(0)}</div>
+            }
+            <h2 className="advisee-detail-nombre">{advisee.nombre}</h2>
+          </div>
+          <div className="advisee-detail-right">
+            <button onClick={() => onNavigate({ type: "objetivos", advisee, advisees, from: "advisee-detail" })}>
+              Editar objetivos
+            </button>
+            <button className="secondary" onClick={() => setGestionOpen((v) => !v)}>
+              {gestionOpen ? "Cerrar gestión" : "Gestionar informe"}
+            </button>
+            {gestionOpen && (
+              <div className="advisee-gestion">
+                <button className="secondary" onClick={cargarOpiniones} disabled={loadingOpiniones}>
+                  {loadingOpiniones ? "Cargando..." : opiniones !== null ? "Ocultar opiniones" : "Ver tus opiniones sobre este advisee"}
+                </button>
+                <button className="secondary" onClick={() => onNavigate({ type: "informes-advisee", advisee, from: "advisee-detail", advisees })}>
+                  Ver borrador de informe generado por Claude
+                </button>
+                <button className="secondary" onClick={() => onNavigate({ type: "subir-informe", advisee, from: "advisee-detail", advisees })}>
+                  Subir informe final
+                </button>
+              </div>
+            )}
+          </div>
+        </div>
+        {opiniones !== null && (
+          <section className="opiniones-modal panel" style={{ marginTop: "32px" }}>
+            <h2 style={{ marginBottom: "18px" }}>Opiniones sobre {advisee.nombre}</h2>
+            {opiniones.length ? (
+              <div className="opiniones-list">
+                {opiniones.map((op, i) => (
+                  <article key={i} className="opinion-item">
+                    <p className="opinion-fecha fine">{op.fecha ? op.fecha.slice(0, 10) : "Sin fecha"}</p>
+                    {op.resumen_advisee && (
+                      <div className="opinion-resumen">
+                        <p className="fine"><strong>Evaluaciones vistas:</strong></p>
+                        <pre className="opinion-pre">{op.resumen_advisee}</pre>
+                      </div>
+                    )}
+                    <p className="fine"><strong>Opinión del CA:</strong></p>
+                    <p className="opinion-texto">{op.opinion || "—"}</p>
+                  </article>
+                ))}
+              </div>
+            ) : (
+              <p>No hay opiniones guardadas sobre {advisee.nombre}.</p>
+            )}
+          </section>
+        )}
+      </div>
+    </main>
+  );
+}
+
 function App() {
   const resetToken = getResetToken();
   const [token, setToken] = useState(localStorage.getItem("evaluabot_token") || "");
   const [user, setUser] = useState(null);
   const [page, setPage] = useState(null);
+  const [adminMode, setAdminMode] = useState(null); // null | "personal" | "admin"
 
   useEffect(() => {
     if (resetToken) return;
@@ -889,52 +1238,67 @@ function App() {
       .catch(() => localStorage.removeItem("evaluabot_token"));
   }, [token, resetToken]);
 
+  function handleLogout() {
+    localStorage.removeItem("evaluabot_token");
+    setToken("");
+    setUser(null);
+    setPage(null);
+    setAdminMode(null);
+  }
+
+  function backTo(p) {
+    if (p?.from === "advisee-detail") return () => setPage({ type: "advisee-detail", advisee: p.advisee, advisees: p.advisees });
+    if (p?.from === "advisees-list") return () => setPage({ type: "advisees-list", advisees: p.advisees });
+    return () => setPage(null);
+  }
+
   if (resetToken || !token || !user) {
     return <AuthScreen onLogin={(newToken, newUser) => { setToken(newToken); setUser(newUser); }} />;
   }
-  if (page?.type === "informes-advisee") {
+
+  const isAdmin = Boolean(user?.is_admin);
+
+  if (isAdmin && adminMode === null) {
+    return <AdminRoleSelect user={user} onChoose={setAdminMode} onLogout={handleLogout} />;
+  }
+
+  if (isAdmin && adminMode === "admin") {
+    return <AdminPanel token={token} onBack={() => setAdminMode(null)} />;
+  }
+
+  if (page?.type === "advisees-list") {
+    return <AdviseesList advisees={page.advisees} onBack={() => setPage(null)} onNavigate={setPage} />;
+  }
+  if (page?.type === "advisee-detail") {
     return (
-      <InformesAdvisee
+      <AdviseeDetail
         token={token}
         advisee={page.advisee}
-        onBack={() => setPage(null)}
+        advisees={page.advisees}
+        onBack={() => setPage({ type: "advisees-list", advisees: page.advisees })}
+        onNavigate={setPage}
       />
     );
+  }
+  if (page?.type === "informes-advisee") {
+    return <InformesAdvisee token={token} advisee={page.advisee} onBack={backTo(page)} />;
   }
   if (page?.type === "mis-objetivos") {
-    return (
-      <MisObjetivosPage
-        token={token}
-        persona={user?.persona || user?.username || ""}
-        onBack={() => setPage(null)}
-      />
-    );
+    return <MisObjetivosPage token={token} persona={user?.persona || user?.username || ""} onBack={() => setPage(null)} />;
   }
   if (page?.type === "objetivos") {
-    return (
-      <ObjetivosPage
-        token={token}
-        advisee={page.advisee}
-        caName={user?.persona || ""}
-        onBack={() => setPage(null)}
-      />
-    );
+    return <ObjetivosPage token={token} advisee={page.advisee} caName={user?.persona || ""} onBack={backTo(page)} />;
   }
   if (page?.type === "subir-informe") {
-    return (
-      <SubirInformePage
-        token={token}
-        advisee={page.advisee}
-        onBack={() => setPage(null)}
-      />
-    );
+    return <SubirInformePage token={token} advisee={page.advisee} onBack={backTo(page)} />;
   }
   return (
     <Dashboard
       token={token}
       user={user}
-      onLogout={() => { localStorage.removeItem("evaluabot_token"); setToken(""); setUser(null); setPage(null); }}
+      onLogout={handleLogout}
       onNavigate={setPage}
+      onBackToRoleSelect={isAdmin && adminMode === "personal" ? () => { setPage(null); setAdminMode(null); } : null}
     />
   );
 }

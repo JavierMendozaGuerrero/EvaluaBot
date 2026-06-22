@@ -27,6 +27,7 @@ from .notion_service import (
     obtener_ca_de_empleado,
     ca_tiene_acceso_activo,
     toggle_acceso_advisees,
+    obtener_perfil_empleado,
 )
 from .reports import generar_archivo_trayectoria, generar_archivos_informe
 from .skill_informes_anual import generar_informe_anual, obtener_empleados_evaluacion_anual
@@ -154,6 +155,24 @@ class ApiHandler(BaseHTTPRequestHandler):
                     ca_aliases=[sesion.get("username", ""), sesion.get("email", "")],
                 )
                 self.responder_json({"opiniones": opiniones})
+                return
+            if ruta == "/api/mi-perfil":
+                sesion = self.sesion_actual()
+                if not sesion:
+                    raise PermissionError("Inicia sesión para acceder.")
+                perfil = obtener_perfil_empleado(sesion.get("persona", ""))
+                self.responder_json(perfil)
+                return
+            if ruta == "/api/perfil-empleado":
+                sesion = self.sesion_actual()
+                if not sesion:
+                    raise PermissionError("Inicia sesión para acceder.")
+                if not sesion.get("is_admin"):
+                    raise PermissionError("Solo administradores pueden consultar perfiles de empleados.")
+                query_params = urllib.parse.parse_qs(parsed.query)
+                nombre = query_params.get("nombre", [""])[0]
+                perfil = obtener_perfil_empleado(nombre)
+                self.responder_json(perfil)
                 return
             if ruta == "/api/objetivos":
                 sesion = self.sesion_actual()

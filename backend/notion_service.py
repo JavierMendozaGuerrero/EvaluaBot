@@ -704,6 +704,19 @@ def _texto_email_propiedad(propiedades, nombre_propiedad):
     return _texto_propiedad(propiedades, nombre_propiedad)
 
 
+def _url_foto_propiedad(props, nombre_propiedad):
+    prop = props.get(nombre_propiedad, {})
+    tipo = prop.get("type")
+    if tipo == "files":
+        for f in prop.get("files", []):
+            url = f.get("file", {}).get("url") or f.get("external", {}).get("url") or ""
+            if url:
+                return url
+    if tipo == "url":
+        return prop.get("url") or ""
+    return _texto_propiedad(props, nombre_propiedad)
+
+
 def _obtener_registros_empleados() -> list[dict]:
     """Lee empleados con su nombre canonico y aliases utiles para busqueda."""
     try:
@@ -764,7 +777,14 @@ def _obtener_registros_empleados() -> list[dict]:
                         if id_usuario:
                             break
 
-                registros.append({"nombre": nombre, "email": email.strip(), "aliases": aliases, "cargo": cargo, "id_usuario": id_usuario})
+                foto = ""
+                for foto_prop in ("Foto", "Photo", "Avatar"):
+                    if foto_prop in props:
+                        foto = _url_foto_propiedad(props, foto_prop)
+                        if foto:
+                            break
+
+                registros.append({"nombre": nombre, "email": email.strip(), "aliases": aliases, "cargo": cargo, "id_usuario": id_usuario, "foto": foto})
             if not resp.get("has_more"):
                 break
             cursor = resp.get("next_cursor")
@@ -789,6 +809,15 @@ def obtener_lista_empleados() -> list[str]:
 def obtener_registros_empleados() -> list[dict]:
     """Lee empleados con nombre, email y aliases desde Notion."""
     return _obtener_registros_empleados()
+
+
+def obtener_perfil_empleado(nombre: str) -> dict:
+    """Devuelve cargo y foto del empleado que coincide con el nombre dado."""
+    nombre_norm = normalizar_nombre(nombre)
+    for r in _obtener_registros_empleados():
+        if normalizar_nombre(r["nombre"]) == nombre_norm:
+            return {"cargo": r.get("cargo", ""), "foto": r.get("foto", "")}
+    return {"cargo": "", "foto": ""}
 
 
 def _tokens_nombre(nombre):

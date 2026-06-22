@@ -1,7 +1,7 @@
 import threading
 
 
-lock = threading.Lock()
+lock = threading.RLock()
 evaluacion_ts = set()
 evaluacion_ts_expirados = set()
 evaluacion_hora: dict = {}

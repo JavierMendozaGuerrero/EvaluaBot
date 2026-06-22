@@ -915,69 +915,6 @@ def obtener_cargo_por_slack_id(user_id: str) -> str | None:
     return None
 
 
-_cache_preguntas: dict = {}
-
-
-def _normalizar_clave_pregunta(clave: str) -> str | None:
-    norm = normalizar_nombre(clave)
-    if "satisfac" in norm:
-        return "satisfaccion"
-    if "mejor" in norm:
-        return "mejor_aspecto"
-    if "peor" in norm:
-        return "peor_aspecto"
-    return None
-
-
-def obtener_preguntas_desde_notion(tipo: str) -> dict:
-    """Devuelve las preguntas del tipo dado ('Same Level', 'Top-Bottom', 'Bottom-Top').
-    Resultado: {'satisfaccion': '...', 'mejor_aspecto': '...', 'peor_aspecto': '...'}
-    """
-    with lock:
-        if tipo in _cache_preguntas:
-            return _cache_preguntas[tipo]
-    try:
-        resultado = notion.search(
-            query=config.NOTION_QUESTIONS_DATABASE_NAME,
-            filter={"value": _tipo_objeto_busqueda_bbdd(), "property": "object"},
-            page_size=10,
-        )
-        db_id = None
-        for bbdd in resultado.get("results", []):
-            if normalizar_nombre(_extraer_titulo_bbdd(bbdd)) == normalizar_nombre(config.NOTION_QUESTIONS_DATABASE_NAME):
-                db_id = _data_source_id(bbdd)
-                break
-        if not db_id:
-            logging.warning("No se encontró la base de preguntas '%s'", config.NOTION_QUESTIONS_DATABASE_NAME)
-            return {}
-
-        preguntas = {}
-        tipo_norm = normalizar_nombre(tipo)
-        cursor = None
-        while True:
-            kwargs: dict = {"page_size": 100}
-            if cursor:
-                kwargs["start_cursor"] = cursor
-            resp = _query_bbdd(db_id, **kwargs)
-            for fila in resp.get("results", []):
-                props = fila.get("properties", {})
-                if normalizar_nombre(_texto_propiedad(props, "Tipo")) != tipo_norm:
-                    continue
-                texto = _texto_propiedad(props, "Pregunta")
-                clave = _normalizar_clave_pregunta(_texto_propiedad(props, "Clave"))
-                if texto and clave:
-                    preguntas[clave] = texto
-            if not resp.get("has_more"):
-                break
-            cursor = resp.get("next_cursor")
-
-        with lock:
-            _cache_preguntas[tipo] = preguntas
-        return preguntas
-    except Exception:
-        logging.exception("Error leyendo preguntas desde Notion para tipo '%s'", tipo)
-        return {}
-
 
 def sugerir_empleados_parecidos(nombre: str, limite: int = 8) -> list[str]:
     candidatos = []

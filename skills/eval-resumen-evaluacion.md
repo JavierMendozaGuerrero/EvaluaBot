@@ -23,7 +23,7 @@ solo se mandan los nombres de los apartados. Esto mantiene el prompt corto y el 
 
 ```
 Notion
-  └── "Evaluaciones - {nombre}"  → evaluaciones de proyecto (opcional — también acepta texto libre)
+  └── "Evaluaciones - {nombre}"  → evaluaciones mensuales (opcional — también acepta texto libre)
           ↓
   evaluaciones_a_texto(evaluaciones)     ← convierte lista de dicts a texto
           ↓

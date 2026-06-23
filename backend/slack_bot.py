@@ -60,7 +60,7 @@ def enviar_una_evaluacion():
                 resp = slack_app.client.chat_postMessage(
                     channel=dm_channel,
                     text=(
-                        "📍 *Tienes una evaluación de proyecto pendiente.*\n"
+                        "📍 *Tienes una evaluación mensual pendiente.*\n"
                         "Responde en el hilo de este mensaje para comenzar.\n"
                         "_Si en algún momento quieres cancelar, escribe SOS en el hilo._"
                     ),
@@ -773,7 +773,7 @@ def ciclo_recordatorios_proyecto():
                     continue
                 slack_app.client.chat_postMessage(
                     channel=dm_channel,
-                    text="*⏰ Recuerda realizar tu evaluación de proyecto.* Abre el hilo del mensaje de evaluación y responde.",
+                    text="*⏰ Recuerda realizar tu evaluación mensual.* Abre el hilo del mensaje de evaluación y responde.",
                 )
                 with lock:
                     evaluacion_ultimo_recordatorio[uid] = time.time()

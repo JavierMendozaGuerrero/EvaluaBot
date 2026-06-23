@@ -44,7 +44,7 @@ def main():
     threading.Thread(target=servidor_web, daemon=True).start()
 
     if config.APP_MODE == "produccion":
-        print("Bot activo en modo produccion. Enviara las evaluaciones segun la fecha configurada en Notion (personal cada 2 semanas, CA y proyectos cada 4 semanas).")
+        print("Bot activo en modo produccion. Enviara las evaluaciones segun la fecha configurada en Notion (personal cada 2 semanas, CA y mensuales cada 4 semanas).")
     else:
         print(f"Bot activo en modo prueba. Enviara los 3 hilos ahora y luego cada {config.INTERVALO_PRUEBA_DIAS} dias.")
     print("Las preguntas se hacen una a una en el hilo y el resultado se guarda en Notion tras confirmacion.")

@@ -1,7 +1,7 @@
 """
 Skill: Informe anual IGENERIS
 No requiere ninguna base de Notion adicional. Usa las bases existentes:
-  - "Evaluaciones - {nombre}"  → evaluaciones de proyecto
+  - "Evaluaciones - {nombre}"  → evaluaciones mensuales
   - "Opiniones - {nombre}"     → opiniones del CA
   - "Objetivos empleados"      → objetivos (y revela el nombre del CA)
 """
@@ -270,16 +270,16 @@ def obtener_empleados_evaluacion_anual() -> list[str]:
 def obtener_datos_empleado_anual(nombre: str) -> dict:
     """
     Recopila toda la información disponible en Notion sobre el empleado:
-      - evaluaciones de proyecto (desde "Evaluaciones - {nombre}")
+      - evaluaciones mensuales (desde "Evaluaciones - {nombre}")
       - opiniones del CA (desde "Opiniones - {nombre}")
       - objetivos (desde "Objetivos empleados"), de donde también se extrae el CA
     """
-    # 1. Evaluaciones de proyecto
+    # 1. Evaluaciones mensuales
     evaluaciones = []
     try:
         evaluaciones = obtener_evaluaciones_por_evaluado(nombre)
     except Exception:
-        logging.warning("No se encontraron evaluaciones de proyecto para %s.", nombre)
+        logging.warning("No se encontraron evaluaciones mensuales para %s.", nombre)
 
     # 2. Objetivos (también revelan el nombre del CA)
     objetivos = []
@@ -391,7 +391,7 @@ def interpretar_evaluaciones_anual(emp_data: dict, cargo: str = "") -> dict:
 
     system = (
         "Eres el director de RRHH de IGENERIS. "
-        "A partir de las opiniones del CA y las evaluaciones de proyecto del empleado, "
+        "A partir de las opiniones del CA y las evaluaciones mensuales del empleado, "
         "genera el contenido del informe anual de evaluación. "
         "Ten en cuenta los criterios DTI: lo que es suficiente para un Analyst puede ser lo mínimo esperado para un Manager. "
         "Devuelve ÚNICAMENTE un JSON válido (sin bloques markdown) con esta estructura:\n"
@@ -823,7 +823,7 @@ def generar_informe_anual(evaluado: str, cargo: str = "") -> str:
     emp_data = obtener_datos_empleado_anual(evaluado)
     if not emp_data.get("opiniones_ca") and not emp_data.get("evaluaciones"):
         raise ValueError(
-            f"No hay opiniones del CA ni evaluaciones de proyecto para '{evaluado}'."
+            f"No hay opiniones del CA ni evaluaciones mensuales para '{evaluado}'."
         )
 
     slug = slug_archivo(evaluado)

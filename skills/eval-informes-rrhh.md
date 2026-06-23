@@ -15,7 +15,7 @@ Genera automáticamente informes de evaluación anual en `.docx` (Word) y `.html
 
 | Base de Notion | Qué contiene |
 |----------------|-------------|
-| `Evaluaciones - {nombre}` | Evaluaciones de proyecto del empleado |
+| `Evaluaciones - {nombre}` | Evaluaciones mensuales del empleado |
 | `Opiniones - {nombre}` | Opiniones del CA sobre el advisee |
 | `Objetivos empleados` | Objetivos del empleado (también revela el nombre del CA) |
 
@@ -25,7 +25,7 @@ Genera automáticamente informes de evaluación anual en `.docx` (Word) y `.html
 
 ```
 Notion
-  ├── "Evaluaciones - {nombre}"  → evaluaciones de proyecto (por proyecto, evaluador, relación jerárquica)
+  ├── "Evaluaciones - {nombre}"  → evaluaciones mensuales (por proyecto, evaluador, relación jerárquica)
   ├── "Opiniones - {nombre}"     → opiniones del CA (resumen + opinión por fecha)
   └── "Objetivos empleados"      → objetivos + nombre del CA
           ↓
@@ -262,7 +262,7 @@ Lo que es positivo para un Analyst puede ser lo mínimo esperado para un Manager
 
 ## Estructura de datos que devuelve Notion
 
-### Evaluaciones de proyecto (`obtener_evaluaciones_por_evaluado`)
+### Evaluaciones mensuales (`obtener_evaluaciones_por_evaluado`)
 
 ```python
 {
@@ -407,7 +407,7 @@ slug = generar_informe_anual(evaluado="Alonso Ballesteros", cargo="Analyst")
 - `informe_anual_{slug}.docx`
 - `informe_anual_{slug}.html`
 
-**Lanza `ValueError`** si no hay ni opiniones del CA ni evaluaciones de proyecto para el empleado.
+**Lanza `ValueError`** si no hay ni opiniones del CA ni evaluaciones mensuales para el empleado.
 
 ---
 

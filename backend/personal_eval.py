@@ -1,16 +1,19 @@
 import logging
 import threading
 import time
+from datetime import datetime, timezone
 
 from . import config
 from .clients import slack_app
 from .notion_service import (
     buscar_empleado_en_lista,
     guardar_evaluacion_personal,
+    obtener_config_calendario,
     obtener_nombre_por_id_usuario,
     obtener_objetivos,
     obtener_preguntas_personales,
     obtener_slack_ids_empleados,
+    siguiente_envio_calendario,
     sugerir_empleados_parecidos,
     PREGUNTAS_PERSONALES_DEFAULT,
 )
@@ -25,7 +28,7 @@ personal_hora: dict = {}
 personal_ultimo_recordatorio: dict = {}
 conversaciones_personal: dict = {}
 
-_RECORDATORIO_SEGUNDOS = 120
+_RECORDATORIO_SEGUNDOS = 7 * 24 * 60 * 60  # 1 semana
 
 _OPCIONES_MOD_PERSONAL = {
     "1": "proyecto", "proyecto": "proyecto",
@@ -115,8 +118,12 @@ def enviar_pregunta_inicial_personal() -> None:
                     )
                 except Exception:
                     logging.exception("Error enviando objetivos en hilo personal a %s", user_id)
-            except Exception:
-                logging.exception("Error enviando evaluación personal a %s", user_id)
+            except Exception as exc:
+                err_str = str(exc)
+                if "user_not_found" in err_str or "channel_not_found" in err_str:
+                    logging.warning("Slack ID %s no encontrado en el workspace, omitiendo", user_id)
+                else:
+                    logging.exception("Error enviando evaluación personal a %s", user_id)
     except Exception:
         logging.exception("Error en enviar_pregunta_inicial_personal")
 
@@ -378,6 +385,27 @@ def manejar_mensaje_personal(event, logger) -> None:
     if accion == "ya_terminado":
         reply("Evaluación finalizada, por favor salga del hilo. 👋")
         return
+
+
+def ciclo_envio_personal() -> None:
+    """Solo activo en producción: envía evaluaciones personales cada 2 semanas desde la fecha de Notion."""
+    if config.APP_MODE != "produccion":
+        return
+    while True:
+        cal = obtener_config_calendario()
+        fecha = cal.get("personal")
+        if not fecha:
+            logging.info("[Personal] Sin 'Personal' en Calendario evaluaciones de Notion. Reintentando en 1h.")
+            time.sleep(3600)
+            continue
+        siguiente = siguiente_envio_calendario(fecha, 2)
+        espera = max(60, (siguiente - datetime.now(timezone.utc)).total_seconds())
+        logging.info(f"[Personal] Próximo envío: {siguiente.isoformat()} (en {espera/3600:.1f}h)")
+        time.sleep(espera)
+        try:
+            enviar_pregunta_inicial_personal()
+        except Exception:
+            logging.exception("Error en ciclo personal producción")
 
 
 def ciclo_recordatorios_personal() -> None:

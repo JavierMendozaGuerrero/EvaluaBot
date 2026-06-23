@@ -1,6 +1,6 @@
 import logging
 import time
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 from slack_bolt.adapter.socket_mode import SocketModeHandler
 
@@ -18,9 +18,11 @@ from .notion_service import (
     buscar_empleado_y_cargo,
     guardar_en_notion,
     obtener_cargo_por_slack_id,
+    obtener_config_calendario,
     obtener_nombre_por_id_usuario,
     obtener_preguntas_desde_notion,
     obtener_slack_ids_empleados,
+    siguiente_envio_calendario,
     sugerir_empleados_parecidos,
 )
 from .state import (
@@ -68,8 +70,11 @@ def enviar_una_evaluacion():
                     evaluacion_hora[user_id] = time.time()
                     conversaciones.pop(user_id, None)
                 logging.info(f"Evaluación enviada por DM a {user_id}, ts={resp['ts']}")
-            except Exception:
-                logging.exception(f"Error enviando DM de evaluación a {user_id}")
+            except Exception as exc:
+                if "user_not_found" in str(exc) or "channel_not_found" in str(exc):
+                    logging.warning("Slack ID %s no encontrado en el workspace, omitiendo", user_id)
+                else:
+                    logging.exception("Error enviando DM de evaluación a %s", user_id)
     except Exception:
         logging.exception("Error en enviar_una_evaluacion")
 
@@ -100,12 +105,19 @@ def enviar_evaluaciones_programadas():
     if config.APP_MODE != "produccion":
         enviar_evaluaciones_modo_prueba()
         return
+    # Producción: intervalo fijo de 4 semanas desde la fecha configurada en Notion
     while True:
-        objetivo = siguiente_envio_produccion()
-        espera = max(1, (objetivo - datetime.now(config.ZONA_HORARIA_MADRID)).total_seconds())
-        logging.info(f"Próxima evaluación programada: {objetivo.isoformat()}")
+        cal = obtener_config_calendario()
+        fecha = cal.get("proyecto_ca")
+        if not fecha:
+            logging.info("[Proyecto] Sin 'Proyecto y CA' en Calendario evaluaciones de Notion. Reintentando en 1h.")
+            time.sleep(3600)
+            continue
+        siguiente = siguiente_envio_calendario(fecha, 4)
+        espera = max(60, (siguiente - datetime.now(timezone.utc)).total_seconds())
+        logging.info(f"[Proyecto] Próximo envío: {siguiente.isoformat()} (en {espera/3600:.1f}h)")
         time.sleep(espera)
-        enviar_o_crear_revision("modo producción")
+        enviar_una_evaluacion()
 
 
 def resumen_respuestas(respuestas):
@@ -563,7 +575,7 @@ def handle_message_events(event, logger):
         reply(pregunta)
 
 
-_RECORDATORIO_PROYECTO_SEGUNDOS = 120
+_RECORDATORIO_PROYECTO_SEGUNDOS = 7 * 24 * 60 * 60  # 1 semana
 
 
 def ciclo_recordatorios_proyecto():

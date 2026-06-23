@@ -8,7 +8,7 @@ from datetime import datetime, timezone
 
 from . import config
 from .clients import Document, anthropic_client
-from .notion_service import obtener_evaluaciones_por_evaluado
+from .notion_service import obtener_comentarios_personales, obtener_evaluaciones_por_evaluado
 from .utils import slug_archivo
 
 
@@ -30,22 +30,47 @@ def _evaluaciones_para_prompt(evaluaciones):
     return "\n".join(lineas)
 
 
-def generar_informe_claude(evaluaciones):
+def _comentarios_para_prompt(comentarios, nombre):
+    if not comentarios:
+        return ""
+    lineas = []
+    for c in comentarios:
+        rol = "Autor" if c["es_autor"] else f"Mencionado por {c['autor']}"
+        implicadas = f" | Personas implicadas: {c['personas_implicadas']}" if c["personas_implicadas"] else ""
+        lineas.append(
+            f"- [{rol}] Proyecto: {c['proyecto']} | Fecha: {c['fecha']}{implicadas} | "
+            f"Comentario: {c['comentario']}"
+        )
+    return "\n".join(lineas)
+
+
+def generar_informe_claude(evaluaciones, comentarios_personales=None):
     if not anthropic_client:
         raise RuntimeError("Falta ANTHROPIC_API_KEY o no está instalado el paquete anthropic.")
     if not evaluaciones:
         raise RuntimeError("No hay evaluaciones en Notion para generar el informe.")
+
+    seccion_personal = ""
+    if comentarios_personales:
+        nombre = evaluaciones[0].get("evaluado", "") if evaluaciones else ""
+        bloque = _comentarios_para_prompt(comentarios_personales, nombre)
+        seccion_personal = (
+            f"\n\nCOMENTARIOS DE EVALUACIONES PERSONALES (reflexiones propias y menciones de compañeros):\n{bloque}"
+        )
+
     prompt = (
         "Eres un consultor senior de People Analytics. Genera un informe profesional en español "
         "sobre las evaluaciones recibidas. Usa este formato exacto con títulos claros:\n"
         "1. Resumen ejecutivo\n2. Métricas principales\n3. Fortalezas detectadas\n"
         "4. Riesgos o áreas de mejora\n5. Recomendaciones accionables\n6. Conclusión\n\n"
-        "Sé concreto, no inventes datos y menciona patrones repetidos si los hay.\n\n"
-        f"Datos:\n{_evaluaciones_para_prompt(evaluaciones)}"
+        "Sé concreto, no inventes datos y menciona patrones repetidos si los hay. "
+        "Si hay comentarios de evaluaciones personales, intégralos en el análisis.\n\n"
+        f"EVALUACIONES:\n{_evaluaciones_para_prompt(evaluaciones)}"
+        f"{seccion_personal}"
     )
     respuesta = anthropic_client.messages.create(
         model="claude-sonnet-4-6",
-        max_tokens=1800,
+        max_tokens=2200,
         messages=[{"role": "user", "content": prompt}],
     )
     return "".join(bloque.text for bloque in respuesta.content if bloque.type == "text").strip()
@@ -128,16 +153,17 @@ def generar_archivos_informe(evaluado=""):
     if not evaluado:
         raise RuntimeError("Selecciona una persona evaluada.")
     evaluaciones = obtener_evaluaciones_por_evaluado(evaluado)
+    comentarios = obtener_comentarios_personales(evaluado)
     nombre = evaluado
     slug = slug_archivo(nombre)
-    huella = _huella_evaluaciones(evaluaciones)
+    huella = _huella_evaluaciones(evaluaciones + comentarios)
     cache = cargar_cache_informe(slug)
     html_path = os.path.join(config.CARPETA_WEB, f"informe_{slug}.html")
     docx_path = os.path.join(config.CARPETA_WEB, f"informe_{slug}.docx")
     if cache and cache.get("huella") == huella and os.path.exists(html_path) and os.path.exists(docx_path):
         logging.info(f"Informe reutilizado desde caché para {nombre}; no se llama a Claude.")
         return len(evaluaciones), slug, True
-    informe = generar_informe_claude(evaluaciones)
+    informe = generar_informe_claude(evaluaciones, comentarios_personales=comentarios)
     guardar_informe_html(informe, evaluaciones, nombre)
     guardar_informe_word(informe, evaluaciones, nombre)
     guardar_cache_informe(slug, huella, len(evaluaciones))

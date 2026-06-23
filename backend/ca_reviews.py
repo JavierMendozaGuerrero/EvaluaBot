@@ -10,7 +10,7 @@ Notion → pregunta si hay otro advisee.
 import logging
 import threading
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from . import config
 from .clients import notion, slack_app
@@ -26,8 +26,11 @@ from .notion_service import (
     _usa_data_sources,
     buscar_empleado_en_lista,
     obtener_advisees,
+    obtener_comentarios_personales,
+    obtener_config_calendario,
     obtener_evaluaciones_por_evaluado,
     obtener_slack_ids_empleados,
+    siguiente_envio_calendario,
     sugerir_empleados_parecidos,
 )
 from .utils import normalizar_nombre
@@ -223,7 +226,26 @@ def _resumen_advisee(advisee: str, desde_fecha: str | None) -> str:
     cabecera = f"*{advisee}* – {n} evaluación{'es' if n != 1 else ''}"
     if desde_fecha:
         cabecera += f" desde {desde_fecha[:10]}"
-    return cabecera + ":\n" + "\n".join(lineas)
+    resumen = cabecera + ":\n" + "\n".join(lineas)
+
+    # Añadir comentarios de evaluaciones personales
+    try:
+        comentarios = obtener_comentarios_personales(advisee)
+        if desde_fecha:
+            comentarios = [c for c in comentarios if c.get("fecha", "") > desde_fecha]
+        if comentarios:
+            lineas_personales = []
+            for c in sorted(comentarios, key=lambda x: x.get("fecha", "")):
+                rol = "dicho por ella/él" if c["es_autor"] else f"mencionada/o por *{c['autor']}*"
+                implicadas = f" | Con: {c['personas_implicadas']}" if c.get("personas_implicadas") else ""
+                lineas_personales.append(
+                    f"• [{c['fecha']}] {rol} en {c['proyecto']}{implicadas} → _{c['comentario']}_"
+                )
+            resumen += f"\n\n*Comentarios personales ({len(lineas_personales)}):*\n" + "\n".join(lineas_personales)
+    except Exception:
+        logging.exception("Error leyendo comentarios personales de '%s'", advisee)
+
+    return resumen
 
 
 # ---------------------------------------------------------------------------
@@ -604,6 +626,8 @@ def manejar_mensaje_ca(event, logger) -> None:
                     conversaciones_ca[conv_key]["advisee_actual"] = advisee
                     conversaciones_ca[conv_key]["ca_nombre"] = ca_nombre
             desde_fecha = _fecha_ultima_opinion(ca_nombre, advisee)
+            hace_4_semanas = (datetime.now(timezone.utc) - timedelta(weeks=4)).isoformat()
+            desde_fecha = max(desde_fecha, hace_4_semanas) if desde_fecha else hace_4_semanas
             resumen = _resumen_advisee(advisee, desde_fecha)
             sin_novedades = "no hay evaluaciones nuevas" in resumen or "No hay evaluaciones registradas" in resumen
             with _lock:
@@ -692,7 +716,7 @@ def manejar_mensaje_ca(event, logger) -> None:
 # Ciclos de recordatorio y envío
 # ---------------------------------------------------------------------------
 
-_RECORDATORIO_CA_SEGUNDOS = 120
+_RECORDATORIO_CA_SEGUNDOS = 7 * 24 * 60 * 60  # 1 semana
 
 
 def ciclo_recordatorios_ca() -> None:
@@ -723,10 +747,28 @@ def ciclo_recordatorios_ca() -> None:
 
 
 def ciclo_envio_ca() -> None:
-    time.sleep(60)
+    if config.APP_MODE != "produccion":
+        time.sleep(60)
+        while True:
+            try:
+                enviar_pregunta_inicial_ca()
+            except Exception:
+                logging.exception("Error en ciclo CA")
+            time.sleep(config.INTERVALO_CA_SEGUNDOS)
+        return
+    # Producción: 4 semanas desde la fecha configurada en Notion
     while True:
+        cal = obtener_config_calendario()
+        fecha = cal.get("proyecto_ca")
+        if not fecha:
+            logging.info("[CA] Sin 'Proyecto y CA' en Calendario evaluaciones de Notion. Reintentando en 1h.")
+            time.sleep(3600)
+            continue
+        siguiente = siguiente_envio_calendario(fecha, 4)
+        espera = max(60, (siguiente - datetime.now(timezone.utc)).total_seconds())
+        logging.info(f"[CA] Próximo envío: {siguiente.isoformat()} (en {espera/3600:.1f}h)")
+        time.sleep(espera)
         try:
             enviar_pregunta_inicial_ca()
         except Exception:
-            logging.exception("Error en ciclo CA")
-        time.sleep(config.INTERVALO_CA_SEGUNDOS)
+            logging.exception("Error en ciclo CA producción")

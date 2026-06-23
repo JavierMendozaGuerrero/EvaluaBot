@@ -2036,3 +2036,157 @@ def guardar_evaluacion_personal(nombre: str, respuestas: dict) -> bool:
     except Exception:
         logging.exception("Error guardando evaluación personal de '%s'", nombre)
         return False
+
+
+_cache_calendario_db: dict = {"db_id": None}
+
+_PROPS_CALENDARIO = {
+    "Nombre": {"title": {}},
+    "Fecha inicio": {"date": {}},
+}
+
+
+def _obtener_o_crear_bbdd_calendario() -> str | None:
+    with lock:
+        db_id = _cache_calendario_db["db_id"]
+    if db_id:
+        return db_id
+
+    parent = None
+    try:
+        res = notion.search(
+            query="Listas de datos",
+            filter={"value": "page", "property": "object"},
+            page_size=10,
+        )
+        for page in res.get("results", []):
+            if normalizar_nombre(_extraer_titulo_pagina(page)) == "listas de datos":
+                parent = {"type": "page_id", "page_id": page["id"]}
+                break
+    except Exception:
+        pass
+    if parent is None:
+        parent = _parent_bbdd_referencia()
+
+    # Buscar si ya existe dentro de la página
+    try:
+        if parent and parent.get("type") == "page_id":
+            for bloque in _iter_blocks(parent["page_id"]):
+                if bloque.get("type") == "child_database":
+                    if normalizar_nombre(_titulo_child_database(bloque)) == "calendario evaluaciones":
+                        db_id = bloque["id"]
+                        with lock:
+                            _cache_calendario_db["db_id"] = db_id
+                        return db_id
+    except Exception:
+        pass
+
+    try:
+        if _usa_data_sources():
+            nueva = notion.databases.create(
+                parent=parent,
+                title=[{"type": "text", "text": {"content": "Calendario evaluaciones"}}],
+                initial_data_source={
+                    "title": [{"type": "text", "text": {"content": "Calendario evaluaciones"}}],
+                    "properties": _PROPS_CALENDARIO,
+                },
+            )
+            nueva = notion.databases.retrieve(database_id=nueva["id"])
+        else:
+            nueva = notion.databases.create(
+                parent=parent,
+                title=[{"type": "text", "text": {"content": "Calendario evaluaciones"}}],
+                properties=_PROPS_CALENDARIO,
+            )
+        db_id = _data_source_id(nueva)
+        with lock:
+            _cache_calendario_db["db_id"] = db_id
+        return db_id
+    except Exception:
+        logging.exception("Error creando 'Calendario evaluaciones' en Notion")
+        return None
+
+
+def obtener_config_calendario() -> dict:
+    """Devuelve {'personal': 'YYYY-MM-DD'|None, 'proyecto_ca': 'YYYY-MM-DD'|None}."""
+    db_id = _obtener_o_crear_bbdd_calendario()
+    resultado = {"personal": None, "proyecto_ca": None}
+    if not db_id:
+        return resultado
+    try:
+        resp = _query_bbdd(db_id, page_size=50)
+        for fila in resp.get("results", []):
+            props = fila.get("properties", {})
+            nombre = "".join(p.get("plain_text", "") for p in props.get("Nombre", {}).get("title", [])).strip().lower()
+            fecha_prop = props.get("Fecha inicio", {}).get("date") or {}
+            fecha = (fecha_prop.get("start") or "")[:10]
+            if not fecha:
+                continue
+            if "personal" in nombre:
+                resultado["personal"] = fecha
+            elif "proyecto" in nombre or " ca" in nombre or nombre.startswith("ca"):
+                resultado["proyecto_ca"] = fecha
+    except Exception:
+        logging.exception("Error leyendo configuración de calendario desde Notion")
+    return resultado
+
+
+def siguiente_envio_calendario(fecha_inicio_str: str, semanas: int) -> "datetime":
+    """Dado un inicio y un intervalo en semanas, devuelve el próximo momento de envío tras ahora."""
+    inicio = datetime.fromisoformat(fecha_inicio_str)
+    if inicio.tzinfo is None:
+        inicio = inicio.replace(tzinfo=timezone.utc)
+    ahora = datetime.now(timezone.utc)
+    if ahora < inicio:
+        return inicio
+    intervalo = timedelta(weeks=semanas)
+    n = int((ahora - inicio) / intervalo) + 1
+    return inicio + intervalo * n
+
+
+def obtener_comentarios_personales(nombre: str) -> list[dict]:
+    """Devuelve los comentarios de evaluaciones personales donde 'nombre' es el autor
+    o aparece en 'Personas implicadas'."""
+    db_id = _buscar_o_crear_bbdd_en_personales(
+        "Respuestas", _PROPS_EVALUACIONES_PERSONALES, _cache_personal_eval_db,
+    )
+    if not db_id:
+        return []
+    try:
+        nombre_norm = normalizar_nombre(nombre)
+        resultados = []
+        cursor = None
+        while True:
+            kwargs = {"page_size": 100}
+            if cursor:
+                kwargs["start_cursor"] = cursor
+            resp = _query_bbdd(db_id, **kwargs)
+            for fila in resp.get("results", []):
+                props = fila.get("properties", {})
+                autor = "".join(p.get("plain_text", "") for p in props.get("Nombre", {}).get("title", [])).strip()
+                personas = "".join(p.get("plain_text", "") for p in props.get("Personas implicadas", {}).get("rich_text", [])).strip()
+                comentario = "".join(p.get("plain_text", "") for p in props.get("Comentario", {}).get("rich_text", [])).strip()
+                proyecto = "".join(p.get("plain_text", "") for p in props.get("Proyecto", {}).get("rich_text", [])).strip()
+                fecha_prop = props.get("Fecha", {}).get("date") or {}
+                fecha = (fecha_prop.get("start") or "")[:10]
+
+                personas_lista = [normalizar_nombre(p.strip()) for p in personas.split(",") if p.strip()]
+                es_autor = normalizar_nombre(autor) == nombre_norm
+                esta_implicado = nombre_norm in personas_lista
+
+                if (es_autor or esta_implicado) and comentario:
+                    resultados.append({
+                        "autor": autor,
+                        "fecha": fecha,
+                        "comentario": comentario,
+                        "proyecto": proyecto or "Sin proyecto",
+                        "personas_implicadas": personas,
+                        "es_autor": es_autor,
+                    })
+            if not resp.get("has_more"):
+                break
+            cursor = resp.get("next_cursor")
+        return resultados
+    except Exception:
+        logging.exception("Error leyendo comentarios personales de '%s'", nombre)
+        return []

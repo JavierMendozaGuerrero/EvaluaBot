@@ -21,6 +21,8 @@ from .notion_service import (
     obtener_config_calendario,
     obtener_nombre_por_id_usuario,
     obtener_preguntas_desde_notion,
+    obtener_preguntas_mo,
+    obtener_preguntas_palantir,
     obtener_slack_ids_empleados,
     siguiente_envio_calendario,
     sugerir_empleados_parecidos,
@@ -120,17 +122,54 @@ def enviar_evaluaciones_programadas():
         enviar_una_evaluacion()
 
 
-def resumen_respuestas(respuestas):
-    return (
-        "Resumen de tus respuestas:\n"
-        f"- Persona evaluada: {respuestas.get('evaluado', '')}\n"
-        f"- Proyecto: {respuestas.get('proyecto', '')}\n"
-        f"- Satisfacción: {respuestas.get('satisfaccion', '')}\n"
-        f"- Mejor aspecto: {respuestas.get('mejor_aspecto', '')}\n"
-        f"- Peor aspecto: {respuestas.get('peor_aspecto', '')}\n\n"
-        "¿Estás satisfecho con tus respuestas?\n"
+def resumen_respuestas(respuestas, area="negocio", preguntas_area=None):
+    _sufijo = (
+        "\n\n¿Estás satisfecho con tus respuestas?\n"
         "Responde `sí` para guardar en Notion o `modificar` para cambiar una respuesta concreta."
     )
+    if area == "negocio" or not preguntas_area:
+        return (
+            "Resumen de tus respuestas:\n"
+            f"- Persona evaluada: {respuestas.get('evaluado', '')}\n"
+            f"- Proyecto: {respuestas.get('proyecto', '')}\n"
+            f"- Satisfacción: {respuestas.get('satisfaccion', '')}\n"
+            f"- Mejor aspecto: {respuestas.get('mejor_aspecto', '')}\n"
+            f"- Peor aspecto: {respuestas.get('peor_aspecto', '')}"
+            + _sufijo
+        )
+    lineas = [
+        "Resumen de tus respuestas:",
+        f"- Persona evaluada: {respuestas.get('evaluado', '')}",
+        f"- Proyecto: {respuestas.get('proyecto', '')}",
+    ]
+    for q in preguntas_area:
+        lineas.append(f"- {q['texto']}: {respuestas.get(q['clave'], '')}")
+    return "\n".join(lineas) + _sufijo
+
+
+def _texto_menu_modificacion_area(estado):
+    preguntas_area = estado.get("preguntas_area", [])
+    lineas = ["¿Qué respuesta quieres modificar?", "1. Persona evaluada", "2. Proyecto"]
+    for i, q in enumerate(preguntas_area, start=3):
+        lineas.append(f"{i}. {q['texto'][:60]}")
+    lineas.append("\nResponde con el número.")
+    return "\n".join(lineas)
+
+
+def _clave_modificacion_area(texto, estado):
+    preguntas_area = estado.get("preguntas_area", [])
+    n = normalizar_nombre(texto)
+    if n in {"1", "persona", "persona evaluada", "evaluado"}:
+        return "evaluado"
+    if n in {"2", "proyecto"}:
+        return "proyecto"
+    try:
+        idx = int(texto) - 3
+        if 0 <= idx < len(preguntas_area):
+            return preguntas_area[idx]["clave"]
+    except (ValueError, IndexError):
+        pass
+    return None
 
 
 OPCIONES_MODIFICACION = {
@@ -295,12 +334,14 @@ def handle_message_events(event, logger):
         _campo_peek = (conversaciones.get(user_id) or {}).get("campo_modificando")
         _cargo_ev_peek = (conversaciones.get(user_id) or {}).get("cargo_evaluador")
         _relacion_peek = (conversaciones.get(user_id) or {}).get("relacion_jerarquica", "igual")
+        _area_peek = (conversaciones.get(user_id) or {}).get("area", "negocio")
 
     _empleado_pre = None
     _cargo_pre = None
     _cargo_evaluador_pre = _cargo_ev_peek
     _relacion_pre = _relacion_peek
     _preguntas_pre = {}
+    _preguntas_area_pre = []
     _invalido_pre = None
 
     _necesita_busqueda = (
@@ -311,10 +352,16 @@ def handle_message_events(event, logger):
         try:
             _empleado_pre, _cargo_pre = buscar_empleado_y_cargo(texto)
             if _empleado_pre:
-                if _cargo_ev_peek is None:
-                    _cargo_evaluador_pre = obtener_cargo_por_slack_id(user_id)
-                _relacion_pre = comparar_jerarquia(_cargo_evaluador_pre or "", _cargo_pre or "")
-                _preguntas_pre = obtener_preguntas_desde_notion(tipo_relacion(_relacion_pre))
+                if _area_peek == "middleoffice":
+                    _preguntas_area_pre = obtener_preguntas_mo()
+                else:
+                    if _cargo_ev_peek is None:
+                        _cargo_evaluador_pre = obtener_cargo_por_slack_id(user_id)
+                    _relacion_pre = comparar_jerarquia(_cargo_evaluador_pre or "", _cargo_pre or "")
+                    if _area_peek == "palantir":
+                        _preguntas_area_pre = obtener_preguntas_palantir(tipo_relacion(_relacion_pre))
+                    else:
+                        _preguntas_pre = obtener_preguntas_desde_notion(tipo_relacion(_relacion_pre))
             else:
                 _invalido_pre = _mensaje_empleado_no_encontrado(texto)
         except Exception:
@@ -339,12 +386,45 @@ def handle_message_events(event, logger):
         pregunta = None
 
         if modo == "pre_inicial":
-            estado["modo"] = "esperando_proyecto"
-            accion = "pedir_proyecto"
+            estado["modo"] = "esperando_area"
+            accion = "pedir_area"
             pregunta = (
-                "¿En qué proyecto estás trabajando ahora? "
-                "Si estás en más de uno, elige solo uno y escribe el nombre del proyecto."
+                "¿A qué área perteneces?\n"
+                "*1.* Negocio\n"
+                "*2.* MiddleOffice\n"
+                "*3.* Palantir"
             )
+
+        elif modo == "esperando_area":
+            _AREA_MAP = {
+                "1": "negocio", "negocio": "negocio",
+                "2": "middleoffice", "middleoffice": "middleoffice",
+                "middle office": "middleoffice", "middle": "middleoffice", "mo": "middleoffice",
+                "3": "palantir", "palantir": "palantir",
+            }
+            _area_elegida = _AREA_MAP.get(normalizar_nombre(texto))
+            if _area_elegida:
+                estado["area"] = _area_elegida
+                if _area_elegida == "middleoffice":
+                    estado["respuestas"]["proyecto"] = ""
+                    estado["modo"] = "esperando_persona"
+                    accion = "pedir_persona"
+                    pregunta = "¿A quién quieres evaluar? Dime el nombre de la persona."
+                else:
+                    estado["modo"] = "esperando_proyecto"
+                    accion = "pedir_proyecto"
+                    pregunta = (
+                        "¿En qué proyecto estás trabajando ahora? "
+                        "Si estás en más de uno, elige solo uno y escribe el nombre del proyecto."
+                    )
+            else:
+                accion = "pedir_area"
+                pregunta = (
+                    "Por favor, elige tu área:\n"
+                    "*1.* Negocio\n"
+                    "*2.* MiddleOffice\n"
+                    "*3.* Palantir"
+                )
 
         elif modo == "esperando_proyecto":
             if texto:
@@ -383,12 +463,26 @@ def handle_message_events(event, logger):
                         if _cargo_evaluador_pre and _cargo_evaluador_pre != _cargo_ev_peek:
                             estado["cargo_evaluador"] = _cargo_evaluador_pre
                         estado["relacion_jerarquica"] = _relacion_pre
-                        estado["modo"] = "esperando_satisfaccion"
-                        accion = "pedir_satisfaccion"
-                        pregunta = _preguntas_pre.get(
-                            "satisfaccion",
-                            "¿Cómo de satisfecho estás con esa persona? (responde un número del 1 al 5)",
-                        )
+                        _area_actual = estado.get("area", "negocio")
+                        if _area_actual in ("middleoffice", "palantir"):
+                            for _k in [k for k in estado["respuestas"] if k not in ("evaluado", "proyecto")]:
+                                del estado["respuestas"][_k]
+                            estado["preguntas_area"] = _preguntas_area_pre
+                            estado["pregunta_actual"] = 0
+                            estado["modo"] = "preguntando_area_secuencial"
+                            accion = "preguntar"
+                            pregunta = (
+                                _preguntas_area_pre[0]["texto"]
+                                if _preguntas_area_pre
+                                else "⚠️ No hay preguntas configuradas en Notion para esta área."
+                            )
+                        else:
+                            estado["modo"] = "esperando_satisfaccion"
+                            accion = "pedir_satisfaccion"
+                            pregunta = _preguntas_pre.get(
+                                "satisfaccion",
+                                "¿Cómo de satisfecho estás con esa persona? (responde un número del 1 al 5)",
+                            )
                 else:
                     accion = "pedir_persona_invalida"
                     pregunta = _invalido_pre
@@ -429,20 +523,49 @@ def handle_message_events(event, logger):
                 accion = "pedir_peor"
                 pregunta = preguntas.get("peor_aspecto", "¿Cuál es el peor aspecto de esa persona?")
 
+        elif modo == "preguntando_area_secuencial":
+            todas = estado.get("preguntas_area", [])
+            idx = estado.get("pregunta_actual", 0)
+            if texto and todas and idx < len(todas):
+                estado["respuestas"][todas[idx]["clave"]] = texto
+                idx += 1
+                estado["pregunta_actual"] = idx
+            if idx < len(todas):
+                accion = "preguntar"
+                pregunta = todas[idx]["texto"]
+            else:
+                estado["modo"] = "confirmacion"
+                accion = "mostrar_resumen"
+                pregunta = resumen_respuestas(
+                    estado["respuestas"],
+                    area=estado.get("area", "negocio"),
+                    preguntas_area=todas,
+                )
+
         elif modo == "confirmacion":
             if respuesta_es_confirmacion(texto):
                 estado["modo"] = "guardar"
                 accion = "guardar"
             elif respuesta_es_modificacion(texto):
-                estado["modo"] = "seleccionando_modificacion"
-                accion = "pedir_modificacion"
-                pregunta = texto_menu_modificacion()
+                _area_conf = estado.get("area", "negocio")
+                if _area_conf in ("middleoffice", "palantir"):
+                    estado["modo"] = "seleccionando_modificacion_area"
+                    accion = "pedir_modificacion"
+                    pregunta = _texto_menu_modificacion_area(estado)
+                else:
+                    estado["modo"] = "seleccionando_modificacion"
+                    accion = "pedir_modificacion"
+                    pregunta = texto_menu_modificacion()
             elif _es_no(texto):
                 estado["modo"] = "terminado"
                 accion = "terminar"
             else:
                 accion = "mostrar_resumen"
-                pregunta = resumen_respuestas(estado["respuestas"])
+                pregunta = resumen_respuestas(
+                    estado["respuestas"],
+                    area=estado.get("area", "negocio"),
+                    preguntas_area=estado.get("preguntas_area"),
+                )
 
         elif modo == "seleccionando_modificacion":
             campo = clave_modificacion(texto)
@@ -474,7 +597,11 @@ def handle_message_events(event, logger):
                         estado.pop("campo_modificando", None)
                         estado["modo"] = "confirmacion"
                         accion = "mostrar_resumen"
-                        pregunta = resumen_respuestas(estado["respuestas"])
+                        pregunta = resumen_respuestas(
+                            estado["respuestas"],
+                            area=estado.get("area", "negocio"),
+                            preguntas_area=estado.get("preguntas_area"),
+                        )
                 else:
                     estado["respuestas"][campo] = texto
                     if campo == "proyecto":
@@ -482,34 +609,85 @@ def handle_message_events(event, logger):
                     estado.pop("campo_modificando", None)
                     estado["modo"] = "confirmacion"
                     accion = "mostrar_resumen"
-                    pregunta = resumen_respuestas(estado["respuestas"])
+                    pregunta = resumen_respuestas(
+                        estado["respuestas"],
+                        area=estado.get("area", "negocio"),
+                        preguntas_area=estado.get("preguntas_area"),
+                    )
             else:
                 accion = "pedir_valor_modificacion"
                 pregunta = texto_pregunta_por_clave(campo) if campo else texto_menu_modificacion()
+
+        elif modo == "seleccionando_modificacion_area":
+            campo = _clave_modificacion_area(texto, estado)
+            if campo:
+                estado["campo_modificando"] = campo
+                if campo == "evaluado":
+                    estado["modo"] = "modificando_respuesta"
+                    accion = "pedir_valor_modificacion"
+                    pregunta = "Indica el nombre de la persona a evaluar."
+                elif campo == "proyecto":
+                    estado["modo"] = "modificando_respuesta_area"
+                    accion = "pedir_valor_modificacion"
+                    pregunta = "Escribe el nuevo nombre del proyecto."
+                else:
+                    todas = estado.get("preguntas_area", [])
+                    pregunta = next((q["texto"] for q in todas if q["clave"] == campo), "Escribe la nueva respuesta.")
+                    estado["modo"] = "modificando_respuesta_area"
+                    accion = "pedir_valor_modificacion"
+            else:
+                accion = "pedir_modificacion"
+                pregunta = _texto_menu_modificacion_area(estado)
+
+        elif modo == "modificando_respuesta_area":
+            campo = estado.get("campo_modificando")
+            if campo and texto:
+                estado["respuestas"][campo] = texto
+                if campo == "proyecto":
+                    estado["proyecto_actual"] = texto
+                estado.pop("campo_modificando", None)
+                estado["modo"] = "confirmacion"
+                accion = "mostrar_resumen"
+                pregunta = resumen_respuestas(
+                    estado["respuestas"],
+                    area=estado.get("area", "negocio"),
+                    preguntas_area=estado.get("preguntas_area"),
+                )
+            else:
+                accion = "pedir_valor_modificacion"
+                pregunta = "Escribe la nueva respuesta."
 
         elif modo == "guardar":
             accion = "guardar"
 
         elif modo == "preguntar_mas_personas":
+            _area_mp = estado.get("area", "negocio")
             if _es_si(texto):
                 estado["modo"] = "esperando_persona"
                 accion = "pedir_persona_mismo_proyecto"
-                proyecto = estado.get("proyecto_actual") or ""
-                pregunta = (
-                    f"Perfecto. ¿Qué otro miembro del proyecto *{proyecto}* quieres evaluar?"
-                    if proyecto
-                    else "Perfecto. ¿Qué otro miembro quieres evaluar?"
-                )
+                if _area_mp == "middleoffice":
+                    pregunta = "Perfecto. ¿A quién más quieres evaluar? Dime el nombre."
+                else:
+                    proyecto = estado.get("proyecto_actual") or ""
+                    pregunta = (
+                        f"Perfecto. ¿Qué otro miembro del proyecto *{proyecto}* quieres evaluar?"
+                        if proyecto
+                        else "Perfecto. ¿Qué otro miembro quieres evaluar?"
+                    )
             elif _es_no(texto):
-                estado["modo"] = "preguntar_mas_proyectos"
-                accion = "pedir_mas_proyectos"
-                pregunta = (
-                    "Si hay más proyectos en los que estés trabajando, por favor, dímelo. "
-                    "¿Hay más proyectos? (`sí` / `no`)"
-                )
+                if _area_mp == "middleoffice":
+                    estado["modo"] = "terminado"
+                    accion = "terminar"
+                else:
+                    estado["modo"] = "preguntar_mas_proyectos"
+                    accion = "pedir_mas_proyectos"
+                    pregunta = (
+                        "Si hay más proyectos en los que estés trabajando, por favor, dímelo. "
+                        "¿Hay más proyectos? (`sí` / `no`)"
+                    )
             else:
                 accion = "pedir_mas_personas"
-                pregunta = "Responde `sí` o `no` para indicar si hay más personas en este proyecto."
+                pregunta = "Responde `sí` o `no` para indicar si hay más personas que evaluar."
 
         elif modo == "preguntar_mas_proyectos":
             if _es_si(texto):
@@ -532,6 +710,7 @@ def handle_message_events(event, logger):
 
     # Despacho de acciones — fuera del lock
     _ACCIONES_PREGUNTA = {
+        "pedir_area", "preguntar",
         "pedir_persona", "pedir_persona_invalida", "pedir_persona_mismo_proyecto",
         "pedir_proyecto", "pedir_satisfaccion", "pedir_mejor", "pedir_peor",
         "pedir_modificacion", "pedir_valor_modificacion", "pedir_mas_personas",
@@ -548,7 +727,9 @@ def handle_message_events(event, logger):
         with lock:
             respuestas_finales = dict(estado.get("respuestas", {}))
             relacion_final = estado.get("relacion_jerarquica", "igual")
-        guardado = guardar_en_notion(nombre, respuestas_finales, relacion=relacion_final)
+            _AREA_DISPLAY = {"negocio": "Negocio", "middleoffice": "MiddleOffice", "palantir": "Palantir"}
+            area_final = _AREA_DISPLAY.get(estado.get("area", "negocio"), "Negocio")
+        guardado = guardar_en_notion(nombre, respuestas_finales, relacion=relacion_final, area=area_final)
         if guardado:
             with lock:
                 clave_guardada = (

@@ -36,6 +36,9 @@ def _propiedades_bbdd_evaluaciones():
         "Evaluador": {"rich_text": {}},
         "Proyecto": {"rich_text": {}},
         "Fecha": {"date": {}},
+        "Area": {"select": {"options": [
+            {"name": "Negocio"}, {"name": "MiddleOffice"}, {"name": "Palantir"},
+        ]}},
         "Satisfaccion de superiores": {"rich_text": {}},
         "Satisfaccion de iguales": {"rich_text": {}},
         "Satisfaccion de inferiores": {"rich_text": {}},
@@ -464,6 +467,61 @@ def _buscar_bbdd_en_pagina(nombre_pagina, titulo_bbdd):
     return None
 
 
+def _buscar_bbdd_en_pagina_id(pagina_id: str, titulo_bbdd: str) -> str | None:
+    """Como _buscar_bbdd_en_pagina pero recibe el page_id directamente."""
+    objetivo = normalizar_nombre(titulo_bbdd)
+    for bloque in _iter_blocks(pagina_id):
+        if bloque.get("type") == "child_database" and normalizar_nombre(_titulo_child_database(bloque)) == objetivo:
+            try:
+                return _data_source_id(notion.databases.retrieve(database_id=bloque["id"]))
+            except Exception:
+                return bloque["id"]
+        if bloque.get("type") != "link_to_page":
+            continue
+        target_id = _target_link_to_page(bloque)
+        if not target_id:
+            continue
+        try:
+            db = notion.databases.retrieve(database_id=target_id)
+            if normalizar_nombre(_extraer_titulo_bbdd(db)) == objetivo:
+                return _data_source_id(db)
+        except Exception:
+            continue
+    return None
+
+
+_NOMBRE_SUBPAGINA_PREGUNTAS = "Preguntas"
+_cache_pagina_preguntas: dict = {"page_id": None}
+_lock_pagina_preguntas = threading.Lock()
+
+
+def _obtener_o_crear_pagina_preguntas_id() -> str | None:
+    """Devuelve el page_id de la sub-página 'Preguntas' dentro de 'Listas de datos'."""
+    with _lock_pagina_preguntas:
+        cached = _cache_pagina_preguntas["page_id"]
+    if cached:
+        return cached
+    listas_parent = _parent_bbdd_en_pagina(config.NOTION_DATA_LISTS_PAGE_NAME, crear=True)
+    if listas_parent.get("type") != "page_id":
+        return None
+    listas_page_id = listas_parent["page_id"]
+    page_id = _page_or_database_link_by_name(listas_page_id, _NOMBRE_SUBPAGINA_PREGUNTAS)
+    if not page_id:
+        try:
+            nueva = notion.pages.create(
+                parent={"type": "page_id", "page_id": listas_page_id},
+                properties={"title": {"title": [{"type": "text", "text": {"content": _NOMBRE_SUBPAGINA_PREGUNTAS}}]}},
+            )
+            page_id = nueva["id"]
+            logging.info("Sub-página '%s' creada en '%s'", _NOMBRE_SUBPAGINA_PREGUNTAS, config.NOTION_DATA_LISTS_PAGE_NAME)
+        except Exception:
+            logging.exception("Error creando sub-página '%s'", _NOMBRE_SUBPAGINA_PREGUNTAS)
+            return None
+    with _lock_pagina_preguntas:
+        _cache_pagina_preguntas["page_id"] = page_id
+    return page_id
+
+
 def obtener_parent_bbdd_evaluados():
     try:
         return _parent_bbdd_referencia()
@@ -499,27 +557,40 @@ def _propiedades_bbdd_preguntas():
     }
 
 
+_NOMBRE_BBDD_PREGUNTAS_NEGOCIO = "Preguntas Negocio"
+
+
 def _obtener_o_crear_bbdd_preguntas():
+    # 1. Buscar "Preguntas Negocio" dentro de la sub-página "Preguntas"
+    preguntas_page_id = _obtener_o_crear_pagina_preguntas_id()
+    if preguntas_page_id:
+        bbdd_id = _buscar_bbdd_en_pagina_id(preguntas_page_id, _NOMBRE_BBDD_PREGUNTAS_NEGOCIO)
+        if bbdd_id:
+            return bbdd_id
+    # 2. Fallback: buscar "Preguntas" en la ubicación antigua
     bbdd_id = _buscar_bbdd_en_pagina(config.NOTION_DATA_LISTS_PAGE_NAME, NOTION_QUESTIONS_DATABASE_NAME)
     if bbdd_id:
         return bbdd_id
-    parent = _parent_bbdd_en_pagina(config.NOTION_DATA_LISTS_PAGE_NAME, crear=True)
-    if parent.get("type") != "page_id":
-        logging.warning("No se pudo localizar la página '%s'", config.NOTION_DATA_LISTS_PAGE_NAME)
-        return None
-    titulo = NOTION_QUESTIONS_DATABASE_NAME
+    # 3. Crear "Preguntas Negocio" dentro de la sub-página
+    parent_page_id = preguntas_page_id
+    if not parent_page_id:
+        parent = _parent_bbdd_en_pagina(config.NOTION_DATA_LISTS_PAGE_NAME, crear=True)
+        if parent.get("type") != "page_id":
+            return None
+        parent_page_id = parent["page_id"]
+    titulo = _NOMBRE_BBDD_PREGUNTAS_NEGOCIO
     props = _propiedades_bbdd_preguntas()
     try:
         if _usa_data_sources():
             nueva = notion.databases.create(
-                parent={"type": "page_id", "page_id": parent["page_id"]},
+                parent={"type": "page_id", "page_id": parent_page_id},
                 title=[{"type": "text", "text": {"content": titulo}}],
                 initial_data_source={"title": [{"type": "text", "text": {"content": titulo}}], "properties": props},
             )
             nueva = notion.databases.retrieve(database_id=nueva["id"])
         else:
             nueva = notion.databases.create(
-                parent={"type": "page_id", "page_id": parent["page_id"]},
+                parent={"type": "page_id", "page_id": parent_page_id},
                 title=[{"type": "text", "text": {"content": titulo}}],
                 properties=props,
             )
@@ -584,6 +655,256 @@ def obtener_preguntas_desde_notion(tipo: str) -> dict:
         return {}
 
 
+# ---------------------------------------------------------------------------
+# BD Preguntas MiddleOffice — sin jerarquía, configurable desde Notion
+# ---------------------------------------------------------------------------
+
+_NOMBRE_BBDD_PREGUNTAS_MO = "Preguntas MiddleOffice"
+_lock_preguntas_mo = threading.Lock()
+_cache_preguntas_mo_db: dict = {"db_id": None}
+_cache_preguntas_mo_data: dict = {}
+_PREGUNTAS_MO_TTL = 300
+
+_PROPS_PREGUNTAS_MO = {
+    "Clave": {"title": {}},
+    "Texto": {"rich_text": {}},
+}
+
+_PREGUNTAS_MO_DEFAULT = [
+    ("pregunta_1", "¿Cuál es el principal reto al que te has enfrentado últimamente en MiddleOffice?"),
+    ("pregunta_2", "¿Qué mejora propondrías para los procesos actuales de MiddleOffice?"),
+]
+
+
+def _obtener_o_crear_bbdd_preguntas_mo() -> str | None:
+    with _lock_preguntas_mo:
+        db_id = _cache_preguntas_mo_db["db_id"]
+    if db_id:
+        return db_id
+    # Buscar en sub-página "Preguntas", luego fallback a ubicación antigua
+    preguntas_page_id = _obtener_o_crear_pagina_preguntas_id()
+    if preguntas_page_id:
+        db_id = _buscar_bbdd_en_pagina_id(preguntas_page_id, _NOMBRE_BBDD_PREGUNTAS_MO)
+    if not db_id:
+        db_id = _buscar_bbdd_en_pagina(config.NOTION_DATA_LISTS_PAGE_NAME, _NOMBRE_BBDD_PREGUNTAS_MO)
+    if not db_id:
+        parent_page_id = preguntas_page_id
+        if not parent_page_id:
+            parent = _parent_bbdd_en_pagina(config.NOTION_DATA_LISTS_PAGE_NAME, crear=True)
+            if parent.get("type") != "page_id":
+                return None
+            parent_page_id = parent["page_id"]
+        try:
+            props = _PROPS_PREGUNTAS_MO
+            if _usa_data_sources():
+                nueva = notion.databases.create(
+                    parent={"type": "page_id", "page_id": parent_page_id},
+                    title=[{"type": "text", "text": {"content": _NOMBRE_BBDD_PREGUNTAS_MO}}],
+                    initial_data_source={
+                        "title": [{"type": "text", "text": {"content": _NOMBRE_BBDD_PREGUNTAS_MO}}],
+                        "properties": props,
+                    },
+                )
+                nueva = notion.databases.retrieve(database_id=nueva["id"])
+            else:
+                nueva = notion.databases.create(
+                    parent={"type": "page_id", "page_id": parent_page_id},
+                    title=[{"type": "text", "text": {"content": _NOMBRE_BBDD_PREGUNTAS_MO}}],
+                    properties=props,
+                )
+            db_id = _data_source_id(nueva)
+            logging.info("BD '%s' creada en Notion", _NOMBRE_BBDD_PREGUNTAS_MO)
+            _poblar_bbdd_preguntas_mo(db_id)
+        except Exception:
+            logging.exception("Error creando BD '%s'", _NOMBRE_BBDD_PREGUNTAS_MO)
+            return None
+    with _lock_preguntas_mo:
+        _cache_preguntas_mo_db["db_id"] = db_id
+    return db_id
+
+
+def _poblar_bbdd_preguntas_mo(db_id: str) -> None:
+    for clave, texto in _PREGUNTAS_MO_DEFAULT:
+        try:
+            _crear_pagina_en_bbdd(db_id, {
+                "Clave": {"title": [{"type": "text", "text": {"content": clave}}]},
+                "Texto": {"rich_text": [{"type": "text", "text": {"content": texto}}]},
+            })
+        except Exception:
+            logging.exception("Error poblando pregunta MO '%s'", clave)
+
+
+def obtener_preguntas_mo() -> list[dict]:
+    """Devuelve [{clave, texto}] para MiddleOffice (cacheado 5 min)."""
+    ahora = time.time()
+    with _lock_preguntas_mo:
+        cached = _cache_preguntas_mo_data.get("data")
+        ts = _cache_preguntas_mo_data.get("ts", 0.0)
+    if cached is not None and (ahora - ts) < _PREGUNTAS_MO_TTL:
+        return cached
+    db_id = _obtener_o_crear_bbdd_preguntas_mo()
+    if not db_id:
+        return [{"clave": c, "texto": t} for c, t in _PREGUNTAS_MO_DEFAULT]
+    try:
+        resultado = []
+        cursor = None
+        while True:
+            kwargs: dict = {"page_size": 100}
+            if cursor:
+                kwargs["start_cursor"] = cursor
+            resp = _query_bbdd(db_id, **kwargs)
+            for fila in resp.get("results", []):
+                props = fila.get("properties", {})
+                clave = "".join(p.get("plain_text", "") for p in props.get("Clave", {}).get("title", [])).strip()
+                texto = "".join(p.get("plain_text", "") for p in props.get("Texto", {}).get("rich_text", [])).strip()
+                if clave and texto:
+                    resultado.append({"clave": clave, "texto": texto})
+            if not resp.get("has_more"):
+                break
+            cursor = resp.get("next_cursor")
+        if not resultado:
+            resultado = [{"clave": c, "texto": t} for c, t in _PREGUNTAS_MO_DEFAULT]
+        with _lock_preguntas_mo:
+            _cache_preguntas_mo_data["data"] = resultado
+            _cache_preguntas_mo_data["ts"] = time.time()
+        return resultado
+    except Exception:
+        logging.exception("Error leyendo preguntas MiddleOffice desde Notion")
+        return [{"clave": c, "texto": t} for c, t in _PREGUNTAS_MO_DEFAULT]
+
+
+# ---------------------------------------------------------------------------
+# BD Preguntas Palantir — con jerarquía, configurable desde Notion
+# ---------------------------------------------------------------------------
+
+_NOMBRE_BBDD_PREGUNTAS_PALANTIR = "Preguntas Palantir"
+_lock_preguntas_palantir = threading.Lock()
+_cache_preguntas_palantir_db: dict = {"db_id": None}
+_cache_preguntas_palantir_data: dict = {}
+_cache_preguntas_palantir_ts: dict = {}
+_PREGUNTAS_PALANTIR_TTL = 300
+
+_PROPS_PREGUNTAS_PALANTIR = {
+    "Clave": {"title": {}},
+    "Tipo": {"select": {"options": [
+        {"name": "Top-Bottom"},
+        {"name": "Bottom-Top"},
+        {"name": "Same Level"},
+    ]}},
+    "Texto": {"rich_text": {}},
+}
+
+_PREGUNTAS_PALANTIR_DEFAULT = [
+    ("Top-Bottom", "pregunta_1", "¿Cómo de satisfecho estás con el rendimiento de esta persona en Palantir? (1–5)"),
+    ("Top-Bottom", "pregunta_2", "¿Qué aspecto mejorarías de esta persona en su rol en Palantir?"),
+    ("Bottom-Top", "pregunta_1", "¿Cómo de satisfecho estás con este líder en Palantir? (1–5)"),
+    ("Bottom-Top", "pregunta_2", "¿Qué mejorarías de este líder en el contexto Palantir?"),
+    ("Same Level", "pregunta_1", "¿Cómo de satisfecho estás trabajando con este compañero en Palantir? (1–5)"),
+    ("Same Level", "pregunta_2", "¿Qué aspecto mejorarías de esta persona como compañero en Palantir?"),
+]
+
+
+def _obtener_o_crear_bbdd_preguntas_palantir() -> str | None:
+    with _lock_preguntas_palantir:
+        db_id = _cache_preguntas_palantir_db["db_id"]
+    if db_id:
+        return db_id
+    # Buscar en sub-página "Preguntas", luego fallback a ubicación antigua
+    preguntas_page_id = _obtener_o_crear_pagina_preguntas_id()
+    if preguntas_page_id:
+        db_id = _buscar_bbdd_en_pagina_id(preguntas_page_id, _NOMBRE_BBDD_PREGUNTAS_PALANTIR)
+    if not db_id:
+        db_id = _buscar_bbdd_en_pagina(config.NOTION_DATA_LISTS_PAGE_NAME, _NOMBRE_BBDD_PREGUNTAS_PALANTIR)
+    if not db_id:
+        parent_page_id = preguntas_page_id
+        if not parent_page_id:
+            parent = _parent_bbdd_en_pagina(config.NOTION_DATA_LISTS_PAGE_NAME, crear=True)
+            if parent.get("type") != "page_id":
+                return None
+            parent_page_id = parent["page_id"]
+        try:
+            props = _PROPS_PREGUNTAS_PALANTIR
+            if _usa_data_sources():
+                nueva = notion.databases.create(
+                    parent={"type": "page_id", "page_id": parent_page_id},
+                    title=[{"type": "text", "text": {"content": _NOMBRE_BBDD_PREGUNTAS_PALANTIR}}],
+                    initial_data_source={
+                        "title": [{"type": "text", "text": {"content": _NOMBRE_BBDD_PREGUNTAS_PALANTIR}}],
+                        "properties": props,
+                    },
+                )
+                nueva = notion.databases.retrieve(database_id=nueva["id"])
+            else:
+                nueva = notion.databases.create(
+                    parent={"type": "page_id", "page_id": parent_page_id},
+                    title=[{"type": "text", "text": {"content": _NOMBRE_BBDD_PREGUNTAS_PALANTIR}}],
+                    properties=props,
+                )
+            db_id = _data_source_id(nueva)
+            logging.info("BD '%s' creada en Notion", _NOMBRE_BBDD_PREGUNTAS_PALANTIR)
+            _poblar_bbdd_preguntas_palantir(db_id)
+        except Exception:
+            logging.exception("Error creando BD '%s'", _NOMBRE_BBDD_PREGUNTAS_PALANTIR)
+            return None
+    with _lock_preguntas_palantir:
+        _cache_preguntas_palantir_db["db_id"] = db_id
+    return db_id
+
+
+def _poblar_bbdd_preguntas_palantir(db_id: str) -> None:
+    for tipo, clave, texto in _PREGUNTAS_PALANTIR_DEFAULT:
+        try:
+            _crear_pagina_en_bbdd(db_id, {
+                "Clave": {"title": [{"type": "text", "text": {"content": clave}}]},
+                "Tipo": {"select": {"name": tipo}},
+                "Texto": {"rich_text": [{"type": "text", "text": {"content": texto}}]},
+            })
+        except Exception:
+            logging.exception("Error poblando pregunta Palantir '%s'/'%s'", tipo, clave)
+
+
+def obtener_preguntas_palantir(tipo: str) -> list[dict]:
+    """Devuelve [{clave, texto}] para el tipo de jerarquía dado en Palantir (cacheado 5 min)."""
+    ahora = time.time()
+    with _lock_preguntas_palantir:
+        cached = _cache_preguntas_palantir_data.get(tipo)
+        ts = _cache_preguntas_palantir_ts.get(tipo, 0.0)
+    if cached is not None and (ahora - ts) < _PREGUNTAS_PALANTIR_TTL:
+        return cached
+    db_id = _obtener_o_crear_bbdd_preguntas_palantir()
+    if not db_id:
+        return [{"clave": c, "texto": t} for tp, c, t in _PREGUNTAS_PALANTIR_DEFAULT if tp == tipo]
+    try:
+        resultado = []
+        cursor = None
+        while True:
+            kwargs: dict = {"page_size": 100}
+            if cursor:
+                kwargs["start_cursor"] = cursor
+            resp = _query_bbdd(db_id, **kwargs)
+            for fila in resp.get("results", []):
+                props = fila.get("properties", {})
+                tipo_fila = ((props.get("Tipo") or {}).get("select") or {}).get("name", "")
+                if normalizar_nombre(tipo_fila) != normalizar_nombre(tipo):
+                    continue
+                clave = "".join(p.get("plain_text", "") for p in props.get("Clave", {}).get("title", [])).strip()
+                texto = "".join(p.get("plain_text", "") for p in props.get("Texto", {}).get("rich_text", [])).strip()
+                if clave and texto:
+                    resultado.append({"clave": clave, "texto": texto})
+            if not resp.get("has_more"):
+                break
+            cursor = resp.get("next_cursor")
+        if not resultado:
+            resultado = [{"clave": c, "texto": t} for tp, c, t in _PREGUNTAS_PALANTIR_DEFAULT if tp == tipo]
+        with _lock_preguntas_palantir:
+            _cache_preguntas_palantir_data[tipo] = resultado
+            _cache_preguntas_palantir_ts[tipo] = time.time()
+        return resultado
+    except Exception:
+        logging.exception("Error leyendo preguntas Palantir tipo '%s'", tipo)
+        return [{"clave": c, "texto": t} for tp, c, t in _PREGUNTAS_PALANTIR_DEFAULT if tp == tipo]
+
+
 def obtener_o_crear_bbdd_evaluado(nombre_evaluado):
     nombre_limpio = " ".join(nombre_evaluado.split()).strip() or "Sin nombre"
     titulo = _titulo_bbdd(nombre_limpio)
@@ -623,7 +944,7 @@ def obtener_o_crear_bbdd_evaluado(nombre_evaluado):
     return database_id
 
 
-def guardar_en_notion(nombre, respuestas, relacion="igual"):
+def guardar_en_notion(nombre, respuestas, relacion="igual", area="Negocio"):
     nombre_evaluado = respuestas.get("evaluado", "").strip()
     proyecto = respuestas.get("proyecto", "").strip()
     try:
@@ -631,8 +952,14 @@ def guardar_en_notion(nombre, respuestas, relacion="igual"):
         asegurar_propiedades_bbdd(database_id)
         fecha = datetime.now(timezone.utc)
         satisfaccion = respuestas.get("satisfaccion", "")
-        mejor = respuestas.get("mejor_aspecto", "")
-        peor = respuestas.get("peor_aspecto", "")
+        if area == "Negocio":
+            mejor = respuestas.get("mejor_aspecto", "")
+            peor = respuestas.get("peor_aspecto", "")
+        else:
+            _skip = {"evaluado", "proyecto", "satisfaccion", "mejor_aspecto", "peor_aspecto"}
+            _extras = [v for k, v in respuestas.items() if k not in _skip and v]
+            mejor = _extras[0] if len(_extras) > 0 else ""
+            peor = _extras[1] if len(_extras) > 1 else ""
         suf_col = {"superior": "de superiores", "inferior": "de inferiores"}.get(relacion, "de iguales")
         _crear_pagina_en_bbdd(
             database_id,
@@ -641,6 +968,7 @@ def guardar_en_notion(nombre, respuestas, relacion="igual"):
                 "Evaluador": {"rich_text": [{"text": {"content": nombre}}]},
                 "Proyecto": {"rich_text": [{"text": {"content": proyecto}}]},
                 "Fecha": {"date": {"start": fecha.isoformat()}},
+                "Area": {"select": {"name": area}},
                 f"Satisfaccion {suf_col}": {"rich_text": [{"text": {"content": satisfaccion}}]},
                 f"Mejor aspecto {suf_col}": {"rich_text": [{"text": {"content": mejor}}]},
                 f"Peor aspecto {suf_col}": {"rich_text": [{"text": {"content": peor}}]},

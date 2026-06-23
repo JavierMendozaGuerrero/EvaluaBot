@@ -61,8 +61,8 @@ def enviar_una_evaluacion():
                     channel=dm_channel,
                     text=(
                         "📍 *Tienes una evaluación mensual pendiente.*\n"
-                        "Responde en el hilo de este mensaje para comenzar.\n"
-                        "_Si en algún momento quieres cancelar, escribe SOS en el hilo._"
+                        "_Si en algún momento quieres cancelar, escribe SOS en el hilo._\n"
+                        "_Esta evaluación es totalmente privada, solo podrá verla el CA de la persona evaluada._"
                     ),
                 )
                 with lock:
@@ -273,15 +273,10 @@ def handle_message_events(event, logger):
         return
 
     if not thread_ts:
-        with lock:
-            has_eval = user_id in evaluaciones_dm_activas
-        has_ca = user_id in ca_dm_activas
-        has_personal = user_id in personal_dm_activas
-        if has_eval or has_ca or has_personal:
-            slack_app.client.chat_postMessage(
-                channel=channel,
-                text="Por favor, responde en el hilo del mensaje de evaluación, no aquí directamente.",
-            )
+        slack_app.client.chat_postMessage(
+            channel=channel,
+            text="No debes escribir fuera de un hilo.",
+        )
         return
 
     if thread_ts == ca_dm_ts.get(user_id):
@@ -410,7 +405,7 @@ def handle_message_events(event, logger):
                     accion = "pedir_proyecto"
                     pregunta = (
                         "¿En qué proyecto estás trabajando ahora? "
-                        "Si estás en más de uno, elige solo uno y escribe el nombre del proyecto."
+                        "Si estás en más de uno, elige solo uno y escribe el nombre, después podrás evaluar otros proyectos."
                     )
             else:
                 accion = "pedir_area"
@@ -430,20 +425,20 @@ def handle_message_events(event, logger):
                 pregunta = (
                     f"Perfecto, vamos con el proyecto *{texto}*. "
                     "Evalúa a los miembros de este proyecto. "
-                    "Dime el nombre del miembro."
+                    "Dime el nombre de uno de los miembros, podrás evaluar al resto después."
                 )
             else:
                 accion = "pedir_proyecto"
                 pregunta = (
                     "¿En qué proyecto estás trabajando ahora? "
-                    "Si estás en más de uno, elige solo uno y escribe el nombre del proyecto."
+                    "Si estás en más de uno, elige solo uno y escribe el nombre, después podrás evaluar otros proyectos."
                 )
 
         elif modo == "esperando_persona":
             if texto:
                 if _parece_saludo(texto):
                     accion = "pedir_persona"
-                    pregunta = "Sigo aquí. Dime el nombre del miembro del proyecto."
+                    pregunta = "Sigo aquí. Dime el nombre de uno de los miembros, podrás evaluar al resto después."
                 elif _empleado_pre:
                     proyecto_actual = estado.get("proyecto_actual", "")
                     clave_ev = (normalizar_nombre(proyecto_actual), normalizar_nombre(_empleado_pre))
@@ -691,7 +686,7 @@ def handle_message_events(event, logger):
                 accion = "pedir_proyecto"
                 pregunta = (
                     "Perfecto. ¿En qué proyecto estás trabajando ahora? "
-                    "Si estás en más de uno, elige solo uno y escribe el nombre del proyecto."
+                    "Si estás en más de uno, elige solo uno y escribe el nombre, después podrás evaluar otros proyectos."
                 )
             elif _es_no(texto):
                 estado["modo"] = "terminado"

@@ -2209,10 +2209,11 @@ _PROPS_PERSONAL_PREGUNTAS = {
 
 PREGUNTAS_PERSONALES_DEFAULT = {
     "mensaje_inicial": (
-        "📝 *Evaluación personal*\n"
+        "📝 *Tienes opción de seguimiento personal pendiente*\n"
         "Este es tu espacio privado para compartir lo que quieras. "
         "¿Qué me quieres contar? Responde a este mensaje con lo que tengas en mente.\n\n"
-        "_Si quieres cancelar, escribe SOS en cualquier momento._"
+        "_Si quieres cancelar, escribe SOS en cualquier momento._\n"
+        "_Esta evaluación es totalmente privada, solo podrá verla tu CA._"
     ),
 }
 

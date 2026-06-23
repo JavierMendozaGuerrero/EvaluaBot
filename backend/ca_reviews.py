@@ -435,9 +435,9 @@ def enviar_pregunta_inicial_ca() -> None:
                 resp = slack_app.client.chat_postMessage(
                     channel=dm_channel,
                     text=(
-                        "📋 *Evaluaciones CA* — Si eres Career Advisor de alguien, tienes una revisión pendiente.\n"
-                        "Responde en el hilo de este mensaje para comenzar.\n"
-                        "_Si quieres cancelar en cualquier momento, escribe SOS en el hilo._"
+                        "📋 *CA: Tienes evaluación de advisees pendiente*\n"
+                        "_Si quieres cancelar en cualquier momento, escribe SOS en el hilo._\n"
+                        "_Esta evaluación es totalmente privada, solo podrás verlas TÚ._"
                     ),
                 )
                 with _lock:

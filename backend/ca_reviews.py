@@ -595,7 +595,7 @@ def manejar_mensaje_ca(event, logger) -> None:
                 opciones = "\n".join(f"- {item}" for item in permitidos) if permitidos else "- No tienes advisees asociados en Lista CA."
                 reply(
                     f"*{advisee}* no aparece asociado a ti como advisee en `Lista CA`.\n"
-                    "Solo puedes hacer evaluaciones CA de las personas que tengas en tus columnas A1, A2, A3...\n"
+                    "Solo puedes hacer evaluaciones CA de las personas que sean tus advisees.\n"
                     f"Tus advisees actuales:\n{opciones}"
                 )
                 return

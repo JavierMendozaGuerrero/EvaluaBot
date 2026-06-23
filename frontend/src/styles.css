@@ -62,11 +62,17 @@ body {
   align-items: start;
 }
 
+.hero > * {
+  min-width: 0;
+}
+
 h1 {
   margin: 0;
   font-size: clamp(46px, 9vw, 112px);
   line-height: .92;
   font-weight: 800;
+  overflow-wrap: break-word;
+  word-break: break-word;
 }
 
 h2 {

@@ -224,8 +224,18 @@ def manejar_mensaje_personal(event, logger) -> None:
 
 
 def ciclo_envio_personal() -> None:
-    """Solo activo en producción: envía evaluaciones personales cada 2 semanas desde la fecha de Notion."""
+    """Envía evaluaciones personales: en prueba una vez al mes, en producción cada 2 semanas desde la fecha de Notion."""
     if config.APP_MODE != "produccion":
+        try:
+            enviar_pregunta_inicial_personal()
+        except Exception:
+            logging.exception("Error en ciclo personal prueba")
+        while True:
+            time.sleep(config.INTERVALO_PRUEBA_DIAS * 24 * 60 * 60)
+            try:
+                enviar_pregunta_inicial_personal()
+            except Exception:
+                logging.exception("Error en ciclo personal prueba")
         return
     while True:
         cal = obtener_config_calendario()

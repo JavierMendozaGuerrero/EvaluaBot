@@ -44,10 +44,9 @@ def main():
     threading.Thread(target=servidor_web, daemon=True).start()
 
     if config.APP_MODE == "produccion":
-        print("Bot activo en modo produccion. Enviara la evaluacion los viernes a las 10:00 hora de Madrid.")
+        print("Bot activo en modo produccion. Enviara las evaluaciones segun la fecha configurada en Notion (personal cada 2 semanas, CA y proyectos cada 4 semanas).")
     else:
-        minutos = config.INTERVALO_PRUEBA_SEGUNDOS // 60
-        print(f"Bot activo en modo prueba. Enviara una evaluacion ahora y luego cada {minutos} minutos.")
+        print(f"Bot activo en modo prueba. Enviara los 3 hilos ahora y luego cada {config.INTERVALO_PRUEBA_DIAS} dias.")
     print("Las preguntas se hacen una a una en el hilo y el resultado se guarda en Notion tras confirmacion.")
     if config.WEB_MODE == "legacy":
         print(f"Web legacy disponible en http://localhost:{config.PUERTO_WEB}")

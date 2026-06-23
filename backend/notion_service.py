@@ -2442,7 +2442,10 @@ def obtener_config_calendario() -> dict:
             fecha = (fecha_prop.get("start") or "")[:10]
             if not fecha:
                 continue
-            if "personal" in nombre:
+            if "inicio" in nombre:
+                resultado["personal"] = fecha
+                resultado["proyecto_ca"] = fecha
+            elif "personal" in nombre:
                 resultado["personal"] = fecha
             elif "proyecto" in nombre or " ca" in nombre or nombre.startswith("ca"):
                 resultado["proyecto_ca"] = fecha

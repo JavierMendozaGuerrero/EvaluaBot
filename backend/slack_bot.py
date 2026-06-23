@@ -81,16 +81,11 @@ def enviar_una_evaluacion():
         logging.exception("Error en enviar_una_evaluacion")
 
 
-def enviar_o_crear_revision(origen):
-    enviar_una_evaluacion()
-    enviar_pregunta_inicial_personal()
-
-
 def enviar_evaluaciones_modo_prueba():
-    enviar_o_crear_revision("modo prueba")
+    enviar_una_evaluacion()
     while True:
-        time.sleep(config.INTERVALO_PRUEBA_SEGUNDOS)
-        enviar_o_crear_revision("modo prueba")
+        time.sleep(config.INTERVALO_PRUEBA_DIAS * 24 * 60 * 60)
+        enviar_una_evaluacion()
 
 
 def siguiente_envio_produccion(ahora=None):

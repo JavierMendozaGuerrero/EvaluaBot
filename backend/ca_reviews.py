@@ -746,13 +746,16 @@ def ciclo_recordatorios_ca() -> None:
 
 def ciclo_envio_ca() -> None:
     if config.APP_MODE != "produccion":
-        time.sleep(60)
+        try:
+            enviar_pregunta_inicial_ca()
+        except Exception:
+            logging.exception("Error en ciclo CA")
         while True:
+            time.sleep(config.INTERVALO_PRUEBA_DIAS * 24 * 60 * 60)
             try:
                 enviar_pregunta_inicial_ca()
             except Exception:
                 logging.exception("Error en ciclo CA")
-            time.sleep(config.INTERVALO_CA_SEGUNDOS)
         return
     # Producción: 4 semanas desde la fecha configurada en Notion
     while True:

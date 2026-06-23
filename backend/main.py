@@ -7,6 +7,7 @@ from .api_server import iniciar_api_backend
 from .clients import Document
 from .notion_service import aplicar_estetica_notion
 from .ca_reviews import ciclo_envio_ca, ciclo_recordatorios_ca  # noqa: F401 — registra el handler de Slack al importar
+from .personal_eval import ciclo_recordatorios_personal
 from .slack_bot import ciclo_recordatorios_proyecto, enviar_evaluaciones_programadas, start_socket_mode
 from .web_server import iniciar_servidor_web
 
@@ -37,6 +38,7 @@ def main():
     threading.Thread(target=ciclo_envio_ca, daemon=True).start()
     threading.Thread(target=ciclo_recordatorios_proyecto, daemon=True).start()
     threading.Thread(target=ciclo_recordatorios_ca, daemon=True).start()
+    threading.Thread(target=ciclo_recordatorios_personal, daemon=True).start()
     servidor_web = iniciar_servidor_web if config.WEB_MODE == "legacy" else iniciar_api_backend
     threading.Thread(target=servidor_web, daemon=True).start()
 

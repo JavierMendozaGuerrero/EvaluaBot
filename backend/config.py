@@ -13,8 +13,8 @@ def env_bool(name, default="false"):
 CHANNEL_ID = os.environ.get("SLACK_CHANNEL_ID", "C0BBFRM14SU")
 
 APP_MODE = os.environ.get("APP_MODE", "prueba").strip().lower()
-INTERVALO_PRUEBA_SEGUNDOS = 600
-INTERVALO_CA_SEGUNDOS = int(os.environ.get("INTERVALO_CA_SEGUNDOS", "600"))
+INTERVALO_PRUEBA_SEGUNDOS = 120
+INTERVALO_CA_SEGUNDOS = int(os.environ.get("INTERVALO_CA_SEGUNDOS", "120"))
 ZONA_HORARIA_MADRID = ZoneInfo("Europe/Madrid")
 DIA_ENVIO_PRODUCCION = 4
 HORA_ENVIO_PRODUCCION = datetime_time(10, 0)
@@ -46,6 +46,7 @@ def _require_env(name):
 
 SLACK_BOT_TOKEN = _require_env("SLACK_BOT_TOKEN")
 SLACK_APP_TOKEN = _require_env("SLACK_APP_TOKEN")
+SLACK_TEST_USER_ID = os.environ.get("SLACK_TEST_USER_ID", "").strip()
 NOTION_TOKEN = _require_env("NOTION_TOKEN")
 NOTION_DATABASE_ID = _require_env("NOTION_DATABASE_ID")
 NOTION_EMPLOYEES_DATABASE_ID = os.environ.get("NOTION_EMPLOYEES_DATABASE_ID", NOTION_DATABASE_ID).strip()

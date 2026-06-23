@@ -1,8 +1,8 @@
 """
 Flujo de revisión para Career Advisors (CA).
 
-El bot envía al canal "¿Eres CA de alguien?" cada INTERVALO_CA_SEGUNDOS.
-El usuario responde en hilo: sí → bot pide nombre del advisee → muestra todas
+El bot envía un DM a cada empleado con un mensaje de notificación.
+El usuario responde en el hilo: sí → bot pide nombre del advisee → muestra todas
 las evaluaciones desde la última revisión del CA → pide opinión → guarda en
 Notion → pregunta si hay otro advisee.
 """
@@ -27,6 +27,7 @@ from .notion_service import (
     buscar_empleado_en_lista,
     obtener_advisees,
     obtener_evaluaciones_por_evaluado,
+    obtener_slack_ids_empleados,
     sugerir_empleados_parecidos,
 )
 from .utils import normalizar_nombre
@@ -35,11 +36,12 @@ from .utils import normalizar_nombre
 # Estado compartido
 # ---------------------------------------------------------------------------
 
-ca_ts: set = set()
-ca_ts_expirados: set = set()
-ca_hora: dict = {}
-ca_ultimo_recordatorio: dict = {}
-conversaciones_ca: dict = {}
+ca_dm_activas: set = set()             # user_ids con evaluación CA activa
+ca_dm_ts: dict = {}                    # user_id -> ts del mensaje inicial (raíz del hilo)
+ca_dm_canal: dict = {}                 # user_id -> dm_channel_id
+ca_hora_dm: dict = {}                  # user_id -> timestamp de envío
+ca_ultimo_recordatorio_dm: dict = {}   # user_id -> timestamp del último recordatorio
+conversaciones_ca: dict = {}           # user_id -> estado de conversación
 _lock = threading.Lock()
 _cache_bbdd: dict = {}
 _cache_nombre_usuario: dict = {}
@@ -61,7 +63,6 @@ _PROPS_CA = {
 # ---------------------------------------------------------------------------
 
 def _asegurar_propiedades_ca(database_id: str) -> None:
-    """Añade al esquema de la BD las propiedades que falten."""
     try:
         if _usa_data_sources():
             bbdd = notion.data_sources.retrieve(data_source_id=database_id)
@@ -95,7 +96,7 @@ def _obtener_o_crear_bbdd_ca(advisee: str) -> str:
             _coincide_parent_bbdd(bbdd, parent) or _coincide_parent_bbdd(bbdd, parent_ca)
         ):
             db_id = _data_source_id(bbdd)
-            _asegurar_propiedades_ca(db_id)  # repara propiedades si la BD es antigua
+            _asegurar_propiedades_ca(db_id)
             with _lock:
                 _cache_bbdd[titulo] = db_id
             return db_id
@@ -125,7 +126,6 @@ def _obtener_o_crear_bbdd_ca(advisee: str) -> str:
 
 
 def _guardar_opinion(ca_nombre: str, advisee: str, opinion: str, resumen: str = "") -> tuple[bool, str]:
-    """Devuelve (éxito, mensaje_error)."""
     try:
         db_id = _obtener_o_crear_bbdd_ca(advisee)
         fecha_str = datetime.now(config.ZONA_HORARIA_MADRID).strftime("%Y-%m-%d %H:%M")
@@ -272,61 +272,6 @@ def _texto_pregunta_ca_por_clave(clave: str) -> str:
     return "Escribe la nueva respuesta."
 
 
-def _obtener_nombres_empleados() -> list[str]:
-    """Devuelve la lista de nombres de la columna 'Nombre' de 'Lista empleados' en Notion."""
-    with _lock:
-        if _cache_lista_empleados["nombres"] is not None:
-            return _cache_lista_empleados["nombres"]
-    try:
-        with _lock:
-            db_id = _cache_lista_empleados["db_id"]
-        if not db_id:
-            resultado = notion.search(
-                query="Lista de empleados",
-                filter={"value": _tipo_objeto_busqueda_bbdd(), "property": "object"},
-                page_size=10,
-            )
-            for bbdd in resultado.get("results", []):
-                if _extraer_titulo_bbdd(bbdd) == "Lista de empleados":
-                    db_id = _data_source_id(bbdd)
-                    with _lock:
-                        _cache_lista_empleados["db_id"] = db_id
-                    break
-        if not db_id:
-            return []
-        nombres = []
-        cursor = None
-        while True:
-            kwargs: dict = {"page_size": 100}
-            if cursor:
-                kwargs["start_cursor"] = cursor
-            resp = _query_bbdd(db_id, **kwargs)
-            for fila in resp.get("results", []):
-                props = fila.get("properties", {})
-                for col in ("Nombre", "Nombre_Slack"):
-                    prop = props.get(col, {})
-                    valor = "".join(
-                        p.get("plain_text", "")
-                        for p in (prop.get("rich_text") or prop.get("title") or [])
-                    ).strip()
-                    if valor:
-                        nombres.append(valor)
-            if not resp.get("has_more"):
-                break
-            cursor = resp.get("next_cursor")
-        with _lock:
-            _cache_lista_empleados["nombres"] = nombres
-        return nombres
-    except Exception:
-        logging.exception("Error obteniendo nombres de 'Lista empleados' en Notion")
-        return []
-
-
-def _validar_advisee_nombre(nombre: str) -> bool:
-    """Comprueba si el nombre existe en la columna 'Nombre' de 'Lista empleados'."""
-    return buscar_empleado_en_lista(nombre) is not None
-
-
 def _mensaje_advisee_no_encontrado(nombre: str) -> str:
     sugerencias = sugerir_empleados_parecidos(nombre)
     if sugerencias:
@@ -343,7 +288,6 @@ def _mensaje_advisee_no_encontrado(nombre: str) -> str:
 
 
 def _nombre_desde_notion(user_id: str) -> str | None:
-    """Busca el nombre del usuario en 'Lista empleados' de Notion por ID_usuario."""
     with _lock:
         if user_id in _cache_nombre_usuario:
             return _cache_nombre_usuario[user_id]
@@ -406,10 +350,6 @@ def _nombre_real(user_id: str, logger) -> str:
         return user_id
 
 
-# ---------------------------------------------------------------------------
-# Envío del mensaje inicial
-# ---------------------------------------------------------------------------
-
 def _identidad_usuario_slack(user_id: str, logger) -> tuple[str, list[str]]:
     aliases = [user_id]
     nombre_notion = _nombre_desde_notion(user_id)
@@ -448,25 +388,47 @@ def _advisee_permitido_para_ca(ca_nombre: str, ca_aliases: list[str], advisee: s
     return any(normalizar_nombre(nombre) == advisee_norm for nombre in permitidos), permitidos
 
 
+# ---------------------------------------------------------------------------
+# Envío del mensaje inicial por DM
+# ---------------------------------------------------------------------------
+
 def enviar_pregunta_inicial_ca() -> None:
     try:
-        resp = slack_app.client.chat_postMessage(
-            channel=config.CHANNEL_ID,
-            text=(
-                "📋 *Evaluaciones CA* - Obligatorio si eres Career Advisor de alguien.\n"
-                "Entra en el hilo y envía cualquier mensaje para comenzar.\n"
-                "_Si en algún momento quieres cancelar la evaluación, escribe SOS en el hilo._"
-                f"{config.INSTRUCCIONES_RESPONDER_EN_HILO}"
-            ),
-        )
+        if config.APP_MODE != "produccion" and config.SLACK_TEST_USER_ID:
+            slack_ids = [config.SLACK_TEST_USER_ID]
+            logging.info(f"Modo prueba CA: enviando solo a {config.SLACK_TEST_USER_ID}")
+        else:
+            slack_ids = obtener_slack_ids_empleados()
+            if not slack_ids:
+                logging.warning("No se encontraron Slack IDs para envío CA")
+                return
+
         with _lock:
-            ca_ts_expirados.update(ca_ts)
-            ca_ts.clear()
-            ca_ts.add(resp["ts"])
-            ca_hora[resp["ts"]] = time.time()
-        logging.info(f"Mensaje CA enviado, ts={resp['ts']}")
+            ca_dm_activas.clear()
+
+        for user_id in slack_ids:
+            try:
+                resp_dm = slack_app.client.conversations_open(users=[user_id])
+                dm_channel = resp_dm["channel"]["id"]
+                resp = slack_app.client.chat_postMessage(
+                    channel=dm_channel,
+                    text=(
+                        "📋 *Evaluaciones CA* — Si eres Career Advisor de alguien, tienes una revisión pendiente.\n"
+                        "Responde en el hilo de este mensaje para comenzar.\n"
+                        "_Si quieres cancelar en cualquier momento, escribe SOS en el hilo._"
+                    ),
+                )
+                with _lock:
+                    ca_dm_activas.add(user_id)
+                    ca_dm_canal[user_id] = dm_channel
+                    ca_dm_ts[user_id] = resp["ts"]
+                    ca_hora_dm[user_id] = time.time()
+                    conversaciones_ca.pop(user_id, None)
+                logging.info(f"Mensaje CA enviado por DM a {user_id}, ts={resp['ts']}")
+            except Exception:
+                logging.exception(f"Error enviando DM CA a {user_id}")
     except Exception:
-        logging.exception("Error enviando mensaje CA")
+        logging.exception("Error en enviar_pregunta_inicial_ca")
 
 
 # ---------------------------------------------------------------------------
@@ -479,39 +441,30 @@ def manejar_mensaje_ca(event, logger) -> None:
     channel = event.get("channel")
     texto = (event.get("text") or "").strip()
 
-    if not thread_ts:
-        return
     with _lock:
-        es_activo = thread_ts in ca_ts
-        es_expirado = thread_ts in ca_ts_expirados
-    if es_expirado and not es_activo:
-        slack_app.client.chat_postMessage(
-            channel=channel, thread_ts=thread_ts,
-            text="⏰ Esta revisión CA ha caducado porque ya hay una más reciente activa. Responde en el hilo nuevo.",
-        )
-        return
+        es_activo = user_id in ca_dm_activas
     if not es_activo:
         return
 
-    clave = (thread_ts, user_id)
+    conv_key = user_id
+
+    def reply(text):
+        slack_app.client.chat_postMessage(channel=channel, thread_ts=thread_ts, text=text)
 
     if normalizar_nombre(texto) == "sos":
         with _lock:
-            conversaciones_ca.pop(clave, None)
-        slack_app.client.chat_postMessage(
-            channel=channel, thread_ts=thread_ts,
-            text="Evaluación cancelada. Si quieres volver a empezar, envía otro mensaje en el hilo.",
-        )
+            conversaciones_ca.pop(conv_key, None)
+        reply("Evaluación CA cancelada. Si quieres volver a empezar, espera a la próxima evaluación.")
         return
 
     accion = None
     payload = {}
 
     with _lock:
-        estado = conversaciones_ca.get(clave)
+        estado = conversaciones_ca.get(conv_key)
         if estado is None:
             estado = {"modo": "pre_inicial", "ca_nombre": None}
-            conversaciones_ca[clave] = estado
+            conversaciones_ca[conv_key] = estado
 
         modo = estado["modo"]
 
@@ -530,7 +483,6 @@ def manejar_mensaje_ca(event, logger) -> None:
                 accion = "aclarar_inicial"
 
         elif modo == "esperando_advisee":
-            # la validación y el cambio de modo se hacen fuera del lock
             payload["advisee"] = texto
             payload["ca_nombre"] = estado.get("ca_nombre")
             accion = "validar_y_mostrar"
@@ -563,9 +515,9 @@ def manejar_mensaje_ca(event, logger) -> None:
             payload["advisee"] = estado.get("advisee_actual", "?")
             payload["ca_nombre"] = estado.get("ca_nombre")
             payload["opinion"] = estado.get("opinion_actual", "")
-            clave = _clave_modificacion_ca(texto)
-            if clave:
-                estado["campo_modificando"] = clave
+            campo = _clave_modificacion_ca(texto)
+            if campo:
+                estado["campo_modificando"] = campo
                 estado["modo"] = "modificando_respuesta_ca"
                 accion = "pedir_valor_modificacion_ca"
             else:
@@ -575,9 +527,9 @@ def manejar_mensaje_ca(event, logger) -> None:
             payload["advisee"] = estado.get("advisee_actual", "?")
             payload["ca_nombre"] = estado.get("ca_nombre")
             payload["opinion"] = estado.get("opinion_actual", "")
-            clave = estado.get("campo_modificando")
-            if clave and texto:
-                if clave == "advisee":
+            campo = estado.get("campo_modificando")
+            if campo and texto:
+                if campo == "advisee":
                     empleado = buscar_empleado_en_lista(texto)
                     if not empleado:
                         accion = "pedir_valor_modificacion_ca"
@@ -596,7 +548,7 @@ def manejar_mensaje_ca(event, logger) -> None:
                             estado.pop("campo_modificando", None)
                             estado["modo"] = "confirmacion_ca"
                             accion = "mostrar_confirmacion_ca"
-                elif clave == "opinion":
+                elif campo == "opinion":
                     estado["opinion_actual"] = texto
                     payload["opinion"] = texto
                     estado.pop("campo_modificando", None)
@@ -617,9 +569,6 @@ def manejar_mensaje_ca(event, logger) -> None:
 
         elif modo == "terminado":
             accion = "ya_terminado"
-
-    def reply(text):
-        slack_app.client.chat_postMessage(channel=channel, thread_ts=thread_ts, text=text)
 
     if accion == "hacer_primera_pregunta":
         reply("¿Eres Career Advisor de alguien? (`sí` / `no`)")
@@ -651,18 +600,16 @@ def manejar_mensaje_ca(event, logger) -> None:
                 )
                 return
             with _lock:
-                if clave in conversaciones_ca:
-                    conversaciones_ca[clave]["advisee_actual"] = advisee
-            with _lock:
-                if clave in conversaciones_ca:
-                    conversaciones_ca[clave]["ca_nombre"] = ca_nombre
+                if conv_key in conversaciones_ca:
+                    conversaciones_ca[conv_key]["advisee_actual"] = advisee
+                    conversaciones_ca[conv_key]["ca_nombre"] = ca_nombre
             desde_fecha = _fecha_ultima_opinion(ca_nombre, advisee)
             resumen = _resumen_advisee(advisee, desde_fecha)
             sin_novedades = "no hay evaluaciones nuevas" in resumen or "No hay evaluaciones registradas" in resumen
             with _lock:
-                if clave in conversaciones_ca:
-                    conversaciones_ca[clave]["modo"] = "esperando_otro" if sin_novedades else "esperando_opinion"
-                    conversaciones_ca[clave]["resumen_actual"] = "" if sin_novedades else resumen
+                if conv_key in conversaciones_ca:
+                    conversaciones_ca[conv_key]["modo"] = "esperando_otro" if sin_novedades else "esperando_opinion"
+                    conversaciones_ca[conv_key]["resumen_actual"] = "" if sin_novedades else resumen
             if sin_novedades:
                 reply(f"{resumen}\n\n¿Tienes otro advisee? (`sí` / `no`)")
             else:
@@ -680,7 +627,7 @@ def manejar_mensaje_ca(event, logger) -> None:
         reply(_texto_menu_modificacion_ca())
 
     elif accion == "pedir_valor_modificacion_ca":
-        clave = estado.get("campo_modificando")
+        campo = estado.get("campo_modificando")
         if payload.get("error_advisee_no_asociado"):
             permitidos = payload.get("advisees_permitidos") or []
             opciones = "\n".join(f"- {item}" for item in permitidos) if permitidos else "- No tienes advisees asociados en Lista CA."
@@ -704,7 +651,7 @@ def manejar_mensaje_ca(event, logger) -> None:
                     "Escríbelo sin tildes, primera letra del nombre y primer apellido en mayúscula, solo primer apellido."
                 )
         else:
-            reply(_texto_pregunta_ca_por_clave(clave) if clave else _texto_menu_modificacion_ca())
+            reply(_texto_pregunta_ca_por_clave(campo) if campo else _texto_menu_modificacion_ca())
 
     elif accion == "cancelar_opinion":
         reply("De acuerdo, no se guardará esta opinión.\n\n¿Tienes otro advisee? (`sí` / `no`)")
@@ -717,7 +664,7 @@ def manejar_mensaje_ca(event, logger) -> None:
         if not permitido:
             opciones = "\n".join(f"- {item}" for item in permitidos) if permitidos else "- No tienes advisees asociados en Lista CA."
             reply(
-                f"No puedo guardar esta opiniÃ³n: *{payload['advisee']}* no aparece asociado a ti en `Lista CA`.\n"
+                f"No puedo guardar esta opinión: *{payload['advisee']}* no aparece asociado a ti en `Lista CA`.\n"
                 f"Tus advisees actuales:\n{opciones}"
             )
             return
@@ -738,11 +685,11 @@ def manejar_mensaje_ca(event, logger) -> None:
         reply("Responde `sí` si tienes otro advisee, o `no` para terminar.")
 
     elif accion == "ya_terminado":
-        reply("Esta evaluación ya ha concluido. Puedes salir del hilo. 👋")
+        reply("Esta evaluación ya ha concluido. 👋")
 
 
 # ---------------------------------------------------------------------------
-# Ciclo principal
+# Ciclos de recordatorio y envío
 # ---------------------------------------------------------------------------
 
 _RECORDATORIO_CA_SEGUNDOS = 120
@@ -754,19 +701,25 @@ def ciclo_recordatorios_ca() -> None:
         ahora = time.time()
         with _lock:
             pendientes = [
-                ts for ts in ca_ts
-                if ahora - max(ca_hora.get(ts, ahora), ca_ultimo_recordatorio.get(ts, 0) or ca_hora.get(ts, ahora)) >= _RECORDATORIO_CA_SEGUNDOS
+                uid for uid in ca_dm_activas
+                if (
+                    ahora - max(ca_hora_dm.get(uid, ahora), ca_ultimo_recordatorio_dm.get(uid, 0) or ca_hora_dm.get(uid, ahora)) >= _RECORDATORIO_CA_SEGUNDOS
+                    and conversaciones_ca.get(uid, {}).get("modo") not in ("terminado",)
+                )
             ]
-        for ts in pendientes:
+        for uid in pendientes:
             try:
+                dm_channel = ca_dm_canal.get(uid)
+                if not dm_channel:
+                    continue
                 slack_app.client.chat_postMessage(
-                    channel=config.CHANNEL_ID,
-                    text="*📋 Recuerda realizar tu revisión de Career Advisor.* Si eres CA de alguien, entra en el hilo de la notificación y responde.",
+                    channel=dm_channel,
+                    text="*📋 Recuerda realizar tu revisión de Career Advisor.* Abre el hilo del mensaje CA y responde.",
                 )
                 with _lock:
-                    ca_ultimo_recordatorio[ts] = time.time()
+                    ca_ultimo_recordatorio_dm[uid] = time.time()
             except Exception:
-                logging.exception("Error enviando recordatorio CA")
+                logging.exception(f"Error enviando recordatorio CA DM a {uid}")
 
 
 def ciclo_envio_ca() -> None:

@@ -1,41 +1,82 @@
-﻿import logging
+import logging
 import time
 from datetime import datetime, timedelta
 
 from slack_bolt.adapter.socket_mode import SocketModeHandler
 
 from . import config
-from .ca_reviews import ca_ts, ca_ts_expirados, manejar_mensaje_ca
+from .ca_reviews import ca_dm_activas, ca_dm_ts, manejar_mensaje_ca
+from .personal_eval import (
+    enviar_pregunta_inicial_personal,
+    manejar_mensaje_personal,
+    personal_dm_activas,
+    personal_dm_ts,
+)
 from .clients import slack_app
 from .hierarchy import comparar_jerarquia, tipo_relacion
-from .notion_service import buscar_empleado_en_lista, buscar_empleado_y_cargo, guardar_en_notion, obtener_cargo_por_slack_id, obtener_nombre_por_id_usuario, obtener_preguntas_desde_notion, sugerir_empleados_parecidos
-from .state import avisos_responder_en_hilo, conversaciones, evaluacion_hora, evaluacion_ultimo_recordatorio, evaluacion_ts, evaluacion_ts_expirados, lock
+from .notion_service import (
+    buscar_empleado_y_cargo,
+    guardar_en_notion,
+    obtener_cargo_por_slack_id,
+    obtener_nombre_por_id_usuario,
+    obtener_preguntas_desde_notion,
+    obtener_slack_ids_empleados,
+    sugerir_empleados_parecidos,
+)
+from .state import (
+    conversaciones,
+    evaluacion_dm_canal,
+    evaluacion_dm_ts,
+    evaluacion_hora,
+    evaluacion_ultimo_recordatorio,
+    evaluaciones_dm_activas,
+    evaluaciones_dm_expiradas,
+    lock,
+)
 from .utils import normalizar_nombre
 
 
 def enviar_una_evaluacion():
     try:
-        resp = slack_app.client.chat_postMessage(
-            channel=config.CHANNEL_ID,
-            text=(
-                "📍 ¿En qué proyecto estás trabajando ahora? "
-                "Si estás en más de uno, elige solo uno y escribe el nombre del proyecto.\n"
-                "_Si en algún momento quieres cancelar la evaluación, escribe SOS en el hilo._"
-                f"{config.INSTRUCCIONES_RESPONDER_EN_HILO}"
-            ),
-        )
+        if config.APP_MODE != "produccion" and config.SLACK_TEST_USER_ID:
+            slack_ids = [config.SLACK_TEST_USER_ID]
+            logging.info(f"Modo prueba: enviando solo a {config.SLACK_TEST_USER_ID}")
+        else:
+            slack_ids = obtener_slack_ids_empleados()
+            if not slack_ids:
+                logging.warning("No se encontraron Slack IDs en la lista de empleados de Notion")
+                return
         with lock:
-            evaluacion_ts_expirados.update(evaluacion_ts)
-            evaluacion_ts.clear()
-            evaluacion_ts.add(resp["ts"])
-            evaluacion_hora[resp["ts"]] = time.time()
-        logging.info(f"Evaluación iniciada, ts={resp['ts']}")
+            evaluaciones_dm_expiradas.update(evaluaciones_dm_activas)
+            evaluaciones_dm_activas.clear()
+        for user_id in slack_ids:
+            try:
+                resp_dm = slack_app.client.conversations_open(users=[user_id])
+                dm_channel = resp_dm["channel"]["id"]
+                resp = slack_app.client.chat_postMessage(
+                    channel=dm_channel,
+                    text=(
+                        "📍 *Tienes una evaluación de proyecto pendiente.*\n"
+                        "Responde en el hilo de este mensaje para comenzar.\n"
+                        "_Si en algún momento quieres cancelar, escribe SOS en el hilo._"
+                    ),
+                )
+                with lock:
+                    evaluaciones_dm_activas.add(user_id)
+                    evaluacion_dm_canal[user_id] = dm_channel
+                    evaluacion_dm_ts[user_id] = resp["ts"]
+                    evaluacion_hora[user_id] = time.time()
+                    conversaciones.pop(user_id, None)
+                logging.info(f"Evaluación enviada por DM a {user_id}, ts={resp['ts']}")
+            except Exception:
+                logging.exception(f"Error enviando DM de evaluación a {user_id}")
     except Exception:
-        logging.exception("Error enviando mensaje de evaluación")
+        logging.exception("Error en enviar_una_evaluacion")
 
 
 def enviar_o_crear_revision(origen):
     enviar_una_evaluacion()
+    enviar_pregunta_inicial_personal()
 
 
 def enviar_evaluaciones_modo_prueba():
@@ -101,9 +142,8 @@ def clave_modificacion(texto):
     return OPCIONES_MODIFICACION.get(normalizar_nombre(texto))
 
 
-def texto_pregunta_por_clave(clave, relacion="igual"):
-    if clave in ("satisfaccion", "mejor_aspecto", "peor_aspecto"):
-        preguntas = obtener_preguntas_desde_notion(tipo_relacion(relacion))
+def texto_pregunta_por_clave(clave, preguntas=None):
+    if preguntas and clave in ("satisfaccion", "mejor_aspecto", "peor_aspecto"):
         if preguntas.get(clave):
             return preguntas[clave]
     for pregunta in config.PREGUNTAS:
@@ -137,16 +177,6 @@ def _es_valor_satisfaccion(texto):
 
 def _parece_saludo(texto):
     return normalizar_nombre(texto).strip(" ?!¡¿.") in {"hola", "buenas", "hey", "ei"}
-
-
-def _debe_avisar_responder_en_hilo(channel, user_id):
-    ahora = time.time()
-    clave = (channel, user_id)
-    ultimo = avisos_responder_en_hilo.get(clave, 0)
-    if ahora - ultimo < 60:
-        return False
-    avisos_responder_en_hilo[clave] = ahora
-    return True
 
 
 def _mensaje_empleado_no_encontrado(texto):
@@ -188,68 +218,123 @@ def _nombre_real(user_id: str, logger) -> str:
 def handle_message_events(event, logger):
     if event.get("bot_id"):
         return
+
+    channel = event.get("channel", "")
     thread_ts = event.get("thread_ts")
-    channel = event.get("channel")
-    if thread_ts in ca_ts or thread_ts in ca_ts_expirados:
+    user_id = event.get("user")
+
+    if not channel.startswith("D"):
+        return
+
+    if not thread_ts:
+        with lock:
+            has_eval = user_id in evaluaciones_dm_activas
+        has_ca = user_id in ca_dm_activas
+        has_personal = user_id in personal_dm_activas
+        if has_eval or has_ca or has_personal:
+            slack_app.client.chat_postMessage(
+                channel=channel,
+                text="Por favor, responde en el hilo del mensaje de evaluación, no aquí directamente.",
+            )
+        return
+
+    if thread_ts == ca_dm_ts.get(user_id):
         manejar_mensaje_ca(event, logger)
         return
 
-    # Solo procesa respuestas dentro del hilo de una evaluacion enviada por el bot.
-    if not thread_ts:
-        if channel == config.CHANNEL_ID:
+    if thread_ts == personal_dm_ts.get(user_id):
+        manejar_mensaje_personal(event, logger)
+        return
+
+    if thread_ts != evaluacion_dm_ts.get(user_id):
+        # Si hay una evaluación activa en otro hilo, avisar que esta está caducada
+        if evaluacion_dm_ts.get(user_id) is not None:
             with lock:
-                debe_avisar = _debe_avisar_responder_en_hilo(channel, event.get("user"))
-            if debe_avisar:
+                es_activo = user_id in evaluaciones_dm_activas
+            if es_activo:
                 slack_app.client.chat_postMessage(
-                    channel=config.CHANNEL_ID,
-                    text=(
-                        "Muchas gracias por tu respuesta, pero por favor responde en el hilo de la notificacion "
-                        "y no en el canal principal. Aqui solo mando yo notificaciones cuando toca evaluar. "
-                        "No soy un bot inteligente: solo registro respuestas simples."
-                    ),
+                    channel=channel,
+                    thread_ts=thread_ts,
+                    text="Evaluación caducada, por favor conteste en la última notificación.",
                 )
         return
+
     with lock:
-        es_activo = thread_ts in evaluacion_ts
-        es_expirado = thread_ts in evaluacion_ts_expirados
-    if es_expirado and not es_activo:
-        slack_app.client.chat_postMessage(
-            channel=channel, thread_ts=thread_ts,
-            text="⏰ Esta evaluación ha caducado porque ya hay una más reciente activa. Responde en el hilo nuevo.",
-        )
-        return
+        es_activo = user_id in evaluaciones_dm_activas
     if not es_activo:
         return
-    clave_conv = (thread_ts, event.get("user"))
 
-    user_id = event.get("user")
+    dm_channel = evaluacion_dm_canal.get(user_id, channel)
     texto = (event.get("text") or "").strip()
+
+    def reply(text):
+        slack_app.client.chat_postMessage(channel=dm_channel, thread_ts=thread_ts, text=text)
 
     if normalizar_nombre(texto) == "sos":
         with lock:
-            conversaciones.pop(clave_conv, None)
-        slack_app.client.chat_postMessage(
-            channel=channel, thread_ts=thread_ts,
-            text="Evaluación cancelada. Si quieres volver a empezar, envía otro mensaje en el hilo.",
-        )
+            conversaciones.pop(user_id, None)
+        reply("Evaluación cancelada. Si quieres volver a empezar, escribe en este hilo.")
         return
 
+    # Pre-fetch para esperando_persona: llamadas Notion pesadas FUERA del lock.
+    # Para el resto de modos el lock se libera rápido (preguntas cacheadas tras primera llamada).
     with lock:
-        estado = conversaciones.get(clave_conv)
+        _modo_peek = (conversaciones.get(user_id) or {}).get("modo", "pre_inicial")
+        _campo_peek = (conversaciones.get(user_id) or {}).get("campo_modificando")
+        _cargo_ev_peek = (conversaciones.get(user_id) or {}).get("cargo_evaluador")
+        _relacion_peek = (conversaciones.get(user_id) or {}).get("relacion_jerarquica", "igual")
+
+    _empleado_pre = None
+    _cargo_pre = None
+    _cargo_evaluador_pre = _cargo_ev_peek
+    _relacion_pre = _relacion_peek
+    _preguntas_pre = {}
+    _invalido_pre = None
+
+    _necesita_busqueda = (
+        (_modo_peek == "esperando_persona" and texto and not _parece_saludo(texto))
+        or (_modo_peek == "modificando_respuesta" and _campo_peek == "evaluado" and texto)
+    )
+    if _necesita_busqueda:
+        try:
+            _empleado_pre, _cargo_pre = buscar_empleado_y_cargo(texto)
+            if _empleado_pre:
+                if _cargo_ev_peek is None:
+                    _cargo_evaluador_pre = obtener_cargo_por_slack_id(user_id)
+                _relacion_pre = comparar_jerarquia(_cargo_evaluador_pre or "", _cargo_pre or "")
+                _preguntas_pre = obtener_preguntas_desde_notion(tipo_relacion(_relacion_pre))
+            else:
+                _invalido_pre = _mensaje_empleado_no_encontrado(texto)
+        except Exception:
+            logger.exception("Error en Notion al buscar empleado")
+            reply("⚠️ Error temporal consultando datos. Vuelve a intentarlo.")
+            return
+
+    # Máquina de estados en un único bloque con lock
+    with lock:
+        estado = conversaciones.get(user_id)
         if estado is None:
             estado = {
-                "modo": "esperando_proyecto",
+                "modo": "pre_inicial",
                 "respuestas": {},
                 "proyecto_actual": None,
                 "evaluados_en_sesion": set(),
             }
-            conversaciones[clave_conv] = estado
+            conversaciones[user_id] = estado
 
         modo = estado.get("modo")
         accion = None
         pregunta = None
 
-        if modo == "esperando_proyecto":
+        if modo == "pre_inicial":
+            estado["modo"] = "esperando_proyecto"
+            accion = "pedir_proyecto"
+            pregunta = (
+                "¿En qué proyecto estás trabajando ahora? "
+                "Si estás en más de uno, elige solo uno y escribe el nombre del proyecto."
+            )
+
+        elif modo == "esperando_proyecto":
             if texto:
                 estado["respuestas"]["proyecto"] = texto
                 estado["proyecto_actual"] = texto
@@ -270,36 +355,31 @@ def handle_message_events(event, logger):
         elif modo == "esperando_persona":
             if texto:
                 if _parece_saludo(texto):
-                    empleado, cargo_evaluado = None, None
-                else:
-                    empleado, cargo_evaluado = buscar_empleado_y_cargo(texto)
-                if empleado:
-                    clave_evaluacion = (normalizar_nombre(estado.get("proyecto_actual", "")), normalizar_nombre(empleado))
-                    if clave_evaluacion in estado.get("evaluados_en_sesion", set()):
+                    accion = "pedir_persona"
+                    pregunta = "Sigo aquí. Dime el nombre del miembro del proyecto."
+                elif _empleado_pre:
+                    proyecto_actual = estado.get("proyecto_actual", "")
+                    clave_ev = (normalizar_nombre(proyecto_actual), normalizar_nombre(_empleado_pre))
+                    if clave_ev in estado.get("evaluados_en_sesion", set()):
                         accion = "pedir_persona"
                         pregunta = (
-                            f"Ya has evaluado a *{empleado}* en *{estado.get('proyecto_actual', '?')}* en este hilo. "
+                            f"Ya has evaluado a *{_empleado_pre}* en *{proyecto_actual or '?'}* en esta sesión. "
                             "Dime el nombre de otro miembro del proyecto."
                         )
                     else:
-                        estado["respuestas"]["evaluado"] = empleado
-                        if estado.get("cargo_evaluador") is None:
-                            estado["cargo_evaluador"] = obtener_cargo_por_slack_id(user_id)
-                        relacion = comparar_jerarquia(estado.get("cargo_evaluador") or "", cargo_evaluado or "")
-                        estado["relacion_jerarquica"] = relacion
+                        estado["respuestas"]["evaluado"] = _empleado_pre
+                        if _cargo_evaluador_pre and _cargo_evaluador_pre != _cargo_ev_peek:
+                            estado["cargo_evaluador"] = _cargo_evaluador_pre
+                        estado["relacion_jerarquica"] = _relacion_pre
                         estado["modo"] = "esperando_satisfaccion"
                         accion = "pedir_satisfaccion"
-                        preguntas = obtener_preguntas_desde_notion(tipo_relacion(relacion))
-                        pregunta = preguntas.get(
+                        pregunta = _preguntas_pre.get(
                             "satisfaccion",
                             "¿Cómo de satisfecho estás con esa persona? (responde un número del 1 al 5)",
                         )
-                elif _parece_saludo(texto):
-                    accion = "pedir_persona"
-                    pregunta = "Sigo aquí. Dime el nombre del miembro del proyecto."
                 else:
                     accion = "pedir_persona_invalida"
-                    pregunta = _mensaje_empleado_no_encontrado(texto)
+                    pregunta = _invalido_pre
             else:
                 accion = "pedir_persona"
                 pregunta = "¿Qué miembro del proyecto quieres evaluar?"
@@ -353,42 +433,47 @@ def handle_message_events(event, logger):
                 pregunta = resumen_respuestas(estado["respuestas"])
 
         elif modo == "seleccionando_modificacion":
-            clave = clave_modificacion(texto)
-            if clave:
-                estado["campo_modificando"] = clave
+            campo = clave_modificacion(texto)
+            if campo:
+                estado["campo_modificando"] = campo
                 estado["modo"] = "modificando_respuesta"
                 accion = "pedir_valor_modificacion"
-                pregunta = texto_pregunta_por_clave(clave, relacion=estado.get("relacion_jerarquica", "igual"))
+                if campo in ("satisfaccion", "mejor_aspecto", "peor_aspecto"):
+                    preguntas = obtener_preguntas_desde_notion(tipo_relacion(estado.get("relacion_jerarquica", "igual")))
+                    pregunta = preguntas.get(campo) or texto_pregunta_por_clave(campo)
+                else:
+                    pregunta = texto_pregunta_por_clave(campo)
             else:
                 accion = "pedir_modificacion"
                 pregunta = texto_menu_modificacion()
 
         elif modo == "modificando_respuesta":
-            clave = estado.get("campo_modificando")
-            if clave and texto:
-                valor = texto
-                if clave == "evaluado":
-                    empleado, cargo_evaluado = buscar_empleado_y_cargo(texto)
-                    if not empleado:
+            campo = estado.get("campo_modificando")
+            if campo and texto:
+                if campo == "evaluado":
+                    if not _empleado_pre:
                         accion = "pedir_valor_modificacion"
-                        pregunta = _mensaje_empleado_no_encontrado(texto)
+                        pregunta = _invalido_pre
                     else:
-                        valor = empleado
-                        if estado.get("cargo_evaluador") is None:
-                            estado["cargo_evaluador"] = obtener_cargo_por_slack_id(user_id)
-                        relacion = comparar_jerarquia(estado.get("cargo_evaluador") or "", cargo_evaluado or "")
-                        estado["relacion_jerarquica"] = relacion
-                if accion != "pedir_valor_modificacion":
-                    estado["respuestas"][clave] = valor
-                    if clave == "proyecto":
-                        estado["proyecto_actual"] = valor
+                        if _cargo_evaluador_pre and _cargo_evaluador_pre != _cargo_ev_peek:
+                            estado["cargo_evaluador"] = _cargo_evaluador_pre
+                        estado["relacion_jerarquica"] = _relacion_pre
+                        estado["respuestas"]["evaluado"] = _empleado_pre
+                        estado.pop("campo_modificando", None)
+                        estado["modo"] = "confirmacion"
+                        accion = "mostrar_resumen"
+                        pregunta = resumen_respuestas(estado["respuestas"])
+                else:
+                    estado["respuestas"][campo] = texto
+                    if campo == "proyecto":
+                        estado["proyecto_actual"] = texto
                     estado.pop("campo_modificando", None)
                     estado["modo"] = "confirmacion"
                     accion = "mostrar_resumen"
                     pregunta = resumen_respuestas(estado["respuestas"])
             else:
                 accion = "pedir_valor_modificacion"
-                pregunta = texto_pregunta_por_clave(clave, relacion=estado.get("relacion_jerarquica", "igual")) if clave else texto_menu_modificacion()
+                pregunta = texto_pregunta_por_clave(campo) if campo else texto_menu_modificacion()
 
         elif modo == "guardar":
             accion = "guardar"
@@ -433,86 +518,49 @@ def handle_message_events(event, logger):
         elif modo == "terminado":
             accion = "ya_terminado"
 
-    if accion == "pedir_persona":
-        slack_app.client.chat_postMessage(
-            channel=config.CHANNEL_ID,
-            thread_ts=thread_ts,
-            text=(pregunta if pregunta else "¿Qué miembro del proyecto quieres evaluar?")
-        )
-        return
-    if accion == "pedir_persona_invalida":
-        slack_app.client.chat_postMessage(channel=config.CHANNEL_ID, thread_ts=thread_ts, text=pregunta)
-        return
-    if accion == "pedir_persona_mismo_proyecto":
-        slack_app.client.chat_postMessage(channel=config.CHANNEL_ID, thread_ts=thread_ts, text=pregunta)
-        return
-    if accion == "pedir_proyecto":
-        slack_app.client.chat_postMessage(channel=config.CHANNEL_ID, thread_ts=thread_ts, text=pregunta)
-        return
-    if accion == "pedir_satisfaccion":
-        slack_app.client.chat_postMessage(channel=config.CHANNEL_ID, thread_ts=thread_ts, text=pregunta)
-        return
-    if accion == "pedir_mejor":
-        slack_app.client.chat_postMessage(channel=config.CHANNEL_ID, thread_ts=thread_ts, text=pregunta)
-        return
-    if accion == "pedir_peor":
-        slack_app.client.chat_postMessage(channel=config.CHANNEL_ID, thread_ts=thread_ts, text=pregunta)
-        return
-    if accion == "pedir_modificacion":
-        slack_app.client.chat_postMessage(channel=config.CHANNEL_ID, thread_ts=thread_ts, text=pregunta)
-        return
-    if accion == "pedir_valor_modificacion":
-        slack_app.client.chat_postMessage(channel=config.CHANNEL_ID, thread_ts=thread_ts, text=pregunta)
+    # Despacho de acciones — fuera del lock
+    _ACCIONES_PREGUNTA = {
+        "pedir_persona", "pedir_persona_invalida", "pedir_persona_mismo_proyecto",
+        "pedir_proyecto", "pedir_satisfaccion", "pedir_mejor", "pedir_peor",
+        "pedir_modificacion", "pedir_valor_modificacion", "pedir_mas_personas",
+        "pedir_mas_proyectos",
+    }
+    if accion in _ACCIONES_PREGUNTA:
+        reply(pregunta if pregunta else "")
         return
     if accion == "mostrar_resumen":
-        slack_app.client.chat_postMessage(
-            channel=config.CHANNEL_ID,
-            thread_ts=thread_ts,
-            text=(pregunta if isinstance(pregunta, str) else resumen_respuestas(estado["respuestas"])),
-        )
+        reply(pregunta)
         return
     if accion == "guardar":
         nombre = _nombre_real(user_id, logger)
-        respuestas_finales = dict(estado["respuestas"])
-        relacion = estado.get("relacion_jerarquica", "igual")
-        guardado = guardar_en_notion(nombre, respuestas_finales, relacion=relacion)
+        with lock:
+            respuestas_finales = dict(estado.get("respuestas", {}))
+            relacion_final = estado.get("relacion_jerarquica", "igual")
+        guardado = guardar_en_notion(nombre, respuestas_finales, relacion=relacion_final)
         if guardado:
             with lock:
-                clave_guardada = (normalizar_nombre(respuestas_finales.get("proyecto", "")), normalizar_nombre(respuestas_finales.get("evaluado", "")))
+                clave_guardada = (
+                    normalizar_nombre(respuestas_finales.get("proyecto", "")),
+                    normalizar_nombre(respuestas_finales.get("evaluado", "")),
+                )
                 estado.setdefault("evaluados_en_sesion", set()).add(clave_guardada)
                 estado["modo"] = "preguntar_mas_personas"
-            slack_app.client.chat_postMessage(
-                channel=config.CHANNEL_ID,
-                thread_ts=thread_ts,
-                text=(
-                    "✅ Evaluación guardada en Notion.\n\n"
-                    "Si hay más miembros en este proyecto, por favor, dímelo. "
-                    "¿Hay más miembros para evaluar aquí? (`sí` / `no`)"
-                ),
+            reply(
+                "✅ Evaluación guardada en Notion.\n\n"
+                "Si hay más miembros en este proyecto, por favor, dímelo. "
+                "¿Hay más miembros para evaluar aquí? (`sí` / `no`)"
             )
             return
-        slack_app.client.chat_postMessage(
-            channel=config.CHANNEL_ID,
-            thread_ts=thread_ts,
-            text="⚠️ No se pudo guardar en Notion. Revisa permisos/logs.",
-        )
-        return
-    if accion == "pedir_mas_personas":
-        slack_app.client.chat_postMessage(channel=config.CHANNEL_ID, thread_ts=thread_ts, text=pregunta)
-        return
-    if accion == "pedir_mas_proyectos":
-        slack_app.client.chat_postMessage(channel=config.CHANNEL_ID, thread_ts=thread_ts, text=pregunta)
+        reply("⚠️ No se pudo guardar en Notion. Revisa permisos/logs.")
         return
     if accion == "terminar":
-        slack_app.client.chat_postMessage(channel=config.CHANNEL_ID, thread_ts=thread_ts, text="Perfecto, gracias por tu tiempo. 👋")
+        reply("Perfecto, gracias por tu tiempo. 👋")
         return
     if accion == "ya_terminado":
-        slack_app.client.chat_postMessage(channel=config.CHANNEL_ID, thread_ts=thread_ts, text="Esta evaluación ya ha concluido. Puedes salir del hilo. 👋")
+        reply("Esta evaluación ya ha concluido, por favor salga del hilo. 👋")
         return
-
-    # fallback: keep the conversation alive with the current prompt
     if pregunta:
-        slack_app.client.chat_postMessage(channel=config.CHANNEL_ID, thread_ts=thread_ts, text=pregunta)
+        reply(pregunta)
 
 
 _RECORDATORIO_PROYECTO_SEGUNDOS = 120
@@ -524,19 +572,25 @@ def ciclo_recordatorios_proyecto():
         ahora = time.time()
         with lock:
             pendientes = [
-                ts for ts in evaluacion_ts
-                if ahora - max(evaluacion_hora.get(ts, ahora), evaluacion_ultimo_recordatorio.get(ts, 0) or evaluacion_hora.get(ts, ahora)) >= _RECORDATORIO_PROYECTO_SEGUNDOS
+                uid for uid in evaluaciones_dm_activas
+                if (
+                    ahora - max(evaluacion_hora.get(uid, ahora), evaluacion_ultimo_recordatorio.get(uid, 0) or evaluacion_hora.get(uid, ahora)) >= _RECORDATORIO_PROYECTO_SEGUNDOS
+                    and conversaciones.get(uid, {}).get("modo") not in ("terminado",)
+                )
             ]
-        for ts in pendientes:
+        for uid in pendientes:
             try:
+                dm_channel = evaluacion_dm_canal.get(uid)
+                if not dm_channel:
+                    continue
                 slack_app.client.chat_postMessage(
-                    channel=config.CHANNEL_ID,
-                    text="*⏰ Recuerda realizar tu evaluación de proyecto.* Si aún no has respondido, entra en el hilo de la notificación y hazlo.",
+                    channel=dm_channel,
+                    text="*⏰ Recuerda realizar tu evaluación de proyecto.* Abre el hilo del mensaje de evaluación y responde.",
                 )
                 with lock:
-                    evaluacion_ultimo_recordatorio[ts] = time.time()
+                    evaluacion_ultimo_recordatorio[uid] = time.time()
             except Exception:
-                logging.exception("Error enviando recordatorio de evaluación de proyecto")
+                logging.exception(f"Error enviando recordatorio DM a {uid}")
 
 
 def start_socket_mode():

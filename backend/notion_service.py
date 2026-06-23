@@ -717,8 +717,20 @@ def _url_foto_propiedad(props, nombre_propiedad):
     return _texto_propiedad(props, nombre_propiedad)
 
 
+_lock_empleados = threading.Lock()
+_empleados_cache_data: list = []
+_empleados_cache_ts: float = 0.0
+_EMPLEADOS_CACHE_TTL = 300  # 5 minutos
+
+
 def _obtener_registros_empleados() -> list[dict]:
-    """Lee empleados con su nombre canonico y aliases utiles para busqueda."""
+    """Lee empleados con su nombre canonico y aliases utiles para busqueda. Cachea 5 min."""
+    global _empleados_cache_data, _empleados_cache_ts
+    import time as _time
+    ahora = _time.time()
+    with _lock_empleados:
+        if _empleados_cache_data and (ahora - _empleados_cache_ts) < _EMPLEADOS_CACHE_TTL:
+            return list(_empleados_cache_data)
     try:
         db_id, resultado = _retrieve_bbdd(config.NOTION_EMPLOYEES_DATABASE_ID)
         propiedades = resultado.get("properties", {})
@@ -795,9 +807,16 @@ def _obtener_registros_empleados() -> list[dict]:
             len(registros),
             ", ".join(nombre_props),
         )
+        with _lock_empleados:
+            _empleados_cache_data = registros
+            _empleados_cache_ts = _time.time()
         return registros
     except Exception:
         logging.exception("Error leyendo la lista de empleados desde Notion")
+        with _lock_empleados:
+            if _empleados_cache_data:
+                logging.warning("Devolviendo cache de empleados por error de Notion")
+                return list(_empleados_cache_data)
         return []
 
 
@@ -913,6 +932,11 @@ def obtener_cargo_por_slack_id(user_id: str) -> str | None:
         if registro.get("id_usuario") == user_id:
             return registro.get("cargo") or None
     return None
+
+
+def obtener_slack_ids_empleados() -> list[str]:
+    """Devuelve todos los ID_usuario (Slack IDs) no vacíos de la lista de empleados."""
+    return [r["id_usuario"] for r in _obtener_registros_empleados() if r.get("id_usuario")]
 
 
 _cache_preguntas: dict = {}
@@ -1894,3 +1918,183 @@ def obtener_informe_final_reciente(advisee: str) -> dict | None:
     except Exception:
         logging.exception("Error obteniendo informe final de '%s'", advisee)
         return None
+
+
+# ---------------------------------------------------------------------------
+# Evaluaciones Personales
+# ---------------------------------------------------------------------------
+
+_cache_personales_page_id: dict = {"page_id": None}
+_cache_personal_eval_db: dict = {"db_id": None}
+_cache_personal_preguntas_db: dict = {"db_id": None}
+_cache_personal_preguntas: dict = {}
+_PERSONAL_PREGUNTAS_TTL = 300
+
+_PROPS_EVALUACIONES_PERSONALES = {
+    "Nombre": {"title": {}},
+    "Fecha": {"date": {}},
+    "Personas implicadas": {"rich_text": {}},
+    "Proyecto": {"rich_text": {}},
+    "Comentario": {"rich_text": {}},
+}
+
+_PROPS_PERSONAL_PREGUNTAS = {
+    "Clave": {"title": {}},
+    "Texto": {"rich_text": {}},
+}
+
+PREGUNTAS_PERSONALES_DEFAULT = {
+    "mensaje_inicial": (
+        "📝 *Evaluación personal*\n"
+        "Es tu oportunidad para hacer cualquier comentario sobre cualquier avance o impedimento "
+        "con tus objetivos marcados con tu CA, o cualquier comentario sobre el proyecto. "
+        "Este mensaje es totalmente privado, por favor deja tu comentario respondiendo en el hilo.\n\n"
+        "_Si quieres cancelar la encuesta, escribe SOS en cualquier momento._"
+    ),
+    "proyecto": "1️⃣ ¿Sobre qué proyecto quieres comentar? Si no está asociado a ningún proyecto, escribe *ninguno*.",
+    "personas": "2️⃣ ¿Hay alguna persona implicada que quieras mencionar? Escribe su nombre o *ninguna* si no hay nadie.",
+    "comentario": "3️⃣ Por favor, escribe tu comentario o lo que quieras compartir.",
+}
+
+
+def _obtener_o_crear_pagina_personales() -> str | None:
+    with lock:
+        page_id = _cache_personales_page_id["page_id"]
+    if page_id:
+        return page_id
+
+    ref = _parent_bbdd_en_pagina("Evaluaciones Personales", crear=True)
+    if ref.get("type") != "page_id":
+        logging.warning("No se pudo localizar/crear la página 'Evaluaciones Personales'")
+        return None
+
+    with lock:
+        _cache_personales_page_id["page_id"] = ref["page_id"]
+    return ref["page_id"]
+
+
+def _buscar_o_crear_bbdd_en_personales(titulo_db: str, props: dict, cache: dict, poblar=None) -> str | None:
+    with lock:
+        db_id = cache["db_id"]
+    if db_id:
+        return db_id
+
+    personales_id = _obtener_o_crear_pagina_personales()
+    if not personales_id:
+        return None
+
+    objetivo = normalizar_nombre(titulo_db)
+    for bloque in _iter_blocks(personales_id):
+        if bloque.get("type") == "child_database" and normalizar_nombre(_titulo_child_database(bloque)) == objetivo:
+            try:
+                db_id = _data_source_id(notion.databases.retrieve(database_id=bloque["id"]))
+            except Exception:
+                db_id = bloque["id"]
+            with lock:
+                cache["db_id"] = db_id
+            return db_id
+
+    try:
+        parent_personales = {"type": "page_id", "page_id": personales_id}
+        if _usa_data_sources():
+            nueva = notion.databases.create(
+                parent=parent_personales,
+                title=[{"type": "text", "text": {"content": titulo_db}}],
+                initial_data_source={"title": [{"type": "text", "text": {"content": titulo_db}}], "properties": props},
+            )
+            nueva = notion.databases.retrieve(database_id=nueva["id"])
+        else:
+            nueva = notion.databases.create(
+                parent=parent_personales,
+                title=[{"type": "text", "text": {"content": titulo_db}}],
+                properties=props,
+            )
+        db_id = _data_source_id(nueva)
+        with lock:
+            cache["db_id"] = db_id
+        logging.info("BD '%s' creada bajo 'Evaluaciones Personales'", titulo_db)
+        if poblar:
+            poblar(db_id)
+        return db_id
+    except Exception:
+        logging.exception("Error creando BD '%s' para evaluaciones personales", titulo_db)
+        return None
+
+
+def _poblar_bbdd_preguntas_personal(db_id: str) -> None:
+    for clave, texto in PREGUNTAS_PERSONALES_DEFAULT.items():
+        try:
+            _crear_pagina_en_bbdd(db_id, {
+                "Clave": {"title": [{"type": "text", "text": {"content": clave}}]},
+                "Texto": {"rich_text": [{"type": "text", "text": {"content": texto}}]},
+            })
+        except Exception:
+            logging.exception("Error poblando pregunta personal '%s'", clave)
+
+
+def obtener_preguntas_personales() -> dict:
+    import time as _time
+    ahora = _time.time()
+    with lock:
+        cached = _cache_personal_preguntas.get("data")
+        ts = _cache_personal_preguntas.get("ts", 0.0)
+    if cached and (ahora - ts) < _PERSONAL_PREGUNTAS_TTL:
+        return cached
+
+    db_id = _buscar_o_crear_bbdd_en_personales(
+        "Preguntas", _PROPS_PERSONAL_PREGUNTAS, _cache_personal_preguntas_db,
+        poblar=_poblar_bbdd_preguntas_personal,
+    )
+    if not db_id:
+        return dict(PREGUNTAS_PERSONALES_DEFAULT)
+
+    try:
+        resultado = {}
+        cursor = None
+        while True:
+            kwargs: dict = {"page_size": 100}
+            if cursor:
+                kwargs["start_cursor"] = cursor
+            resp = _query_bbdd(db_id, **kwargs)
+            for fila in resp.get("results", []):
+                props = fila.get("properties", {})
+                clave = " ".join(p.get("plain_text", "") for p in props.get("Clave", {}).get("title", [])).strip()
+                texto = " ".join(p.get("plain_text", "") for p in props.get("Texto", {}).get("rich_text", [])).strip()
+                if clave and texto:
+                    resultado[clave] = texto
+            if not resp.get("has_more"):
+                break
+            cursor = resp.get("next_cursor")
+        for k, v in PREGUNTAS_PERSONALES_DEFAULT.items():
+            resultado.setdefault(k, v)
+        with lock:
+            _cache_personal_preguntas["data"] = resultado
+            _cache_personal_preguntas["ts"] = _time.time()
+        return resultado
+    except Exception:
+        logging.exception("Error leyendo preguntas personales desde Notion")
+        return dict(PREGUNTAS_PERSONALES_DEFAULT)
+
+
+def guardar_evaluacion_personal(nombre: str, respuestas: dict) -> bool:
+    db_id = _buscar_o_crear_bbdd_en_personales(
+        "Respuestas", _PROPS_EVALUACIONES_PERSONALES, _cache_personal_eval_db,
+    )
+    if not db_id:
+        return False
+    try:
+        from datetime import datetime, timezone
+        fecha_iso = datetime.now(timezone.utc).isoformat()
+        props = {
+            "Nombre": {"title": [{"type": "text", "text": {"content": nombre or ""}}]},
+            "Fecha": {"date": {"start": fecha_iso}},
+            "Personas implicadas": {"rich_text": [{"type": "text", "text": {"content": respuestas.get("personas", "") or ""}}]},
+            "Proyecto": {"rich_text": [{"type": "text", "text": {"content": respuestas.get("proyecto", "") or ""}}]},
+            "Comentario": {"rich_text": [{"type": "text", "text": {"content": respuestas.get("comentario", "") or ""}}]},
+        }
+        _crear_pagina_en_bbdd(db_id, props)
+        logging.info("Evaluación personal guardada para '%s'", nombre)
+        return True
+    except Exception:
+        logging.exception("Error guardando evaluación personal de '%s'", nombre)
+        return False

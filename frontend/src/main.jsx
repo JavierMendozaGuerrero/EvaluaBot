@@ -24,6 +24,44 @@ async function apiRequest(path, { token, method = "GET", body } = {}) {
   return data;
 }
 
+const _CACHE_TTL = 5 * 60 * 1000;
+
+function _getCached(key) {
+  try {
+    const raw = sessionStorage.getItem(`ebc_${key}`);
+    if (!raw) return undefined;
+    const { d, t } = JSON.parse(raw);
+    return Date.now() - t < _CACHE_TTL ? d : undefined;
+  } catch { return undefined; }
+}
+
+function _setCache(key, data) {
+  try { sessionStorage.setItem(`ebc_${key}`, JSON.stringify({ d: data, t: Date.now() })); } catch {}
+}
+
+function clearApiCache() {
+  try {
+    Object.keys(sessionStorage)
+      .filter((k) => k.startsWith("ebc_"))
+      .forEach((k) => sessionStorage.removeItem(k));
+  } catch {}
+}
+
+async function apiRequestCached(path, options, onFresh) {
+  const cached = _getCached(path);
+  if (cached !== undefined) {
+    if (onFresh) {
+      apiRequest(path, options)
+        .then((fresh) => { _setCache(path, fresh); onFresh(fresh); })
+        .catch(() => {});
+    }
+    return cached;
+  }
+  const data = await apiRequest(path, options);
+  _setCache(path, data);
+  return data;
+}
+
 function isStrongPassword(password) {
   return password.length >= 8 && /[A-Z]/.test(password) && /[^A-Za-z0-9]/.test(password);
 }
@@ -69,6 +107,18 @@ function PasswordInput({ value, onChange, placeholder = "", required = true, min
   );
 }
 
+function Footer() {
+  return (
+    <footer className="site-footer">
+      <p className="site-footer-copy">© {new Date().getFullYear()} <strong>Igeneris</strong></p>
+      <nav className="site-footer-links">
+        <a href="#">Privacidad</a>
+        <a href="#">Términos</a>
+      </nav>
+    </footer>
+  );
+}
+
 function AdminRoleSelect({ user, onChoose, onLogout }) {
   const persona = user?.persona || user?.username || "";
   return (
@@ -78,7 +128,7 @@ function AdminRoleSelect({ user, onChoose, onLogout }) {
         <div className="nav-user">
           <div className="nav-user-info">
             <span className="nav-user-name">{persona}</span>
-            <button className="link-button" onClick={onLogout}>Cerrar sesión</button>
+            <button className="link-button logout-btn" onClick={onLogout}>Cerrar sesión</button>
           </div>
         </div>
       </nav>
@@ -96,6 +146,7 @@ function AdminRoleSelect({ user, onChoose, onLogout }) {
           </button>
         </div>
       </div>
+      <Footer />
     </main>
   );
 }
@@ -176,6 +227,14 @@ function AdminPanel({ token, onBack }) {
         </nav>
         <div className="admin-employee-wrap">
           <div className="admin-employee-layout">
+            <div className="admin-employee-profile">
+              {selected.foto
+                ? <img src={selected.foto} alt={selected.nombre} className="advisee-detail-foto" />
+                : <div className="advisee-detail-foto advisee-foto-placeholder">{selected.nombre.charAt(0)}</div>
+              }
+              <h2 className="advisee-detail-nombre">{selected.nombre}</h2>
+              {selected.cargo && <p className="fine" style={{ margin: 0 }}>{selected.cargo}</p>}
+            </div>
             <div className="admin-employee-actions">
               <p className="kicker">Informes</p>
               {informeFinal === null ? (
@@ -207,16 +266,9 @@ function AdminPanel({ token, onBack }) {
                 <p className="fine error">{statusMsg}</p>
               )}
             </div>
-            <div className="admin-employee-profile">
-              {selected.foto
-                ? <img src={selected.foto} alt={selected.nombre} className="advisee-detail-foto" />
-                : <div className="advisee-detail-foto advisee-foto-placeholder">{selected.nombre.charAt(0)}</div>
-              }
-              <h2 className="advisee-detail-nombre">{selected.nombre}</h2>
-              {selected.cargo && <p className="fine" style={{ margin: 0 }}>{selected.cargo}</p>}
-            </div>
           </div>
         </div>
+        <Footer />
       </main>
     );
   }
@@ -254,6 +306,7 @@ function AdminPanel({ token, onBack }) {
           )}
         </div>
       </div>
+      <Footer />
     </main>
   );
 }
@@ -331,6 +384,7 @@ function InformesAdvisee({ token, advisee, onBack }) {
           </div>
         </section>
       )}
+      <Footer />
     </main>
   );
 }
@@ -376,6 +430,7 @@ function MisObjetivosPage({ token, persona, onBack }) {
           <p>Todavia no tienes objetivos registrados.</p>
         )}
       </section>
+      <Footer />
     </main>
   );
 }
@@ -467,6 +522,7 @@ function ObjetivosPage({ token, advisee, caName, onBack }) {
           <p>No hay objetivos anteriores para {advisee.nombre}.</p>
         )}
       </section>
+      <Footer />
     </main>
   );
 }
@@ -475,6 +531,7 @@ function AuthScreen({ onLogin }) {
   const resetToken = getResetToken();
   const [mode, setMode] = useState(resetToken ? "reset" : "login");
   const [form, setForm] = useState({ username: "", email: "", password: "", confirmPassword: "", newPassword: "", confirmNewPassword: "" });
+  const [rememberMe, setRememberMe] = useState(false);
   const [error, setError] = useState("");
   const [message, setMessage] = useState("");
   const [loading, setLoading] = useState(false);
@@ -520,11 +577,23 @@ function AuthScreen({ onLogin }) {
         setMessage("Contrasena actualizada. Ya puedes entrar.");
       } else {
         const data = await apiRequest("/api/login", { method: "POST", body: form });
-        localStorage.setItem("evaluabot_token", data.token);
+        if (rememberMe) {
+          localStorage.setItem("evaluabot_token", data.token);
+          sessionStorage.removeItem("evaluabot_token");
+        } else {
+          sessionStorage.setItem("evaluabot_token", data.token);
+          localStorage.removeItem("evaluabot_token");
+        }
         onLogin(data.token, data.user);
       }
     } catch (err) {
-      setError(err.message);
+      if (err.message.startsWith("VERIFICACION_REQUERIDA:")) {
+        setMaskedEmail(err.message.split(":")[1] || "");
+        setMode("verify-code");
+        setError("");
+      } else {
+        setError(err.message);
+      }
     } finally {
       setLoading(false);
     }
@@ -538,12 +607,26 @@ function AuthScreen({ onLogin }) {
       <div className="auth-body">
         <p className="kicker">Evaluaciones internas</p>
         <h2 className="auth-heading">
-          {mode === "forgot" ? "Recupera tu acceso" : mode === "reset" ? "Nueva contraseña" : mode === "login" ? "Iniciar sesión" : "Crear cuenta"}
+          {mode === "verify-code" ? "Verificación requerida" : mode === "forgot" ? "Recupera tu acceso" : mode === "reset" ? "Nueva contraseña" : mode === "login" ? "Iniciar sesión" : "Crear cuenta"}
         </h2>
         {error && <p className="error">{error}</p>}
         {message && <p className="fine">{message}</p>}
         <form onSubmit={submit}>
-          {mode === "forgot" ? (
+          {mode === "verify-code" ? (
+            <>
+              <p className="fine">Por seguridad, hemos enviado un código de 6 dígitos a <strong>{maskedEmail}</strong>. Introdúcelo a continuación. Caduca en 10 minutos.</p>
+              <label>Código de verificación</label>
+              <input
+                type="text"
+                inputMode="numeric"
+                maxLength={6}
+                value={form.verifyCode}
+                onChange={(e) => setForm({ ...form, verifyCode: e.target.value.replace(/\D/g, "") })}
+                required
+                autoFocus
+              />
+            </>
+          ) : mode === "forgot" ? (
             <>
               <label>Email</label>
               <input type="email" value={form.email} onChange={(e) => setForm({ ...form, email: e.target.value })} required />
@@ -571,7 +654,7 @@ function AuthScreen({ onLogin }) {
           )}
           {mode === "login" && (
             <label className="check-label">
-              <input type="checkbox" className="check-input" />
+              <input type="checkbox" className="check-input" checked={rememberMe} onChange={(e) => setRememberMe(e.target.checked)} />
               Recuérdame
             </label>
           )}
@@ -582,15 +665,15 @@ function AuthScreen({ onLogin }) {
           )}
           <div className="actions">
             <button type="submit" disabled={!canSubmit}>
-              {loading ? "Procesando..." : mode === "forgot" ? "Enviar enlace" : mode === "reset" ? "Guardar contraseña" : mode === "login" ? "Iniciar sesión" : "Crear cuenta"}
+              {loading ? "Procesando..." : mode === "verify-code" ? "Verificar" : mode === "forgot" ? "Enviar enlace" : mode === "reset" ? "Guardar contraseña" : mode === "login" ? "Iniciar sesión" : "Crear cuenta"}
             </button>
             {mode === "login" && (
               <button type="button" className="secondary" onClick={() => { setError(""); setMessage(""); setMode("forgot"); }}>
                 Olvidé mi contraseña
               </button>
             )}
-            {(mode === "forgot" || mode === "reset") && (
-              <button type="button" className="secondary" onClick={() => { window.history.replaceState({}, "", window.location.pathname); setError(""); setMessage(""); setMode("login"); }}>
+            {(mode === "forgot" || mode === "reset" || mode === "verify-code") && (
+              <button type="button" className="secondary" onClick={() => { window.history.replaceState({}, "", window.location.pathname); setError(""); setMessage(""); setForm((f) => ({ ...f, verifyCode: "" })); setMode("login"); }}>
                 Volver
               </button>
             )}
@@ -631,34 +714,31 @@ function Dashboard({ token, user, onLogout, onNavigate, onBackToRoleSelect = nul
   const [seccionActiva, setSeccionActiva] = useState(null);
 
   useEffect(() => {
-    apiRequest("/api/evaluados", { token })
-      .then((data) => {
-        setEvaluados(data.evaluados || []);
-        setEvaluado(data.evaluados?.[0]?.value || "");
-      })
+    const apply = (data) => { setEvaluados(data.evaluados || []); setEvaluado(data.evaluados?.[0]?.value || ""); };
+    apiRequestCached("/api/evaluados", { token }, apply)
+      .then(apply)
       .catch((err) => setStatus(err.message));
   }, [token]);
 
   useEffect(() => {
-    apiRequest("/api/mis-advisees", { token })
-      .then((data) => setAdvisees(data.advisees || []))
+    const apply = (data) => setAdvisees(data.advisees || []);
+    apiRequestCached("/api/mis-advisees", { token }, apply)
+      .then(apply)
       .catch(() => {});
   }, [token]);
 
   useEffect(() => {
     if (!isAdmin) return;
-    apiRequest("/api/evaluados-anual", { token })
-      .then((data) => {
-        const lista = data.evaluados || [];
-        setEvaluadosAnual(lista);
-        if (lista.length) setEvaluadoAnual(lista[0].value);
-      })
+    const apply = (data) => { const lista = data.evaluados || []; setEvaluadosAnual(lista); if (lista.length) setEvaluadoAnual(lista[0].value); };
+    apiRequestCached("/api/evaluados-anual", { token }, apply)
+      .then(apply)
       .catch(() => {});
   }, [token, isAdmin]);
 
   useEffect(() => {
-    apiRequest("/api/acceso-advisees", { token })
-      .then((data) => setAccesoActivo(data.activo || false))
+    const apply = (data) => setAccesoActivo(data.activo || false);
+    apiRequestCached("/api/acceso-advisees", { token }, apply)
+      .then(apply)
       .catch(() => {});
   }, [token]);
 
@@ -666,8 +746,10 @@ function Dashboard({ token, user, onLogout, onNavigate, onBackToRoleSelect = nul
     if (isAdmin) return;
     const persona = user?.persona || "";
     if (!persona) return;
-    apiRequest(`/api/informe-final?evaluado=${encodeURIComponent(persona)}`, { token })
-      .then((data) => setInformeFinalEmpleado(data))
+    const path = `/api/informe-final?evaluado=${encodeURIComponent(persona)}`;
+    const apply = (data) => setInformeFinalEmpleado(data);
+    apiRequestCached(path, { token }, apply)
+      .then(apply)
       .catch(() => setInformeFinalEmpleado({ disponible: false, mensaje: "No se pudo cargar el informe." }));
   }, [token, isAdmin, user?.persona]);
 
@@ -680,16 +762,19 @@ function Dashboard({ token, user, onLogout, onNavigate, onBackToRoleSelect = nul
   }, [token, isAdmin, adminModo, evaluado]);
 
   useEffect(() => {
-    apiRequest("/api/mi-perfil", { token })
-      .then((data) => setPerfil(data))
+    const apply = (data) => setPerfil(data);
+    apiRequestCached("/api/mi-perfil", { token }, apply)
+      .then(apply)
       .catch(() => {});
   }, [token]);
 
   useEffect(() => {
     const persona = user?.persona;
     if (!persona) return;
-    apiRequest(`/api/objetivos?nombre=${encodeURIComponent(persona)}`, { token })
-      .then((data) => setMisObjetivos(data.objetivos || []))
+    const path = `/api/objetivos?nombre=${encodeURIComponent(persona)}`;
+    const apply = (data) => setMisObjetivos(data.objetivos || []);
+    apiRequestCached(path, { token }, apply)
+      .then(apply)
       .catch(() => {});
   }, [token, user?.persona]);
 
@@ -706,9 +791,9 @@ function Dashboard({ token, user, onLogout, onNavigate, onBackToRoleSelect = nul
       if (kind === "generar" && cargoAnual) body.cargo = cargoAnual;
       const data = await apiRequest(`/api/${kind}`, { token, method: "POST", body });
       setLinks(data);
-      if (kind === "trayectoria" && data.trayectoriaUrl) {
+      if (kind === "trayectoria" && data.htmlUrl) {
         setStatus("");
-        window.open(apiUrl(`${data.trayectoriaUrl}&token=${encodeURIComponent(token)}`), "_blank", "noopener,noreferrer");
+        window.open(apiUrl(`${data.htmlUrl}&token=${encodeURIComponent(token)}`), "_blank", "noopener,noreferrer");
       } else {
         setStatus(kind === "generar" ? `Informe listo con ${data.total} evaluaciones.` : "");
       }
@@ -799,19 +884,19 @@ function Dashboard({ token, user, onLogout, onNavigate, onBackToRoleSelect = nul
   return (
     <main className="page dash-page">
       <nav className="nav">
+        <a className="brand" href="/"><img src="/src/logo.png" alt="igeneris" className="brand-logo" /></a>
         <div style={{ display: "flex", alignItems: "center", gap: "24px" }}>
-          <a className="brand" href="/"><img src="/src/logo.png" alt="igeneris" className="brand-logo" /></a>
           {onBackToRoleSelect && (
             <button className="link-button" onClick={onBackToRoleSelect}>← Volver</button>
           )}
-        </div>
-        <div className="nav-user">
-          <div className="nav-user-info">
-            <span className="nav-user-name">{persona}</span>
-            <button className="link-button" onClick={onLogout}>Cerrar sesión</button>
-          </div>
-          <div className="nav-avatar">
-            {perfil.foto ? <img src={perfil.foto} alt="" /> : initials(persona)}
+          <div className="nav-user">
+            <div className="nav-user-info">
+              <span className="nav-user-name">{persona}</span>
+              <button className="link-button logout-btn" onClick={onLogout}>Cerrar sesión</button>
+            </div>
+            <div className="nav-avatar">
+              {perfil.foto ? <img src={perfil.foto} alt="" /> : initials(persona)}
+            </div>
           </div>
         </div>
       </nav>
@@ -986,6 +1071,7 @@ function Dashboard({ token, user, onLogout, onNavigate, onBackToRoleSelect = nul
           )}
         </section>
       )}
+      <Footer />
     </main>
   );
 }
@@ -1102,11 +1188,33 @@ function SubirInformePage({ token, advisee, onBack }) {
           </div>
         </section>
       )}
+      <Footer />
     </main>
   );
 }
 
-function AdviseesList({ advisees, onBack, onNavigate }) {
+function AdviseesList({ token, advisees, onBack, onNavigate }) {
+  const [accesoActivo, setAccesoActivo] = useState(false);
+  const [toggling, setToggling] = useState(false);
+
+  useEffect(() => {
+    const apply = (data) => setAccesoActivo(data.activo || false);
+    apiRequestCached("/api/acceso-advisees", { token }, apply)
+      .then(apply)
+      .catch(() => {});
+  }, [token]);
+
+  async function toggleAcceso() {
+    setToggling(true);
+    try {
+      const data = await apiRequest("/api/acceso-advisees", { token, method: "POST", body: { activo: !accesoActivo } });
+      setAccesoActivo(data.activo);
+    } catch {
+    } finally {
+      setToggling(false);
+    }
+  }
+
   return (
     <main className="page">
       <nav className="nav">
@@ -1131,7 +1239,17 @@ function AdviseesList({ advisees, onBack, onNavigate }) {
             </button>
           ))}
         </div>
+        <div style={{ marginTop: "40px" }}>
+          <button
+            className={accesoActivo ? "" : "secondary"}
+            onClick={toggleAcceso}
+            disabled={toggling}
+          >
+            {toggling ? "Guardando..." : accesoActivo ? "Acceso activo — revocar" : "Dar acceso a mis advisees"}
+          </button>
+        </div>
       </div>
+      <Footer />
     </main>
   );
 }
@@ -1216,16 +1334,22 @@ function AdviseeDetail({ token, advisee, advisees, onBack, onNavigate }) {
           </section>
         )}
       </div>
+      <Footer />
     </main>
   );
 }
 
 function App() {
   const resetToken = getResetToken();
-  const [token, setToken] = useState(localStorage.getItem("evaluabot_token") || "");
+  const [token, setToken] = useState(localStorage.getItem("evaluabot_token") || sessionStorage.getItem("evaluabot_token") || "");
   const [user, setUser] = useState(null);
   const [page, setPage] = useState(null);
   const [adminMode, setAdminMode] = useState(null); // null | "personal" | "admin"
+
+  function navigate(newPage, newAdminModeOverride) {
+    setPage(newPage);
+    if (newAdminModeOverride !== undefined) setAdminMode(newAdminModeOverride);
+  }
 
   useEffect(() => {
     if (resetToken) return;
@@ -1240,6 +1364,8 @@ function App() {
 
   function handleLogout() {
     localStorage.removeItem("evaluabot_token");
+    sessionStorage.removeItem("evaluabot_token");
+    clearApiCache();
     setToken("");
     setUser(null);
     setPage(null);
@@ -1247,9 +1373,9 @@ function App() {
   }
 
   function backTo(p) {
-    if (p?.from === "advisee-detail") return () => setPage({ type: "advisee-detail", advisee: p.advisee, advisees: p.advisees });
-    if (p?.from === "advisees-list") return () => setPage({ type: "advisees-list", advisees: p.advisees });
-    return () => setPage(null);
+    if (p?.from === "advisee-detail") return () => navigate({ type: "advisee-detail", advisee: p.advisee, advisees: p.advisees });
+    if (p?.from === "advisees-list") return () => navigate({ type: "advisees-list", advisees: p.advisees });
+    return () => navigate(null);
   }
 
   if (resetToken || !token || !user) {
@@ -1259,15 +1385,15 @@ function App() {
   const isAdmin = Boolean(user?.is_admin);
 
   if (isAdmin && adminMode === null) {
-    return <AdminRoleSelect user={user} onChoose={setAdminMode} onLogout={handleLogout} />;
+    return <AdminRoleSelect user={user} onChoose={(mode) => navigate(null, mode)} onLogout={handleLogout} />;
   }
 
   if (isAdmin && adminMode === "admin") {
-    return <AdminPanel token={token} onBack={() => setAdminMode(null)} />;
+    return <AdminPanel token={token} onBack={() => navigate(null, null)} />;
   }
 
   if (page?.type === "advisees-list") {
-    return <AdviseesList advisees={page.advisees} onBack={() => setPage(null)} onNavigate={setPage} />;
+    return <AdviseesList token={token} advisees={page.advisees} onBack={() => navigate(null)} onNavigate={navigate} />;
   }
   if (page?.type === "advisee-detail") {
     return (
@@ -1275,8 +1401,8 @@ function App() {
         token={token}
         advisee={page.advisee}
         advisees={page.advisees}
-        onBack={() => setPage({ type: "advisees-list", advisees: page.advisees })}
-        onNavigate={setPage}
+        onBack={() => navigate({ type: "advisees-list", advisees: page.advisees })}
+        onNavigate={navigate}
       />
     );
   }
@@ -1284,7 +1410,7 @@ function App() {
     return <InformesAdvisee token={token} advisee={page.advisee} onBack={backTo(page)} />;
   }
   if (page?.type === "mis-objetivos") {
-    return <MisObjetivosPage token={token} persona={user?.persona || user?.username || ""} onBack={() => setPage(null)} />;
+    return <MisObjetivosPage token={token} persona={user?.persona || user?.username || ""} onBack={() => navigate(null)} />;
   }
   if (page?.type === "objetivos") {
     return <ObjetivosPage token={token} advisee={page.advisee} caName={user?.persona || ""} onBack={backTo(page)} />;
@@ -1297,8 +1423,8 @@ function App() {
       token={token}
       user={user}
       onLogout={handleLogout}
-      onNavigate={setPage}
-      onBackToRoleSelect={isAdmin && adminMode === "personal" ? () => { setPage(null); setAdminMode(null); } : null}
+      onNavigate={navigate}
+      onBackToRoleSelect={isAdmin && adminMode === "personal" ? () => navigate(null, null) : null}
     />
   );
 }

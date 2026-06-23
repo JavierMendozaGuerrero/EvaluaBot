@@ -16,6 +16,7 @@
 body {
   margin: 0;
   font-family: Arial, Helvetica, sans-serif;
+  font-size: 17px;
   color: var(--ink);
   background: var(--paper);
 }
@@ -50,7 +51,7 @@ body {
   align-items: center;
   gap: 18px;
   flex-wrap: wrap;
-  font-size: 14px;
+  font-size: 16px;
 }
 
 .hero {
@@ -86,7 +87,7 @@ p {
 .kicker {
   color: var(--ink);
   font-weight: 800;
-  font-size: 13px;
+  font-size: 14px;
   text-transform: uppercase;
   margin-bottom: 18px;
 }
@@ -100,7 +101,7 @@ p {
 label {
   display: block;
   margin: 18px 0 7px;
-  font-size: 13px;
+  font-size: 15px;
   color: var(--ink);
   font-weight: 800;
 }
@@ -192,8 +193,8 @@ button,
   display: inline-flex;
   justify-content: center;
   align-items: center;
-  min-height: 48px;
-  padding: 13px 18px;
+  min-height: 52px;
+  padding: 14px 22px;
   border: 1px solid var(--ink);
   background: var(--ink);
   color: white;
@@ -201,7 +202,7 @@ button,
   border-radius: 0;
   cursor: pointer;
   font-weight: 800;
-  font-size: 14px;
+  font-size: 16px;
 }
 
 button.secondary,
@@ -221,6 +222,11 @@ button:disabled {
   border: 0;
   color: var(--ink);
   background: transparent;
+  font-weight: 400;
+}
+
+.logout-btn {
+  font-size: 13px;
 }
 
 .actions {
@@ -468,7 +474,7 @@ textarea.objetivos-textarea:focus {
 
 .profile-grid {
   display: grid;
-  grid-template-columns: 200px 1fr 260px;
+  grid-template-columns: 220px 1fr 220px;
   gap: 40px;
   align-items: start;
 }
@@ -487,9 +493,9 @@ textarea.objetivos-textarea:focus {
   color: var(--ink);
   border: 0;
   border-bottom: 1px solid var(--line);
-  padding: 14px 12px;
+  padding: 18px 16px;
   font-weight: 700;
-  font-size: 14px;
+  font-size: 17px;
 }
 
 .menu-item:hover {
@@ -814,14 +820,16 @@ textarea.objetivos-textarea:focus {
 
 .admin-employee-layout {
   display: grid;
-  grid-template-columns: 1fr auto;
-  gap: 60px;
+  grid-template-columns: auto 1fr;
+  gap: 40px;
   align-items: start;
 }
 
 .admin-employee-actions {
   display: flex;
   flex-direction: column;
+  align-items: stretch;
+  justify-self: start;
   gap: 14px;
   padding-top: 8px;
 }
@@ -833,7 +841,7 @@ textarea.objetivos-textarea:focus {
 .admin-employee-profile {
   display: flex;
   flex-direction: column;
-  align-items: center;
+  align-items: flex-start;
   gap: 14px;
 }
 
@@ -841,7 +849,37 @@ textarea.objetivos-textarea:focus {
   .admin-employee-layout {
     grid-template-columns: 1fr;
   }
-  .admin-employee-profile {
-    order: -1;
-  }
+}
+
+/* Footer */
+.site-footer {
+  margin-top: 64px;
+  padding-top: 24px;
+  border-top: 1px solid var(--line);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  gap: 12px;
+}
+
+.site-footer-copy {
+  font-size: 13px;
+  color: var(--muted);
+  margin: 0;
+}
+
+.site-footer-links {
+  display: flex;
+  gap: 28px;
+}
+
+.site-footer-links a {
+  font-size: 13px;
+  color: var(--muted);
+  text-decoration: none;
+}
+
+.site-footer-links a:hover {
+  color: var(--ink);
 }

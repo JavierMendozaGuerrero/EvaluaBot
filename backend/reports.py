@@ -35,12 +35,7 @@ def _comentarios_para_prompt(comentarios, nombre):
         return ""
     lineas = []
     for c in comentarios:
-        rol = "Autor" if c["es_autor"] else f"Mencionado por {c['autor']}"
-        implicadas = f" | Personas implicadas: {c['personas_implicadas']}" if c["personas_implicadas"] else ""
-        lineas.append(
-            f"- [{rol}] Proyecto: {c['proyecto']} | Fecha: {c['fecha']}{implicadas} | "
-            f"Comentario: {c['comentario']}"
-        )
+        lineas.append(f"- Autor: {c['autor']} | Fecha: {c['fecha']} | Comentario: {c['comentario']}")
     return "\n".join(lineas)
 
 

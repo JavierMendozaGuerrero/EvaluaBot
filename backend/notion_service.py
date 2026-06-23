@@ -1871,8 +1871,6 @@ _PERSONAL_PREGUNTAS_TTL = 300
 _PROPS_EVALUACIONES_PERSONALES = {
     "Nombre": {"title": {}},
     "Fecha": {"date": {}},
-    "Personas implicadas": {"rich_text": {}},
-    "Proyecto": {"rich_text": {}},
     "Comentario": {"rich_text": {}},
 }
 
@@ -1884,14 +1882,10 @@ _PROPS_PERSONAL_PREGUNTAS = {
 PREGUNTAS_PERSONALES_DEFAULT = {
     "mensaje_inicial": (
         "📝 *Evaluación personal*\n"
-        "Es tu oportunidad para hacer cualquier comentario sobre cualquier avance o impedimento "
-        "con tus objetivos marcados con tu CA, o cualquier comentario sobre el proyecto. "
-        "Este mensaje es totalmente privado, por favor deja tu comentario respondiendo en el hilo.\n\n"
-        "_Si quieres cancelar la encuesta, escribe SOS en cualquier momento._"
+        "Este es tu espacio privado para compartir lo que quieras. "
+        "¿Qué me quieres contar? Responde a este mensaje con lo que tengas en mente.\n\n"
+        "_Si quieres cancelar, escribe SOS en cualquier momento._"
     ),
-    "proyecto": "1️⃣ ¿Sobre qué proyecto quieres comentar? Si no está asociado a ningún proyecto, escribe *ninguno*.",
-    "personas": "2️⃣ ¿Hay alguna persona implicada que quieras mencionar? Escribe su nombre o *ninguna* si no hay nadie.",
-    "comentario": "3️⃣ Por favor, escribe tu comentario o lo que quieras compartir.",
 }
 
 
@@ -2026,8 +2020,6 @@ def guardar_evaluacion_personal(nombre: str, respuestas: dict) -> bool:
         props = {
             "Nombre": {"title": [{"type": "text", "text": {"content": nombre or ""}}]},
             "Fecha": {"date": {"start": fecha_iso}},
-            "Personas implicadas": {"rich_text": [{"type": "text", "text": {"content": respuestas.get("personas", "") or ""}}]},
-            "Proyecto": {"rich_text": [{"type": "text", "text": {"content": respuestas.get("proyecto", "") or ""}}]},
             "Comentario": {"rich_text": [{"type": "text", "text": {"content": respuestas.get("comentario", "") or ""}}]},
         }
         _crear_pagina_en_bbdd(db_id, props)
@@ -2145,8 +2137,7 @@ def siguiente_envio_calendario(fecha_inicio_str: str, semanas: int) -> "datetime
 
 
 def obtener_comentarios_personales(nombre: str) -> list[dict]:
-    """Devuelve los comentarios de evaluaciones personales donde 'nombre' es el autor
-    o aparece en 'Personas implicadas'."""
+    """Devuelve los comentarios de evaluaciones personales escritos por 'nombre'."""
     db_id = _buscar_o_crear_bbdd_en_personales(
         "Respuestas", _PROPS_EVALUACIONES_PERSONALES, _cache_personal_eval_db,
     )
@@ -2164,25 +2155,11 @@ def obtener_comentarios_personales(nombre: str) -> list[dict]:
             for fila in resp.get("results", []):
                 props = fila.get("properties", {})
                 autor = "".join(p.get("plain_text", "") for p in props.get("Nombre", {}).get("title", [])).strip()
-                personas = "".join(p.get("plain_text", "") for p in props.get("Personas implicadas", {}).get("rich_text", [])).strip()
                 comentario = "".join(p.get("plain_text", "") for p in props.get("Comentario", {}).get("rich_text", [])).strip()
-                proyecto = "".join(p.get("plain_text", "") for p in props.get("Proyecto", {}).get("rich_text", [])).strip()
                 fecha_prop = props.get("Fecha", {}).get("date") or {}
                 fecha = (fecha_prop.get("start") or "")[:10]
-
-                personas_lista = [normalizar_nombre(p.strip()) for p in personas.split(",") if p.strip()]
-                es_autor = normalizar_nombre(autor) == nombre_norm
-                esta_implicado = nombre_norm in personas_lista
-
-                if (es_autor or esta_implicado) and comentario:
-                    resultados.append({
-                        "autor": autor,
-                        "fecha": fecha,
-                        "comentario": comentario,
-                        "proyecto": proyecto or "Sin proyecto",
-                        "personas_implicadas": personas,
-                        "es_autor": es_autor,
-                    })
+                if normalizar_nombre(autor) == nombre_norm and comentario:
+                    resultados.append({"autor": autor, "fecha": fecha, "comentario": comentario})
             if not resp.get("has_more"):
                 break
             cursor = resp.get("next_cursor")

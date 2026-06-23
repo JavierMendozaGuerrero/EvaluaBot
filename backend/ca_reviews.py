@@ -236,10 +236,8 @@ def _resumen_advisee(advisee: str, desde_fecha: str | None) -> str:
         if comentarios:
             lineas_personales = []
             for c in sorted(comentarios, key=lambda x: x.get("fecha", "")):
-                rol = "dicho por ella/él" if c["es_autor"] else f"mencionada/o por *{c['autor']}*"
-                implicadas = f" | Con: {c['personas_implicadas']}" if c.get("personas_implicadas") else ""
                 lineas_personales.append(
-                    f"• [{c['fecha']}] {rol} en {c['proyecto']}{implicadas} → _{c['comentario']}_"
+                    f"• [{c['fecha']}] *{c['autor']}* → _{c['comentario']}_"
                 )
             resumen += f"\n\n*Comentarios personales ({len(lineas_personales)}):*\n" + "\n".join(lineas_personales)
     except Exception:

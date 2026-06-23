@@ -17,6 +17,7 @@ from . import config
 from .clients import Document, anthropic_client
 from .notion_service import (
     listar_bbdd_evaluados,
+    obtener_ca_de_empleado,
     obtener_evaluaciones_por_evaluado,
     obtener_opiniones_ca_por_advisee,
     obtener_objetivos,
@@ -45,6 +46,208 @@ _DIMS_LIDERAZGO = [
 _W_DIM  = 3.50
 _W_NOTA = 0.60
 _W_COM  = _CONTENT_W_IN - _W_DIM - _W_NOTA
+
+_LABELS_NIVEL = [
+    ("lider",    "Líder"),
+    ("equipo",   "Miembros de tu equipo"),
+    ("sin_nivel","Sin nivel especificado"),
+]
+
+
+# ── Criterios DTI por cargo ───────────────────────────────────────────────────
+
+_CRITERIOS_DTI: dict[str, dict[str, list[str]]] = {
+    "gestion_proyecto": {
+        "analyst": [
+            "Priorizar tareas y repartir de forma adecuada los tiempos",
+            "Entregar su trabajo a tiempo",
+            "Responsabilizarse del buen devenir de sus tareas y subtareas sin necesidad de que se lo recuerden",
+            "Es proactivo, detecta necesidades del proyecto y cómo puede aportar valor antes de que alguien se lo diga",
+            "Demuestra un compromiso alto hacia un resultado excelente del proyecto",
+            "Detecta y avisa de cuellos de botella o posibles problemas intentando aportar soluciones",
+            "Muestra disposición y proactividad para encontrar las herramientas que necesita",
+            "Demuestra compromiso con las necesidades del proyecto (puntualidad, carga de trabajo, flexibilidad)",
+            "Demuestra flexibilidad y motivación hacia la materia del proyecto independientemente de preferencias personales",
+        ],
+        "associate": [
+            "Define y ejecuta con autonomía el plan de trabajo de su área de responsabilidad",
+            "Responsabilizarse del proyecto y sus necesidades (desbloquear problemas, establecer reuniones, puntos de seguimiento)",
+            "Responsabilizarse de los tiempos del proyecto y de la calidad de los entregables",
+            "Identificar las piezas y elementos necesarios para la consecución de un proyecto (herramientas, workshops, sesiones, discusiones internas, con cliente, etc.)",
+            "Gestiona adecuadamente y vela por la consecución de todos los elementos necesarios internos",
+            "Distribuye adecuadamente las tareas entre los miembros del equipo según cargas de trabajo y perfiles",
+            "Vela por mantener un ritmo de trabajo apropiado anticipándose a cuellos de botella o picos de trabajo",
+            "Identifica y comunica al responsable del proyecto posibles riesgos y bloqueos",
+            "Se focaliza en lo que es más importante (80/20)",
+        ],
+        "associate sr": [
+            "Define el planning de proyecto en profundidad identificando los puntos más complicados",
+            "Define el alcance y marco de trabajo del proyecto y lo ajusta de forma continua a la realidad",
+            "Identifica nuevas oportunidades para Igeneris que puedan surgir del proyecto (upselling, cross selling)",
+            "Es capaz de gestionar un proyecto (estándar y no estándar) entendiendo las necesidades del cliente y ajustando el marco",
+            "Se anticipa a posibles riesgos del proyecto y lidera sus posibles planes de contingencia",
+        ],
+        "manager": [
+            "Todo lo de Associate Sr, más:",
+            "Ejerce una buena gestión de los tiempos en la organización del proyecto",
+            "Sigue una metodología/sello Igeneris, sumada a una base estratégica",
+            "Prevé la organización y los posibles riesgos del proyecto, propone un plan de priorización de tareas",
+            "Gestiona y resuelve problemas que surgen a lo largo del proyecto",
+        ],
+    },
+    "calidad_tecnica": {
+        "analyst": [
+            "Se esfuerza y preocupa por entregar su trabajo con máxima calidad",
+            "El trabajo que presenta no necesita ser revisado (más de lo necesario) por un tercero",
+            "Adquiere y pone en práctica los conocimientos básicos del proyecto (sector, metodología, digitales)",
+            "Adquiere un criterio propio sobre la materia del proyecto o tarea",
+            "Maneja las herramientas y programas utilizadas en el día a día",
+            "Tiene ojo (auto-)crítico para evaluar que la calidad de un trabajo esté conforme con las necesidades de la tarea",
+            "Demuestra solvencia en la parte numérica del proyecto si aplica",
+        ],
+        "associate": [
+            "Muestra mediante el ejemplo el nivel de calidad que se ha de cuidar en cada fase del proyecto, sirviendo de guía o referencia",
+            "Vela por que el trabajo de los analistas/en prácticas tenga la calidad técnica requerida",
+            "Desarrolla la línea de pensamiento y razonamiento numérica necesaria (modelos financieros, magnitudes, economics)",
+            "Reta los conceptos numéricos o cualitativos desarrollados para asegurar su rigor",
+            "Mantiene el orden en el proyecto — gestión externa, interna y documental, asegurando que la información esté disponible y sea útil",
+            "Demuestra madurez en las ideas y tareas en las que trabaja",
+            "Aporta un valor fundamental en hipótesis, conclusiones, recomendaciones y presentaciones finales",
+        ],
+        "associate sr": [
+            "Asegura una coherencia a nivel de proyecto en el discurso, el racional, los economics",
+            "Identifica de forma rápida las carencias de un proyecto o entregable y sabe subsanarlas eficientemente",
+            "Apuesta por ir 'más allá' en los proyectos y traslada al equipo cómo hacerlo",
+            "Propone nuevas formas creativas de solucionar problemas",
+        ],
+        "manager": [
+            "Ejerce de referente técnico y estratégico",
+            "Se empapa y aterriza el conocimiento sobre la industria en la que se trabaja",
+            "Utiliza su experiencia previa en otros proyectos",
+            "Garantiza el correcto funcionamiento del equipo y la calidad del entregable a cliente en tiempo y forma",
+        ],
+    },
+    "trabajo_en_equipo": {
+        "analyst": [
+            "Sabe levantar la mano cuando no tiene capacidad para hacer una tarea",
+            "Sus compañeros confían en él porque demuestra un ownership de sus tareas",
+            "Se muestra disponible para ayudar a otros compañeros cuando lo necesitan",
+            "Contribuye proactivamente al buen clima en el equipo",
+            "Acepta las dinámicas de trabajo en equipo y contribuye al buen funcionamiento del equipo",
+            "Apoya a sus compañeros en aquellos ámbitos en los que puedan necesitar ayuda",
+            "Se preocupa de aprender de sus compañeros y estar al mismo nivel de conocimientos relativos al proyecto",
+        ],
+        "associate": [
+            "Está disponible y accesible para atender a los diferentes miembros de su equipo y guiarlos",
+            "Guía al equipo con el ejemplo",
+            "Se encarga de que el equipo esté al mismo nivel de información y conocimientos, y da apoyo técnico cuando se necesite",
+            "Se asegura que los tiempos dedicados por los analistas/becarios en cada tarea sean los adecuados",
+        ],
+        "associate sr": [
+            "Es un referente para el equipo en cuanto a forma de trabajar y aspiración dentro de Igeneris",
+            "Ayuda al equipo a sacar lo mejor de ellos y superar su nivel de calidad, ayudándoles a desarrollarse profesionalmente",
+            "Gestiona de forma eficiente la distribución de trabajo del equipo según tiempos y perfiles",
+            "Transmite de forma contundente feedback de mejora a los compañeros asegurando que se desarrollen correctamente",
+            "Inspira y motiva al equipo a todos los niveles de la pirámide",
+            "Está atento a bloqueos y problemas",
+        ],
+        "manager": [
+            "Es capaz de repartir un rol a cada miembro del equipo dentro de las responsabilidades y capacidades reales de cada uno",
+            "Es transparente con el equipo",
+            "Ejerce con criterio el reparto de tareas en relación con los recursos individuales de cada miembro y el tiempo de inversión",
+            "Desarrolla un plan de priorización de tareas donde su equipo pueda entender cuáles son los objetivos y cómo organizarse",
+        ],
+    },
+    "comunicacion": {
+        "analyst": [
+            "Demuestra una comunicación (oral y escrita) efectiva y asertiva",
+            "Muestra una buena comunicación no verbal",
+            "Comunica de forma efectiva su criterio al resto del equipo",
+            "Demuestra capacidad de razonar sobre su criterio y modificarlo si fuese incorrecto o necesario",
+        ],
+        "associate": [
+            "Comunica de forma efectiva las tareas y prioridades a todos los miembros del equipo",
+            "Guía y motiva a los miembros del equipo para sacar lo mejor de ellos y mantener un clima de trabajo positivo",
+            "Transmite de forma certera las necesidades del proyecto, especialmente cuando requiere un esfuerzo especial",
+            "Sabe construir el storytelling y el racional de una idea, explicársela desde cero a un interlocutor y convencerle de que tiene sentido",
+        ],
+        "associate sr": [
+            "Tiene una alta capacidad de síntesis de los problemas y de exposición tanto internamente como hacia cliente",
+            "Comunica de forma clara a todos los niveles de la organización del cliente adaptando el discurso y contenido a cada auditorio",
+            "Argumenta con seguridad y convincentemente, siendo capaz de reaccionar a argumentaciones del cliente",
+        ],
+        "manager": [
+            "Transparencia en la comunicación a lo largo del proyecto para que el equipo esté alineado con el cliente/proyecto",
+            "Sabe dar una comunicación asertiva al equipo",
+            "Sabe comunicar al cliente adaptando el discurso dependiendo de las necesidades del proyecto y de las reacciones potenciales del cliente",
+        ],
+    },
+    "relacion_cliente": {
+        "analyst": [
+            "Participa en reuniones con clientes",
+            "Entiende las dinámicas con el cliente y el trato que se le debe dar",
+        ],
+        "associate": [
+            "Define y prepara las sesiones de trabajo con el cliente",
+            "Logra confianza y credibilidad con los niveles del cliente con los que le corresponde relacionarse, transmitiendo seguridad y profesionalidad",
+            "Lidera sesiones de trabajo con el cliente de forma asistida por alguien con más seniority",
+            "Lidera sesiones de trabajo con el cliente de forma autónoma",
+        ],
+        "associate sr": [
+            "Crea un vínculo con el cliente y es capaz de entender sus necesidades para con el proyecto",
+            "Lidera los workshops y sesiones de trabajo con el cliente más complicados / coordina y supervisa que las reuniones estén bien pensadas y ejecutadas",
+            "Es un referente para el cliente en todos los aspectos que abarca el proyecto e incluso más allá del alcance del mismo",
+        ],
+        "manager": [
+            "Mantiene una buena comunicación con el cliente",
+            "Sabe preguntar al cliente qué necesita y cuáles son sus expectativas para no ir apagando fuegos posteriormente",
+            "Conduce eficazmente las expectativas del cliente, contribuyendo a la satisfacción con el resultado del proyecto",
+        ],
+    },
+}
+
+_ETIQUETAS_DIM = {
+    "gestion_proyecto": "Gestión del proyecto",
+    "calidad_tecnica": "Calidad técnica",
+    "trabajo_en_equipo": "Trabajo en equipo",
+    "comunicacion": "Comunicación",
+    "relacion_cliente": "Relación con el cliente",
+}
+
+_ORDEN_CARGO = ["analyst", "associate", "associate sr", "manager"]
+
+
+def _nivel_cargo(cargo: str) -> str | None:
+    c = cargo.strip().lower()
+    if c == "analyst":
+        return "analyst"
+    if c in ("sr associate", "associate sr"):
+        return "associate sr"
+    if c == "associate":
+        return "associate"
+    if c in ("manager", "director"):
+        return "manager"
+    return None
+
+
+def _criterios_para_prompt(cargo: str) -> str:
+    nivel = _nivel_cargo(cargo)
+    if not nivel:
+        return ""
+    idx = _ORDEN_CARGO.index(nivel)
+    bloques = [
+        f"Lo que se espera de un {cargo} (nivel {nivel}) y niveles superiores como referencia:"
+    ]
+    for dim_key, dim_label in _ETIQUETAS_DIM.items():
+        dim_criterios = _CRITERIOS_DTI.get(dim_key, {})
+        lineas = []
+        for lvl in _ORDEN_CARGO[max(0, idx - 1):]:
+            criterios = dim_criterios.get(lvl, [])
+            if criterios:
+                lineas.append(f"  [{lvl.title()}]: " + " / ".join(criterios))
+        if lineas:
+            bloques.append(f"\n{dim_label}:\n" + "\n".join(lineas))
+    return "\n".join(bloques)
 
 
 # ── Lista de empleados ────────────────────────────────────────────────────────
@@ -85,8 +288,13 @@ def obtener_datos_empleado_anual(nombre: str) -> dict:
     except Exception:
         logging.warning("No se encontraron objetivos para %s.", nombre)
 
-    # Nombre del CA: tomamos el más reciente de los objetivos
+    # Nombre del CA: primero desde objetivos, si no desde Lista CA
     ca_nombre = objetivos[0].get("ca", "") if objetivos else ""
+    if not ca_nombre:
+        try:
+            ca_nombre = obtener_ca_de_empleado(nombre) or ""
+        except Exception:
+            pass
 
     # 3. Opiniones del CA
     opiniones = []
@@ -126,14 +334,19 @@ def _formatear_contexto(emp_data: dict) -> str:
     evaluaciones = emp_data.get("evaluaciones", [])
     if evaluaciones:
         _GRUPOS = [
-            ("superior", "EVALUACIONES DE SUPERIORES (valoran su gestión o trabajo desde arriba)"),
-            ("igual",    "EVALUACIONES DE IGUALES (mismo nivel jerárquico)"),
-            ("inferior", "EVALUACIONES DE SUBORDINADOS (personas que reportan a él/ella)"),
-            ("",         "EVALUACIONES (sin nivel especificado — datos anteriores al sistema de jerarquía)"),
+            ("lider",     "EVALUACIONES DEL LÍDER"),
+            ("equipo",    "EVALUACIONES DE MIEMBROS DEL EQUIPO (iguales y subordinados)"),
+            ("sin_nivel", "EVALUACIONES SIN NIVEL ESPECIFICADO (datos anteriores al sistema de jerarquía)"),
         ]
-        por_rel: dict = {"superior": [], "igual": [], "inferior": [], "": []}
+        por_rel: dict = {"lider": [], "equipo": [], "sin_nivel": []}
         for ev in evaluaciones:
-            por_rel.setdefault(ev.get("relacion", ""), []).append(ev)
+            rel = ev.get("relacion", "")
+            if rel == "superior":
+                por_rel["lider"].append(ev)
+            elif rel in ("igual", "inferior"):
+                por_rel["equipo"].append(ev)
+            else:
+                por_rel["sin_nivel"].append(ev)
         for rel_key, encabezado in _GRUPOS:
             evs = por_rel.get(rel_key, [])
             if not evs:
@@ -170,32 +383,49 @@ def interpretar_evaluaciones_anual(emp_data: dict, cargo: str = "") -> dict:
         dims += list(_DIMS_LIDERAZGO)
     dims_lista = ", ".join(f'"{c}"' for c, _ in dims)
 
+    criterios_bloque = _criterios_para_prompt(cargo)
+    criterios_section = (
+        f"\n\nCRITERIOS DTI DE EVALUACIÓN (úsalos para calibrar el feedback según el cargo):\n{criterios_bloque}"
+        if criterios_bloque else ""
+    )
+
     system = (
         "Eres el director de RRHH de IGENERIS. "
         "A partir de las opiniones del CA y las evaluaciones de proyecto del empleado, "
         "genera el contenido del informe anual de evaluación. "
+        "Ten en cuenta los criterios DTI: lo que es suficiente para un Analyst puede ser lo mínimo esperado para un Manager. "
         "Devuelve ÚNICAMENTE un JSON válido (sin bloques markdown) con esta estructura:\n"
         "{\n"
-        '  "<clave_dimension>": "bullet 1\\nbullet 2\\n...",\n'
+        '  "<clave_dimension>": {\n'
+        '    "lider": "bullet 1\\nbullet 2 (lo que dice su líder/superior)",\n'
+        '    "equipo": "bullet 1\\nbullet 2 (lo que dicen iguales y subordinados)",\n'
+        '    "sin_nivel": "bullet 1\\nbullet 2 (evaluaciones sin nivel especificado)"\n'
+        "  },\n"
         "  ...\n"
         '  "contribution_to_firm": "bullets sobre contribución a la empresa...",\n'
         '  "resultado": "valoración global en 2-3 frases"\n'
         "}\n\n"
         f"Dimensiones requeridas: {dims_lista}, contribution_to_firm, resultado.\n"
-        "Basa todo en los datos reales proporcionados. "
-        "Si no hay información suficiente para una dimensión, escribe 'Sin información suficiente'."
+        "Para cada dimensión agrupa: 'lider' = evaluadores superiores, "
+        "'equipo' = evaluadores del mismo nivel o subordinados, "
+        "'sin_nivel' = sin jerarquía especificada. "
+        "Omite las claves que no tengan datos. "
+        "contribution_to_firm y resultado son cadenas planas, no objetos. "
+        "Basa todo en los datos reales. "
+        "Si no hay información para una dimensión, escribe 'Sin información suficiente' en la clave correspondiente."
     )
 
     respuesta = anthropic_client.messages.create(
         model="claude-sonnet-4-6",
-        max_tokens=2400,
+        max_tokens=4000,
         system=system,
         messages=[{
             "role": "user",
             "content": (
                 f"Empleado: {emp_data['empleado']}\n"
                 f"Cargo: {cargo or 'No especificado'}\n"
-                f"CA: {emp_data.get('ca', 'No especificado')}\n\n"
+                f"CA: {emp_data.get('ca', 'No especificado')}\n"
+                f"{criterios_section}\n\n"
                 f"{_formatear_contexto(emp_data)}"
             ),
         }],
@@ -263,6 +493,7 @@ def _dxt(doc, texto):
 
 
 def _dx_bullets(cell, texto):
+    from docx.enum.text import WD_ALIGN_PARAGRAPH
     lineas = [l.strip(" •-–") for l in (texto or "").strip().splitlines() if l.strip()]
     if not lineas:
         return
@@ -270,7 +501,31 @@ def _dx_bullets(cell, texto):
         p = cell.paragraphs[0] if i == 0 else cell.add_paragraph()
         if i == 0:
             p.clear()
+        p.alignment = WD_ALIGN_PARAGRAPH.JUSTIFY
         _dxr(p, f"• {linea}", size=9)
+
+
+def _dx_bullets_por_nivel(cell, contenido):
+    from docx.enum.text import WD_ALIGN_PARAGRAPH
+    if not isinstance(contenido, dict):
+        _dx_bullets(cell, contenido)
+        return
+    primer = True
+    for nivel_key, label in _LABELS_NIVEL:
+        texto = (contenido.get(nivel_key) or "").strip()
+        if not texto:
+            continue
+        p = cell.paragraphs[0] if primer else cell.add_paragraph()
+        if primer:
+            p.clear()
+        primer = False
+        _dxr(p, label + ":", bold=True, size=8)
+        for linea in texto.splitlines():
+            linea = linea.strip(" •-–")
+            if linea:
+                pb = cell.add_paragraph()
+                pb.alignment = WD_ALIGN_PARAGRAPH.JUSTIFY
+                _dxr(pb, f"• {linea}", size=9)
 
 
 def _tabla_dims(doc, dims, comentarios):
@@ -287,7 +542,7 @@ def _tabla_dims(doc, dims, comentarios):
         _dxb(c2); _dxw(c2, _W_COM)
         _dxr(c0.paragraphs[0], etiqueta, size=9)
         _dxr(c1.paragraphs[0], "X", size=9, center=True)
-        _dx_bullets(c2, comentarios.get(clave, ""))
+        _dx_bullets_por_nivel(c2, comentarios.get(clave, ""))
     return tabla
 
 
@@ -301,10 +556,23 @@ def guardar_informe_anual_html(emp_data: dict, comentarios: dict, cargo: str = "
         lineas = [ln.strip(" •-–") for ln in (texto or "").strip().splitlines() if ln.strip()]
         return "<br>".join(f"• {esc(ln)}" for ln in lineas) if lineas else "—"
 
+    def bullets_html_por_nivel(contenido):
+        if not isinstance(contenido, dict):
+            return bullets_html(contenido)
+        partes = []
+        for nivel_key, label in _LABELS_NIVEL:
+            texto = (contenido.get(nivel_key) or "").strip()
+            if not texto:
+                continue
+            lineas = [ln.strip(" •-–") for ln in texto.splitlines() if ln.strip()]
+            buls = "<br>".join(f"• {esc(ln)}" for ln in lineas)
+            partes.append(f"<span style='font-size:11px;font-weight:700'>{esc(label)}:</span><br>{buls}")
+        return "<br><br>".join(partes) if partes else "—"
+
     def filas_dims(dims):
         filas = ""
         for clave, etiqueta in dims:
-            filas += f"<tr><td>{esc(etiqueta)}</td><td class='nc'>X</td><td>{bullets_html(comentarios.get(clave,''))}</td></tr>"
+            filas += f"<tr><td>{esc(etiqueta)}</td><td class='nc'>X</td><td>{bullets_html_por_nivel(comentarios.get(clave,''))}</td></tr>"
         return filas
 
     cargo_lower = cargo.strip().lower()
@@ -333,6 +601,7 @@ def guardar_informe_anual_html(emp_data: dict, comentarios: dict, cargo: str = "
         objetivos_html = "<p>Sin objetivos registrados.</p>"
 
     fecha = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+    año = datetime.now(timezone.utc).year
 
     contenido = f"""<!DOCTYPE html>
 <html lang="es">
@@ -347,7 +616,7 @@ def guardar_informe_anual_html(emp_data: dict, comentarios: dict, cargo: str = "
 .it {{ width: 100%; border-collapse: collapse; margin-bottom: 24px; font-size: 14px; }}
 .it td {{ border: 1px solid var(--ink); padding: 8px 14px; }}
 .et {{ width: 100%; border-collapse: collapse; margin-bottom: 24px; font-size: 14px; }}
-.et th, .et td {{ border: 1px solid var(--ink); padding: 8px 12px; vertical-align: top; }}
+.et th, .et td {{ border: 1px solid var(--ink); padding: 8px 12px; vertical-align: top; text-align: justify; }}
 .et th {{ background: var(--soft); font-weight: 700; font-size: 12px; text-transform: uppercase; letter-spacing: .05em; }}
 .et td:first-child {{ width: 200px; font-weight: 500; }}
 .nc {{ width: 60px; text-align: center; }}
@@ -364,7 +633,7 @@ def guardar_informe_anual_html(emp_data: dict, comentarios: dict, cargo: str = "
   <div class="nav-links"><button class="secondary" onclick="window.close()">Cerrar</button></div>
 </nav>
 <div class="top">
-  <p class="kicker">Evaluación anual 2025</p>
+  <p class="kicker">Evaluación anual {año}</p>
   <h1>{esc(emp_data['empleado'])}</h1>
   <p>Generado el {fecha}</p>
 </div>
@@ -375,7 +644,7 @@ def guardar_informe_anual_html(emp_data: dict, comentarios: dict, cargo: str = "
   <tr><td><strong>Career Advisor</strong></td><td>{esc(emp_data.get('ca') or '—')}</td></tr>
 </table>
 
-<h2 class="sec">CALIFICACIÓN 2025</h2>
+<h2 class="sec">CALIFICACIÓN {año}</h2>
 <table class="et">
   <thead><tr><th>Dimensión</th><th class="nc">Nota</th><th>Comentarios del evaluador</th></tr></thead>
   <tbody>{filas_dims(_DIMS_PROYECTOS)}</tbody>
@@ -392,7 +661,7 @@ def guardar_informe_anual_html(emp_data: dict, comentarios: dict, cargo: str = "
   <div>{esc(comentarios.get('resultado','—'))}</div>
 </div>
 
-<h2 class="sec">OBJETIVOS 2026</h2>
+<h2 class="sec">OBJETIVOS {año + 1}</h2>
 {objetivos_html}
 </main>
 </body>
@@ -416,6 +685,7 @@ def guardar_informe_anual_word(emp_data: dict, comentarios: dict, cargo: str = "
     from docx.shared import Cm, Pt
     from docx.enum.text import WD_ALIGN_PARAGRAPH
 
+    año = datetime.now(timezone.utc).year
     doc = Document()
     sec = doc.sections[0]
     for attr in ("left_margin", "right_margin", "top_margin", "bottom_margin"):
@@ -424,7 +694,7 @@ def guardar_informe_anual_word(emp_data: dict, comentarios: dict, cargo: str = "
     # Cabecera
     cab = doc.add_paragraph()
     cab.alignment = WD_ALIGN_PARAGRAPH.CENTER
-    _dxr(cab, "IGENERIS  —  EVALUACIÓN ANUAL 2025", bold=True, size=14)
+    _dxr(cab, f"IGENERIS  —  EVALUACIÓN ANUAL {año}", bold=True, size=14)
     doc.add_paragraph()
 
     # Datos del empleado
@@ -446,7 +716,7 @@ def guardar_informe_anual_word(emp_data: dict, comentarios: dict, cargo: str = "
     doc.add_paragraph()
 
     # CALIFICACIÓN 2025
-    _dxt(doc, "CALIFICACIÓN 2025")
+    _dxt(doc, f"CALIFICACIÓN {año}")
     _tabla_dims(doc, _DIMS_PROYECTOS, comentarios)
     doc.add_paragraph()
 
@@ -460,6 +730,7 @@ def guardar_informe_anual_word(emp_data: dict, comentarios: dict, cargo: str = "
     # CONTRIBUTION TO THE FIRM
     _dxt(doc, "CONTRIBUTION TO THE FIRM")
     p_contrib = doc.add_paragraph()
+    p_contrib.alignment = WD_ALIGN_PARAGRAPH.JUSTIFY
     for linea in (comentarios.get("contribution_to_firm") or "—").strip().splitlines():
         linea = linea.strip(" •-–")
         if linea:
@@ -476,11 +747,12 @@ def guardar_informe_anual_word(emp_data: dict, comentarios: dict, cargo: str = "
     _dxb(c0); _dxb(c1)
     _dxw(c0, 1.4); _dxw(c1, _CONTENT_W_IN - 1.4)
     _dxr(c0.paragraphs[0], "Nota global\nX / 5", bold=True, size=9, center=True)
+    c1.paragraphs[0].alignment = WD_ALIGN_PARAGRAPH.JUSTIFY
     _dxr(c1.paragraphs[0], comentarios.get("resultado", "—"), size=9)
     doc.add_paragraph()
 
     # OBJETIVOS 2026
-    _dxt(doc, "OBJETIVOS 2026")
+    _dxt(doc, f"OBJETIVOS {año + 1}")
     objetivos = emp_data.get("objetivos", [])
     if objetivos:
         obj_reciente = objetivos[0]
@@ -491,6 +763,7 @@ def guardar_informe_anual_word(emp_data: dict, comentarios: dict, cargo: str = "
             p_meta = doc.add_paragraph()
             _dxr(p_meta, f"Definidos por {ca_obj} — {fecha_obj}".strip(" —"), size=8)
         p_obj = doc.add_paragraph()
+        p_obj.alignment = WD_ALIGN_PARAGRAPH.JUSTIFY
         for linea in texto_obj.strip().splitlines():
             linea = linea.strip()
             if linea:
@@ -513,6 +786,7 @@ def guardar_informe_anual_word(emp_data: dict, comentarios: dict, cargo: str = "
 
 def _huella_datos(emp_data: dict) -> str:
     datos = {
+        "v": 2,
         "opiniones": emp_data.get("opiniones_ca", []),
         "evaluaciones": emp_data.get("evaluaciones", []),
     }

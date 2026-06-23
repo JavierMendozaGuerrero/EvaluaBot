@@ -25,6 +25,7 @@ from .notion_service import (
     _tipo_objeto_busqueda_bbdd,
     _usa_data_sources,
     buscar_empleado_en_lista,
+    buscar_empleado_y_cargo,
     obtener_advisees,
     obtener_comentarios_personales,
     obtener_config_calendario,
@@ -33,6 +34,7 @@ from .notion_service import (
     siguiente_envio_calendario,
     sugerir_empleados_parecidos,
 )
+from .skill_resumen_evaluacion import generar_resumen_evaluacion
 from .utils import normalizar_nombre
 
 # ---------------------------------------------------------------------------
@@ -507,6 +509,19 @@ def manejar_mensaje_ca(event, logger) -> None:
             payload["ca_nombre"] = estado.get("ca_nombre")
             accion = "validar_y_mostrar"
 
+        elif modo == "esperando_permiso_claude":
+            if _es_si(texto):
+                payload["advisee"] = estado.get("advisee_actual", "?")
+                payload["resumen_bruto"] = estado.get("resumen_bruto", "")
+                estado["modo"] = "esperando_opinion"
+                accion = "llamar_claude"
+            elif _es_no(texto):
+                estado["resumen_actual"] = estado.get("resumen_bruto", "")
+                estado["modo"] = "esperando_opinion"
+                accion = "pedir_opinion_sin_claude"
+            else:
+                accion = "aclarar_permiso_claude"
+
         elif modo == "esperando_opinion":
             payload["advisee"] = estado.get("advisee_actual", "?")
             payload["ca_nombre"] = estado.get("ca_nombre")
@@ -630,12 +645,20 @@ def manejar_mensaje_ca(event, logger) -> None:
             sin_novedades = "no hay evaluaciones nuevas" in resumen or "No hay evaluaciones registradas" in resumen
             with _lock:
                 if conv_key in conversaciones_ca:
-                    conversaciones_ca[conv_key]["modo"] = "esperando_otro" if sin_novedades else "esperando_opinion"
-                    conversaciones_ca[conv_key]["resumen_actual"] = "" if sin_novedades else resumen
+                    if sin_novedades:
+                        conversaciones_ca[conv_key]["modo"] = "esperando_otro"
+                        conversaciones_ca[conv_key]["resumen_actual"] = ""
+                    else:
+                        conversaciones_ca[conv_key]["modo"] = "esperando_permiso_claude"
+                        conversaciones_ca[conv_key]["resumen_bruto"] = resumen
             if sin_novedades:
                 reply(f"{resumen}\n\n¿Tienes otro advisee? (`sí` / `no`)")
             else:
-                reply(f"{resumen}\n\n*¿Qué opinas de esto?*")
+                reply(
+                    f"{resumen}\n\n"
+                    "¿Quieres un resumen estructurado por competencias generado por Claude? (`sí` / `no`)\n"
+                    "_Evitar el uso excesivo por favor._"
+                )
 
     elif accion == "mostrar_confirmacion_ca":
         reply(
@@ -674,6 +697,29 @@ def manejar_mensaje_ca(event, logger) -> None:
                 )
         else:
             reply(_texto_pregunta_ca_por_clave(campo) if campo else _texto_menu_modificacion_ca())
+
+    elif accion == "llamar_claude":
+        advisee = payload["advisee"]
+        resumen_bruto = payload.get("resumen_bruto", "")
+        _, cargo = buscar_empleado_y_cargo(advisee)
+        try:
+            resumen_claude = generar_resumen_evaluacion(advisee, cargo or "", resumen_bruto)
+            with _lock:
+                if conv_key in conversaciones_ca:
+                    conversaciones_ca[conv_key]["resumen_actual"] = resumen_claude
+            reply(f"📊 *Resumen generado por Claude:*\n\n{resumen_claude}\n\n*¿Qué opinas de esto?*")
+        except Exception:
+            logging.exception("Error generando resumen Claude para '%s'", advisee)
+            with _lock:
+                if conv_key in conversaciones_ca:
+                    conversaciones_ca[conv_key]["resumen_actual"] = resumen_bruto
+            reply("⚠️ No se pudo generar el resumen con Claude.\n\n*¿Qué opinas de esto?*")
+
+    elif accion == "pedir_opinion_sin_claude":
+        reply("*¿Qué opinas de esto?*")
+
+    elif accion == "aclarar_permiso_claude":
+        reply("Responde `sí` para generar un resumen con Claude, o `no` para continuar directamente.")
 
     elif accion == "cancelar_opinion":
         reply("De acuerdo, no se guardará esta opinión.\n\n¿Tienes otro advisee? (`sí` / `no`)")

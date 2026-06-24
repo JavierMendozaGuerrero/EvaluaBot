@@ -698,9 +698,10 @@ _PROPS_PREGUNTAS_MO = {
 }
 
 _PREGUNTAS_MO_DEFAULT = [
-    ("pregunta_1", "¿Cuál es el principal reto al que te has enfrentado últimamente en MiddleOffice?"),
-    ("pregunta_2", "¿Qué mejora propondrías para los procesos actuales de MiddleOffice?"),
+    ("mo_contribucion", "Este mes, ¿cómo valorarías la contribución del evaluado al buen funcionamiento interno de Igeneris? (1-5)"),
+    ("mo_justificacion", "Justifica con un ejemplo concreto la puntuación anterior."),
 ]
+_CLAVES_MO_ORDEN = [c for c, _ in _PREGUNTAS_MO_DEFAULT]
 
 _preguntas_mo_bbdd_pobladas: set = set()
 
@@ -761,16 +762,15 @@ def _poblar_bbdd_preguntas_mo(db_id: str) -> None:
         existentes: set[str] = set()
         cursor = None
         while True:
-            kwargs = {"database_id": db_id, "page_size": 100}
+            kwargs: dict = {"page_size": 100}
             if cursor:
                 kwargs["start_cursor"] = cursor
-            resp = notion.databases.query(**kwargs)
+            resp = _query_bbdd(db_id, **kwargs)
             for page in resp.get("results", []):
-                clave_raw = page.get("properties", {}).get("Clave", {})
-                clave_val = ""
-                if clave_raw.get("type") == "title":
-                    titles = clave_raw.get("title", [])
-                    clave_val = titles[0].get("plain_text", "") if titles else ""
+                props = page.get("properties", {})
+                clave_val = "".join(
+                    p.get("plain_text", "") for p in props.get("Clave", {}).get("title", [])
+                ).strip()
                 if clave_val:
                     existentes.add(clave_val)
             if not resp.get("has_more"):
@@ -820,6 +820,11 @@ def obtener_preguntas_mo() -> list[dict]:
             if not resp.get("has_more"):
                 break
             cursor = resp.get("next_cursor")
+        if not resultado:
+            resultado = [{"clave": c, "texto": t} for c, t in _PREGUNTAS_MO_DEFAULT]
+        # Filtrar solo claves conocidas y ordenar según _PREGUNTAS_MO_DEFAULT
+        resultado = [q for q in resultado if q["clave"] in set(_CLAVES_MO_ORDEN)]
+        resultado.sort(key=lambda q: _CLAVES_MO_ORDEN.index(q["clave"]))
         if not resultado:
             resultado = [{"clave": c, "texto": t} for c, t in _PREGUNTAS_MO_DEFAULT]
         with _lock_preguntas_mo:
@@ -2284,9 +2289,11 @@ _PROPS_PERSONAL_PREGUNTAS = {
 PREGUNTAS_PERSONALES_DEFAULT = {
     "mensaje_inicial": (
         "📝 *Tienes opción de seguimiento personal pendiente*\n"
+        "Este espacio es para registrar información personal que consideres relevante: "
+        "pequeños logros que te hayan acercado a tus objetivos marcados con tu CA, "
+        "dificultades que hayan afectado tu avance en proyectos u objetivos y que no hayas podido comunicar a tu CA, "
+        "o información que consideres relevante mencionar.\n\n"
         "_Pulsa cualquier tecla para comenzar_\n"
-        "Este es tu espacio privado para compartir lo que quieras. "
-        "¿Qué me quieres contar? Responde a este mensaje con lo que tengas en mente.\n\n"
         "_Si quieres cancelar, escribe SOS en cualquier momento._\n"
         "_Esta evaluación es totalmente privada, solo podrá verla tu CA._"
     ),
@@ -2573,4 +2580,168 @@ def obtener_comentarios_personales(nombre: str) -> list[dict]:
         return resultados
     except Exception:
         logging.exception("Error leyendo comentarios personales de '%s'", nombre)
+        return []
+
+
+# ---------------------------------------------------------------------------
+# MiddleOffice: Cargos y Relaciones
+# ---------------------------------------------------------------------------
+
+_PROPS_CARGOS_MO = {
+    "Nombre": {"title": {}},
+    "Cargo":  {"rich_text": {}},
+}
+
+_PROPS_RELACIONES_MO = {
+    "Evaluador": {"title": {}},
+    "Evaluado":  {"rich_text": {}},
+}
+
+_CARGOS_MO_DEFAULT = [
+    ("Arancha Gomez-Arnau", "Head of Admin"),
+    ("Iñigo Narvaiza",      "Head of Finance"),
+    ("Alicia Sardina",      "Head of People Mexico"),
+    ("Natalia Vega",        "Head of Communication"),
+    ("Reyes Palomar",       "Head of Design"),
+    ("Ana Hernanz",         "Head of People Madrid"),
+    ("javireneclaude",     "Head of Test"),
+]
+
+_RELACIONES_MO_DEFAULT = [
+    ("Iñigo Narvaiza",       "Arancha Gomez-Arnau"),
+    ("Alicia Sardina",       "Arancha Gomez-Arnau"),
+    ("Natalia Vega",         "Arancha Gomez-Arnau"),
+    ("Ana Hernanz",          "Iñigo Narvaiza"),
+    ("Natalia Vega",         "Alicia Sardina"),
+    ("Arancha Gomez-Arnau",  "Alicia Sardina"),
+    ("Arancha Gomez-Arnau",  "Natalia Vega"),
+    ("Natalia Vega",         "Reyes Palomar"),
+    ("Alicia Sardina",       "Reyes Palomar"),
+    # Head of Test (usuario de prueba): puede evaluar a todos los Heads
+    ("javireneclaude",      "Arancha Gomez-Arnau"),
+    ("javireneclaude",      "Iñigo Narvaiza"),
+    ("javireneclaude",      "Alicia Sardina"),
+    ("javireneclaude",      "Natalia Vega"),
+    ("javireneclaude",      "Reyes Palomar"),
+    ("javireneclaude",      "Ana Hernanz"),
+]
+
+_cache_gestion_mo_page: dict = {"page_id": None}
+_cache_cargos_mo: dict = {"db_id": None}
+_cache_relaciones_mo: dict = {"db_id": None}
+
+_TITULO_GESTION_MO = "Gestión de MiddleOffice"
+_TITULO_CARGOS_MO = "Cargos de MiddleOffice"
+_TITULO_RELACIONES_MO = "Relaciones de evaluaciones MiddleOffice"
+
+
+def _obtener_o_crear_pagina_gestion_mo() -> dict:
+    """Encuentra o crea la página 'Gestión de MiddleOffice' dentro de 'Listas de datos'."""
+    with lock:
+        if _cache_gestion_mo_page["page_id"]:
+            return {"type": "page_id", "page_id": _cache_gestion_mo_page["page_id"]}
+    listas_parent = _parent_bbdd_en_pagina(config.NOTION_DATA_LISTS_PAGE_NAME, crear=True)
+    listas_id = listas_parent.get("page_id")
+    if listas_id:
+        page_id = _page_or_database_link_by_name(listas_id, _TITULO_GESTION_MO)
+        if page_id:
+            with lock:
+                _cache_gestion_mo_page["page_id"] = page_id
+            return {"type": "page_id", "page_id": page_id}
+    try:
+        nueva = notion.pages.create(
+            parent=listas_parent,
+            properties={"title": {"title": [{"type": "text", "text": {"content": _TITULO_GESTION_MO}}]}},
+        )
+        page_id = nueva["id"]
+        with lock:
+            _cache_gestion_mo_page["page_id"] = page_id
+        logging.info("Página '%s' creada bajo '%s'", _TITULO_GESTION_MO, config.NOTION_DATA_LISTS_PAGE_NAME)
+        return {"type": "page_id", "page_id": page_id}
+    except Exception:
+        logging.exception("Error creando página '%s'", _TITULO_GESTION_MO)
+        return listas_parent
+
+
+def _obtener_o_crear_bbdd_mo(titulo: str, props: dict, cache: dict, filas_default: list) -> str | None:
+    with lock:
+        if cache["db_id"]:
+            return cache["db_id"]
+    parent = _obtener_o_crear_pagina_gestion_mo()
+    try:
+        res = notion.search(
+            query=titulo,
+            filter={"value": _tipo_objeto_busqueda_bbdd(), "property": "object"},
+            page_size=50,
+        )
+        for bbdd in res.get("results", []):
+            if _extraer_titulo_bbdd(bbdd) == titulo and _coincide_parent_bbdd(bbdd, parent):
+                db_id = _data_source_id(bbdd)
+                with lock:
+                    cache["db_id"] = db_id
+                return db_id
+        if _usa_data_sources():
+            nueva = notion.databases.create(
+                parent=parent,
+                title=[{"type": "text", "text": {"content": titulo}}],
+                initial_data_source={
+                    "title": [{"type": "text", "text": {"content": titulo}}],
+                    "properties": props,
+                },
+            )
+            nueva = notion.databases.retrieve(database_id=nueva["id"])
+        else:
+            nueva = notion.databases.create(
+                parent=parent,
+                title=[{"type": "text", "text": {"content": titulo}}],
+                properties=props,
+            )
+        db_id = _data_source_id(nueva)
+        col_titulo = next(k for k, v in props.items() if "title" in v)
+        col_texto = next(k for k, v in props.items() if "rich_text" in v)
+        for val_titulo, val_texto in filas_default:
+            _crear_pagina_en_bbdd(db_id, {
+                col_titulo: {"title":     [{"type": "text", "text": {"content": val_titulo}}]},
+                col_texto:  {"rich_text": [{"type": "text", "text": {"content": val_texto}}]},
+            })
+        with lock:
+            cache["db_id"] = db_id
+        logging.info("BD '%s' creada bajo '%s'", titulo, _TITULO_GESTION_MO)
+        return db_id
+    except Exception:
+        logging.exception("Error creando '%s'", titulo)
+        return None
+
+
+def inicializar_bbdd_middleoffice() -> None:
+    """Crea en Notion las BDs de MiddleOffice al arrancar si aún no existen."""
+    _obtener_o_crear_bbdd_mo(_TITULO_CARGOS_MO, _PROPS_CARGOS_MO, _cache_cargos_mo, _CARGOS_MO_DEFAULT)
+    _obtener_o_crear_bbdd_mo(_TITULO_RELACIONES_MO, _PROPS_RELACIONES_MO, _cache_relaciones_mo, _RELACIONES_MO_DEFAULT)
+
+
+def obtener_evaluados_middleoffice(evaluador_nombre: str, evaluador_aliases: list[str] | None = None) -> list[str]:
+    """Retorna la lista de personas que este evaluador puede evaluar en MiddleOffice."""
+    db_id = _obtener_o_crear_bbdd_mo(
+        _TITULO_RELACIONES_MO, _PROPS_RELACIONES_MO, _cache_relaciones_mo, _RELACIONES_MO_DEFAULT
+    )
+    if not db_id:
+        return []
+    nombres_ev = {normalizar_nombre(evaluador_nombre)}
+    for alias in (evaluador_aliases or []):
+        if alias:
+            nombres_ev.add(normalizar_nombre(alias))
+    nombres_ev_sin_espacios = {n.replace(" ", "") for n in nombres_ev}
+    try:
+        filas = _query_bbdd(db_id, page_size=100).get("results", [])
+        evaluados = []
+        for fila in filas:
+            props = fila.get("properties", {})
+            ev = "".join(p.get("plain_text", "") for p in props.get("Evaluador", {}).get("title", [])).strip()
+            evaluado = "".join(p.get("plain_text", "") for p in props.get("Evaluado", {}).get("rich_text", [])).strip()
+            ev_norm = normalizar_nombre(ev)
+            if (ev_norm in nombres_ev or ev_norm.replace(" ", "") in nombres_ev_sin_espacios) and evaluado:
+                evaluados.append(evaluado)
+        return evaluados
+    except Exception:
+        logging.exception("Error obteniendo evaluados MiddleOffice para '%s'", evaluador_nombre)
         return []

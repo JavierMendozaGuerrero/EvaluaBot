@@ -429,6 +429,12 @@ def enviar_pregunta_inicial_ca() -> None:
 
         for user_id in slack_ids:
             try:
+                ca_nombre, ca_aliases = _identidad_usuario_slack(user_id, logging)
+                advisees = obtener_advisees(ca_nombre, ca_aliases=ca_aliases)
+                if not advisees:
+                    logging.info(f"[CA] {user_id} ({ca_nombre}) no tiene advisees, omitiendo")
+                    continue
+
                 resp_dm = slack_app.client.conversations_open(users=[user_id])
                 dm_channel = resp_dm["channel"]["id"]
                 resp = slack_app.client.chat_postMessage(
@@ -476,7 +482,7 @@ def manejar_mensaje_ca(event, logger) -> None:
     if normalizar_nombre(texto) == "sos":
         with _lock:
             conversaciones_ca.pop(conv_key, None)
-        reply("Evaluación CA cancelada. Si quieres volver a empezar, espera a la próxima evaluación.")
+        reply("Evaluación cancelada. Si quieres volver a empezar, escribe en este hilo.")
         return
 
     accion = None
@@ -491,18 +497,8 @@ def manejar_mensaje_ca(event, logger) -> None:
         modo = estado["modo"]
 
         if modo == "pre_inicial":
-            estado["modo"] = "inicial"
-            accion = "hacer_primera_pregunta"
-
-        elif modo == "inicial":
-            if _es_si(texto):
-                estado["modo"] = "esperando_advisee"
-                accion = "pedir_advisee"
-            elif _es_no(texto):
-                estado["modo"] = "terminado"
-                accion = "terminar_sin_ca"
-            else:
-                accion = "aclarar_inicial"
+            estado["modo"] = "esperando_advisee"
+            accion = "pedir_advisee"
 
         elif modo == "esperando_advisee":
             payload["advisee"] = texto
@@ -593,47 +589,41 @@ def manejar_mensaje_ca(event, logger) -> None:
                 accion = "pedir_valor_modificacion_ca"
 
         elif modo == "esperando_otro":
-            if _es_si(texto):
-                estado["modo"] = "esperando_advisee"
-                accion = "pedir_siguiente_advisee"
-            elif _es_no(texto):
+            if _es_no(texto):
                 estado["modo"] = "terminado"
                 accion = "terminar"
             else:
-                accion = "aclarar_otro"
+                payload["advisee"] = texto
+                payload["ca_nombre"] = estado.get("ca_nombre")
+                accion = "validar_y_mostrar"
 
         elif modo == "terminado":
             accion = "ya_terminado"
 
-    if accion == "hacer_primera_pregunta":
-        reply("¿Eres Career Advisor de alguien? (`sí` / `no`)")
+    def _reply_lista_advisees(prefijo=""):
+        ca_nombre_l, ca_aliases_l = _identidad_usuario_slack(user_id, logger)
+        advisees_l = obtener_advisees(ca_nombre_l, ca_aliases=ca_aliases_l)
+        if advisees_l:
+            lista = "\n".join(f"- {a}" for a in advisees_l)
+            reply(f"{prefijo}¿De qué advisee te gustaría hacer seguimiento? (escribe el nombre o `no` para terminar)\n{lista}")
+        else:
+            reply(f"{prefijo}¿De qué advisee te gustaría hacer seguimiento? (escribe el nombre o `no` para terminar)")
 
-    elif accion == "pedir_advisee":
-        reply("¿Cuál es el nombre de tu advisee?")
-
-    elif accion == "terminar_sin_ca":
-        reply("¡Perfecto, gracias! 👋")
-
-    elif accion == "aclarar_inicial":
-        reply("Responde `sí` o `no`. ¿Eres Career Advisor de alguien?")
+    if accion == "pedir_advisee":
+        _reply_lista_advisees()
 
     elif accion == "validar_y_mostrar":
         advisee = payload["advisee"]
+        ca_nombre, ca_aliases = _identidad_usuario_slack(user_id, logger)
         advisee_encontrado = buscar_empleado_en_lista(advisee)
-        if not advisee_encontrado:
-            reply(_mensaje_advisee_no_encontrado(advisee))
+        permitido = False
+        if advisee_encontrado:
+            permitido, _ = _advisee_permitido_para_ca(ca_nombre, ca_aliases, advisee_encontrado)
+        if not advisee_encontrado or not permitido:
+            _reply_lista_advisees(f"*{advisee}* no aparece en tu lista de advisees.\n\n")
+            return
         else:
             advisee = advisee_encontrado
-            ca_nombre, ca_aliases = _identidad_usuario_slack(user_id, logger)
-            permitido, permitidos = _advisee_permitido_para_ca(ca_nombre, ca_aliases, advisee)
-            if not permitido:
-                opciones = "\n".join(f"- {item}" for item in permitidos) if permitidos else "- No tienes advisees asociados en Lista CA."
-                reply(
-                    f"*{advisee}* no aparece asociado a ti como advisee en `Lista CA`.\n"
-                    "Solo puedes hacer evaluaciones CA de las personas que sean tus advisees.\n"
-                    f"Tus advisees actuales:\n{opciones}"
-                )
-                return
             with _lock:
                 if conv_key in conversaciones_ca:
                     conversaciones_ca[conv_key]["advisee_actual"] = advisee
@@ -652,7 +642,7 @@ def manejar_mensaje_ca(event, logger) -> None:
                         conversaciones_ca[conv_key]["modo"] = "esperando_permiso_claude"
                         conversaciones_ca[conv_key]["resumen_bruto"] = resumen
             if sin_novedades:
-                reply(f"{resumen}\n\n¿Tienes otro advisee? (`sí` / `no`)")
+                _reply_lista_advisees(f"{resumen}\n\n")
             else:
                 reply(
                     f"{resumen}\n\n"
@@ -722,7 +712,7 @@ def manejar_mensaje_ca(event, logger) -> None:
         reply("Responde `sí` para generar un resumen con Claude, o `no` para continuar directamente.")
 
     elif accion == "cancelar_opinion":
-        reply("De acuerdo, no se guardará esta opinión.\n\n¿Tienes otro advisee? (`sí` / `no`)")
+        _reply_lista_advisees("De acuerdo, no se guardará esta opinión.\n\n")
 
     elif accion == "guardar_y_preguntar_otro":
         ca_nombre, ca_aliases = _identidad_usuario_slack(user_id, logger)
@@ -739,18 +729,12 @@ def manejar_mensaje_ca(event, logger) -> None:
         resumen = estado.get("resumen_actual", "")
         ok, error = _guardar_opinion(ca_nombre, payload["advisee"], payload["opinion"], resumen)
         if ok:
-            reply("✅ Opinión guardada en Notion.\n\n¿Tienes otro advisee? (`sí` / `no`)")
+            _reply_lista_advisees("✅ Opinión guardada en Notion.\n\n")
         else:
-            reply(f"⚠️ No se pudo guardar en Notion: `{error[:300]}`\n\n¿Tienes otro advisee? (`sí` / `no`)")
-
-    elif accion == "pedir_siguiente_advisee":
-        reply("¿Cuál es el nombre de tu próximo advisee?")
+            _reply_lista_advisees(f"⚠️ No se pudo guardar en Notion: `{error[:300]}`\n\n")
 
     elif accion == "terminar":
         reply("¡Perfecto, gracias por tu tiempo! 🎉")
-
-    elif accion == "aclarar_otro":
-        reply("Responde `sí` si tienes otro advisee, o `no` para terminar.")
 
     elif accion == "ya_terminado":
         reply("Esta evaluación ya ha concluido. 👋")

@@ -19,6 +19,7 @@ from .notion_service import (
     guardar_en_notion,
     obtener_cargo_por_slack_id,
     obtener_config_calendario,
+    obtener_evaluados_middleoffice,
     obtener_nombre_por_id_usuario,
     obtener_preguntas_desde_notion,
     obtener_preguntas_mo,
@@ -334,6 +335,8 @@ def handle_message_events(event, logger):
     _preguntas_pre = {}
     _preguntas_area_pre = []
     _invalido_pre = None
+    _mo_evaluados = []
+    _mo_invalido = False
 
     _necesita_busqueda = (
         (_modo_peek == "esperando_persona" and texto and not _parece_saludo(texto))
@@ -341,10 +344,19 @@ def handle_message_events(event, logger):
     )
     if _necesita_busqueda:
         try:
+            if _area_peek == "middleoffice":
+                _nombre_ev = obtener_nombre_por_id_usuario(user_id)
+                _mo_evaluados = obtener_evaluados_middleoffice(_nombre_ev or "") if _nombre_ev else []
             _empleado_pre, _cargo_pre = buscar_empleado_y_cargo(texto)
             if _empleado_pre:
                 if _area_peek == "middleoffice":
                     _preguntas_area_pre = obtener_preguntas_mo()
+                    if _mo_evaluados and not any(
+                        normalizar_nombre(_empleado_pre) == normalizar_nombre(e) for e in _mo_evaluados
+                    ):
+                        _mo_invalido = True
+                        _empleado_pre = None
+                        _cargo_pre = None
                 elif _area_peek == "palantir":
                     if _cargo_ev_peek is None:
                         _cargo_evaluador_pre = obtener_cargo_por_slack_id(user_id)
@@ -356,7 +368,10 @@ def handle_message_events(event, logger):
                     _relacion_pre = comparar_jerarquia(_cargo_evaluador_pre or "", _cargo_pre or "")
                     _preguntas_pre = obtener_preguntas_desde_notion(tipo_relacion(_relacion_pre))
             else:
-                _invalido_pre = _mensaje_empleado_no_encontrado(texto)
+                if _area_peek == "middleoffice":
+                    _mo_invalido = True
+                else:
+                    _invalido_pre = _mensaje_empleado_no_encontrado(texto)
         except Exception:
             logger.exception("Error en Notion al buscar empleado")
             reply("⚠️ Error temporal consultando datos. Vuelve a intentarlo.")
@@ -401,8 +416,7 @@ def handle_message_events(event, logger):
                 if _area_elegida == "middleoffice":
                     estado["respuestas"]["proyecto"] = ""
                     estado["modo"] = "esperando_persona"
-                    accion = "pedir_persona"
-                    pregunta = "¿A quién quieres evaluar? Dime el nombre de la persona."
+                    accion = "pedir_persona_mo"
                 else:
                     estado["modo"] = "esperando_proyecto"
                     accion = "pedir_proyecto"
@@ -440,8 +454,13 @@ def handle_message_events(event, logger):
         elif modo == "esperando_persona":
             if texto:
                 if _parece_saludo(texto):
-                    accion = "pedir_persona"
-                    pregunta = "Sigo aquí. Dime el nombre de uno de los miembros, podrás evaluar al resto después."
+                    if estado.get("area") == "middleoffice":
+                        accion = "pedir_persona_mo"
+                    else:
+                        accion = "pedir_persona"
+                        pregunta = "Sigo aquí. Dime el nombre de uno de los miembros, podrás evaluar al resto después."
+                elif _mo_invalido:
+                    accion = "pedir_persona_mo"
                 elif _empleado_pre:
                     proyecto_actual = estado.get("proyecto_actual", "")
                     clave_ev = (normalizar_nombre(proyecto_actual), normalizar_nombre(_empleado_pre))
@@ -482,15 +501,18 @@ def handle_message_events(event, logger):
                     accion = "pedir_persona_invalida"
                     pregunta = _invalido_pre
             else:
-                accion = "pedir_persona"
-                pregunta = "¿Qué miembro del proyecto quieres evaluar?"
+                if estado.get("area") == "middleoffice":
+                    accion = "pedir_persona_mo"
+                else:
+                    accion = "pedir_persona"
+                    pregunta = "¿Qué miembro del proyecto quieres evaluar?"
 
         elif modo == "preguntando_area_secuencial":
             todas = estado.get("preguntas_area", [])
             idx = estado.get("pregunta_actual", 0)
             if texto and todas and idx < len(todas):
                 clave_actual = todas[idx]["clave"]
-                if clave_actual == "q1" and texto.strip() not in {"1", "2", "3", "4", "5"}:
+                if clave_actual in {"q1", "mo_contribucion"} and texto.strip() not in {"1", "2", "3", "4", "5"}:
                     accion = "preguntar"
                     pregunta = "Por favor, responde solo con un número del 1 al 5.\n" + todas[idx]["texto"]
                 else:
@@ -621,10 +643,10 @@ def handle_message_events(event, logger):
             _area_mp = estado.get("area", "negocio")
             if _es_si(texto):
                 estado["modo"] = "esperando_persona"
-                accion = "pedir_persona_mismo_proyecto"
                 if _area_mp == "middleoffice":
-                    pregunta = "Perfecto. ¿A quién más quieres evaluar? Dime el nombre."
+                    accion = "pedir_persona_mo"
                 else:
+                    accion = "pedir_persona_mismo_proyecto"
                     proyecto = estado.get("proyecto_actual") or ""
                     pregunta = (
                         f"Perfecto. ¿Qué otro miembro del proyecto *{proyecto}* quieres evaluar?"
@@ -702,6 +724,15 @@ def handle_message_events(event, logger):
             )
             return
         reply("⚠️ No se pudo guardar en Notion. Revisa permisos/logs.")
+        return
+    if accion == "pedir_persona_mo":
+        nombre_ev = obtener_nombre_por_id_usuario(user_id)
+        mo_ev = obtener_evaluados_middleoffice(nombre_ev or user_id, [user_id])
+        if mo_ev:
+            lista = "\n".join(f"- {e}" for e in mo_ev)
+            reply(f"¿A quién quieres evaluar?\n{lista}")
+        else:
+            reply("¿A quién quieres evaluar? Dime el nombre de la persona.")
         return
     if accion == "terminar":
         reply("Perfecto, gracias por tu tiempo. 👋")

@@ -137,6 +137,11 @@ def manejar_mensaje_personal(event, logger) -> None:
         pregunta = None
 
         if modo == "pre_inicial":
+            estado["modo"] = "esperando_comentario"
+            accion = "preguntar"
+            pregunta = "Ya puedes responder."
+
+        elif modo == "esperando_comentario":
             if texto:
                 estado["respuestas"]["comentario"] = texto
                 estado["modo"] = "confirmacion"
@@ -147,7 +152,7 @@ def manejar_mensaje_personal(event, logger) -> None:
                 )
             else:
                 accion = "preguntar"
-                pregunta = "¿Qué me quieres contar? Responde con tu comentario."
+                pregunta = "Ya puedes responder."
 
         elif modo == "confirmacion":
             if texto_norm in {"si", "sí", "s", "ok", "okay", "confirmar", "guardar", "correcto"}:

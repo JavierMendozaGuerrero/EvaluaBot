@@ -5,7 +5,7 @@ import threading
 from . import config
 from .api_server import iniciar_api_backend
 from .clients import Document
-from .notion_service import aplicar_estetica_notion
+from .notion_service import aplicar_estetica_notion, inicializar_bbdd_middleoffice
 from .ca_reviews import ciclo_envio_ca, ciclo_recordatorios_ca  # noqa: F401 — registra el handler de Slack al importar
 from .personal_eval import ciclo_envio_personal, ciclo_recordatorios_personal
 from .slack_bot import ciclo_recordatorios_proyecto, enviar_evaluaciones_programadas, start_socket_mode
@@ -33,6 +33,11 @@ def main():
         aplicar_estetica_notion()
     except Exception:
         logging.exception("No se pudo aplicar la estetica inicial de Notion")
+
+    try:
+        inicializar_bbdd_middleoffice()
+    except Exception:
+        logging.exception("No se pudo inicializar las BDs de MiddleOffice")
 
     threading.Thread(target=enviar_evaluaciones_programadas, daemon=True).start()
     threading.Thread(target=ciclo_envio_ca, daemon=True).start()

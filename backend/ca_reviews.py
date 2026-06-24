@@ -30,6 +30,7 @@ from .notion_service import (
     obtener_comentarios_personales,
     obtener_config_calendario,
     obtener_evaluaciones_por_evaluado,
+    obtener_nombre_por_id_usuario,
     obtener_slack_ids_empleados,
     siguiente_envio_calendario,
     sugerir_empleados_parecidos,
@@ -186,6 +187,34 @@ def _fecha_ultima_opinion(ca_nombre: str, advisee: str) -> str | None:
     except Exception:
         logging.exception(f"Error buscando ultima opinion de '{ca_nombre}' sobre '{advisee}'")
         return None
+
+
+def _ca_guardo_desde(ca_nombre: str, desde_ts: float) -> bool:
+    """True si el CA guardó al menos una opinión en Notion desde el timestamp dado."""
+    desde_fecha = datetime.fromtimestamp(desde_ts, tz=timezone.utc).strftime("%Y-%m-%d")
+    try:
+        advisees = obtener_advisees(ca_nombre)
+        for advisee in advisees:
+            try:
+                db_id = _obtener_o_crear_bbdd_ca(advisee)
+            except Exception:
+                continue
+            resultado = _query_bbdd(db_id, page_size=100)
+            for fila in resultado.get("results", []):
+                props = fila.get("properties", {})
+                ca_texto = "".join(
+                    p.get("plain_text", "")
+                    for p in (props.get("CA", {}).get("rich_text") or [])
+                ).strip()
+                if normalizar_nombre(ca_texto) != normalizar_nombre(ca_nombre):
+                    continue
+                fecha = (props.get("Fecha", {}).get("date") or {}).get("start", "")[:10]
+                if fecha >= desde_fecha:
+                    return True
+        return False
+    except Exception:
+        logging.exception(f"Error comprobando opiniones CA de '{ca_nombre}'")
+        return False
 
 
 # ---------------------------------------------------------------------------
@@ -753,14 +782,27 @@ def ciclo_recordatorios_ca() -> None:
         ahora = time.time()
         with _lock:
             pendientes = [
-                uid for uid in ca_dm_activas
-                if (
-                    ahora - max(ca_hora_dm.get(uid, ahora), ca_ultimo_recordatorio_dm.get(uid, 0) or ca_hora_dm.get(uid, ahora)) >= _RECORDATORIO_CA_SEGUNDOS
-                    and conversaciones_ca.get(uid, {}).get("modo") not in ("terminado",)
-                )
+                uid for uid in list(ca_dm_activas)
+                if ahora - max(
+                    ca_hora_dm.get(uid, ahora),
+                    ca_ultimo_recordatorio_dm.get(uid, 0) or ca_hora_dm.get(uid, ahora),
+                ) >= _RECORDATORIO_CA_SEGUNDOS
             ]
         for uid in pendientes:
             try:
+                ca_nombre = obtener_nombre_por_id_usuario(uid)
+                if not ca_nombre:
+                    try:
+                        resp = slack_app.client.users_info(user=uid)
+                        u = resp.get("user", {})
+                        p = u.get("profile", {})
+                        ca_nombre = u.get("real_name") or p.get("real_name") or p.get("display_name") or u.get("name") or uid
+                    except Exception:
+                        ca_nombre = uid
+                if _ca_guardo_desde(ca_nombre, ca_hora_dm.get(uid, 0)):
+                    with _lock:
+                        ca_dm_activas.discard(uid)
+                    continue
                 dm_channel = ca_dm_canal.get(uid)
                 if not dm_channel:
                     continue

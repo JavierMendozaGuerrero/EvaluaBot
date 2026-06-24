@@ -6,6 +6,7 @@ from datetime import datetime, timezone
 from . import config
 from .clients import slack_app
 from .notion_service import (
+    evaluacion_personal_guardada_desde,
     guardar_evaluacion_personal,
     obtener_config_calendario,
     obtener_nombre_por_id_usuario,
@@ -120,7 +121,6 @@ def manejar_mensaje_personal(event, logger) -> None:
     if normalizar_nombre(texto) == "sos":
         with _lock:
             conversaciones_personal.pop(user_id, None)
-            personal_dm_activas.discard(user_id)
         reply("Evaluación cancelada. Si quieres volver a empezar, escribe en este hilo.")
         return
 
@@ -271,16 +271,26 @@ def ciclo_recordatorios_personal() -> None:
         with _lock:
             pendientes = [
                 uid for uid in list(personal_dm_activas)
-                if (
-                    conversaciones_personal.get(uid, {}).get("modo") not in ("terminado", "preguntando_otro")
-                    and (ahora - max(
-                        personal_hora.get(uid, ahora),
-                        personal_ultimo_recordatorio.get(uid, 0) or personal_hora.get(uid, ahora),
-                    )) >= _RECORDATORIO_SEGUNDOS
-                )
+                if (ahora - max(
+                    personal_hora.get(uid, ahora),
+                    personal_ultimo_recordatorio.get(uid, 0) or personal_hora.get(uid, ahora),
+                )) >= _RECORDATORIO_SEGUNDOS
             ]
         for uid in pendientes:
             try:
+                nombre = obtener_nombre_por_id_usuario(uid)
+                if not nombre:
+                    try:
+                        resp = slack_app.client.users_info(user=uid)
+                        u = resp.get("user", {})
+                        p = u.get("profile", {})
+                        nombre = u.get("real_name") or p.get("real_name") or p.get("display_name") or u.get("name") or uid
+                    except Exception:
+                        nombre = uid
+                if evaluacion_personal_guardada_desde(nombre, personal_hora.get(uid, 0)):
+                    with _lock:
+                        personal_dm_activas.discard(uid)
+                    continue
                 dm_channel = personal_dm_canal.get(uid)
                 ts = personal_dm_ts.get(uid)
                 if not dm_channel or not ts:

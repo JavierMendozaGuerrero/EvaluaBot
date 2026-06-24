@@ -2677,6 +2677,37 @@ def obtener_comentarios_personales(nombre: str) -> list[dict]:
         return []
 
 
+def evaluacion_proyecto_guardada_desde(evaluador_nombre: str, desde_ts: float) -> bool:
+    """True si el evaluador guardó al menos una evaluación de proyecto desde el timestamp dado."""
+    desde_fecha = datetime.fromtimestamp(desde_ts, tz=timezone.utc).strftime("%Y-%m-%d")
+    try:
+        for bbdd in listar_bbdd_evaluados():
+            resultado = _query_bbdd(bbdd["id"], page_size=100)
+            for pagina in resultado.get("results", []):
+                props = pagina.get("properties", {})
+                evaluador = _texto_rich_text(props, "Evaluador") or _texto_rich_text(props, "Persona que evalua")
+                if normalizar_nombre(evaluador) != normalizar_nombre(evaluador_nombre):
+                    continue
+                fecha = (props.get("Fecha", {}).get("date") or {}).get("start", "")[:10]
+                if fecha >= desde_fecha:
+                    return True
+        return False
+    except Exception:
+        logging.exception("Error comprobando evaluaciones de proyecto de '%s'", evaluador_nombre)
+        return False
+
+
+def evaluacion_personal_guardada_desde(nombre: str, desde_ts: float) -> bool:
+    """True si el usuario guardó al menos un comentario personal desde el timestamp dado."""
+    desde_fecha = datetime.fromtimestamp(desde_ts, tz=timezone.utc).strftime("%Y-%m-%d")
+    try:
+        comentarios = obtener_comentarios_personales(nombre)
+        return any(c.get("fecha", "") >= desde_fecha for c in comentarios)
+    except Exception:
+        logging.exception("Error comprobando evaluación personal de '%s'", nombre)
+        return False
+
+
 # ---------------------------------------------------------------------------
 # MiddleOffice: Cargos y Relaciones
 # ---------------------------------------------------------------------------

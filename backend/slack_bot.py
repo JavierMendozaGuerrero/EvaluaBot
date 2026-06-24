@@ -16,6 +16,7 @@ from .clients import slack_app
 from .hierarchy import comparar_jerarquia, tipo_relacion
 from .notion_service import (
     buscar_empleado_y_cargo,
+    evaluacion_proyecto_guardada_desde,
     guardar_en_notion,
     obtener_cargo_por_slack_id,
     obtener_config_calendario,
@@ -777,14 +778,19 @@ def ciclo_recordatorios_proyecto():
         ahora = time.time()
         with lock:
             pendientes = [
-                uid for uid in evaluaciones_dm_activas
-                if (
-                    ahora - max(evaluacion_hora.get(uid, ahora), evaluacion_ultimo_recordatorio.get(uid, 0) or evaluacion_hora.get(uid, ahora)) >= _RECORDATORIO_PROYECTO_SEGUNDOS
-                    and conversaciones.get(uid, {}).get("modo") not in ("terminado",)
-                )
+                uid for uid in list(evaluaciones_dm_activas)
+                if ahora - max(
+                    evaluacion_hora.get(uid, ahora),
+                    evaluacion_ultimo_recordatorio.get(uid, 0) or evaluacion_hora.get(uid, ahora),
+                ) >= _RECORDATORIO_PROYECTO_SEGUNDOS
             ]
         for uid in pendientes:
             try:
+                nombre = _nombre_real(uid, logging)
+                if evaluacion_proyecto_guardada_desde(nombre, evaluacion_hora.get(uid, 0)):
+                    with lock:
+                        evaluaciones_dm_activas.discard(uid)
+                    continue
                 dm_channel = evaluacion_dm_canal.get(uid)
                 if not dm_channel:
                     continue

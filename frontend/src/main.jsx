@@ -246,9 +246,9 @@ function AdminPanel({ token, onBack }) {
                       Ver informe final
                     </button>
                   )}
-                  {informeFinal.docxUrl && (
-                    <button className="secondary" onClick={() => openFile(informeFinal.docxUrl, "informe_final.docx")}>
-                      Descargar Word
+                  {informeFinal.pdfUrl && (
+                    <button className="secondary" onClick={() => openFile(informeFinal.pdfUrl, "informe_final.pdf")}>
+                      Descargar PDF
                     </button>
                   )}
                 </>
@@ -920,9 +920,9 @@ function Dashboard({ token, user, onLogout, onNavigate, onBackToRoleSelect = nul
                         Abrir en web
                       </button>
                     )}
-                    {informeFinalEmpleado.docxUrl && (
-                      <button className="secondary" onClick={() => openFile(informeFinalEmpleado.docxUrl, "informe_final.docx")}>
-                        Descargar Word
+                    {informeFinalEmpleado.pdfUrl && (
+                      <button className="secondary" onClick={() => openFile(informeFinalEmpleado.pdfUrl, "informe_final.pdf")}>
+                        Descargar PDF
                       </button>
                     )}
                   </>
@@ -1031,7 +1031,7 @@ function Dashboard({ token, user, onLogout, onNavigate, onBackToRoleSelect = nul
               ) : informeFinalAdmin?.disponible ? (
                 <div className="actions">
                   {informeFinalAdmin.htmlUrl && <button onClick={() => openFile(informeFinalAdmin.htmlUrl, "informe_final.html")}>Abrir versión web</button>}
-                  {informeFinalAdmin.docxUrl && <button className="secondary" onClick={() => openFile(informeFinalAdmin.docxUrl, "informe_final.docx")}>Descargar Word</button>}
+                  {informeFinalAdmin.pdfUrl && <button className="secondary" onClick={() => openFile(informeFinalAdmin.pdfUrl, "informe_final.pdf")}>Descargar PDF</button>}
                 </div>
               ) : (
                 <p className="fine">{informeFinalAdmin?.mensaje || "No hay informe final disponible."}</p>
@@ -1157,17 +1157,17 @@ function SubirInformePage({ token, advisee, onBack }) {
             <p className="fine">Ya hay un informe final subido. Puedes descargarlo o subir uno nuevo para reemplazarlo.</p>
             <div className="actions">
               {informeActual.htmlUrl && <button onClick={() => openFile(informeActual.htmlUrl, "informe_final.html")}>Abrir versión web</button>}
-              {informeActual.docxUrl && <button className="secondary" onClick={() => openFile(informeActual.docxUrl, "informe_final.docx")}>Descargar Word</button>}
+              {informeActual.pdfUrl && <button className="secondary" onClick={() => openFile(informeActual.pdfUrl, "informe_final.pdf")}>Descargar PDF</button>}
             </div>
           </div>
         )}
         <form className="panel" onSubmit={subir}>
           <h2>Subir versión final</h2>
-          <p>Sube el Word con tu versión final. Se convierte a HTML automáticamente y se guarda en Notion. Se mantienen las 2 versiones más recientes.</p>
-          <label>Archivo Word (.docx)</label>
+          <p>Sube el PDF con tu versión final. Se guarda en Notion y el advisee podrá descargarlo. Se mantienen las 2 versiones más recientes.</p>
+          <label>Archivo PDF (.pdf)</label>
           <input
             type="file"
-            accept=".docx,application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+            accept=".pdf,application/pdf"
             onChange={(e) => setFile(e.target.files?.[0] || null)}
             required
           />
@@ -1184,7 +1184,7 @@ function SubirInformePage({ token, advisee, onBack }) {
           <h2>Informe subido</h2>
           <div className="actions">
             {links.htmlUrl && <button onClick={() => openFile(links.htmlUrl, "informe_final.html")}>Abrir versión web</button>}
-            {links.docxUrl && <button className="secondary" onClick={() => openFile(links.docxUrl, "informe_final.docx")}>Descargar Word</button>}
+            {links.pdfUrl && <button className="secondary" onClick={() => openFile(links.pdfUrl, "informe_final.pdf")}>Descargar PDF</button>}
           </div>
         </section>
       )}

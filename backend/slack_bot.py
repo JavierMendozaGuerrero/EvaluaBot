@@ -61,10 +61,10 @@ def enviar_una_evaluacion():
                 resp = slack_app.client.chat_postMessage(
                     channel=dm_channel,
                     text=(
-                        "📍 *Tienes una evaluación mensual pendiente.*\n"
-                        "_Pulsa cualquier tecla para comenzar_\n"
+                        "📍 *Tienes una evaluación mensual pendiente.*\n\n"
+                        "_Esta evaluación es totalmente privada, solo podrá verla el CA de la persona evaluada._\n"
                         "_Si en algún momento quieres cancelar, escribe SOS en el hilo._\n"
-                        "_Esta evaluación es totalmente privada, solo podrá verla el CA de la persona evaluada._"
+                        "*Envía cualquier mensaje en el hilo* para comenzar la evaluación"
                     ),
                 )
                 with lock:
@@ -192,6 +192,16 @@ def _es_no(texto):
 
 
 _Q5_EJEMPLO = "Indica un ejemplo concreto que justifique tu valoración"
+
+_PALABRAS_NUMERO = {"uno": "1", "dos": "2", "tres": "3", "cuatro": "4", "cinco": "5"}
+
+
+def _normalizar_valoracion(texto: str) -> str | None:
+    """Devuelve '1'-'5' si el texto es un número válido (dígito o palabra), None si no."""
+    t = texto.strip().lower()
+    if t in {"1", "2", "3", "4", "5"}:
+        return t
+    return _PALABRAS_NUMERO.get(t)
 
 
 def _pregunta_contribucion(relacion: str) -> str:
@@ -421,16 +431,12 @@ def handle_message_events(event, logger):
                     estado["modo"] = "esperando_proyecto"
                     accion = "pedir_proyecto"
                     pregunta = (
-                        "¿En qué proyecto estás trabajando ahora? "
-                        "Si estás en más de uno, elige solo uno y escribe el nombre, después podrás evaluar otros proyectos."
+                        "Escribe el nombre de uno de los proyectos en los que estás trabajando. Más adelante podrás evaluar el resto"
                     )
             else:
                 accion = "pedir_area"
                 pregunta = (
-                    "Por favor, elige tu área:\n"
-                    "*1.* Negocio\n"
-                    "*2.* MiddleOffice\n"
-                    "*3.* Palantir"
+                    "Por favor, escribe el número o el nombre del área al que perteneces 😊"
                 )
 
         elif modo == "esperando_proyecto":
@@ -512,11 +518,12 @@ def handle_message_events(event, logger):
             idx = estado.get("pregunta_actual", 0)
             if texto and todas and idx < len(todas):
                 clave_actual = todas[idx]["clave"]
-                if clave_actual in {"q1", "mo_contribucion"} and texto.strip() not in {"1", "2", "3", "4", "5"}:
+                valor_normalizado = _normalizar_valoracion(texto) if clave_actual in {"q1", "mo_contribucion"} else None
+                if clave_actual in {"q1", "mo_contribucion"} and valor_normalizado is None:
                     accion = "preguntar"
                     pregunta = "Por favor, responde solo con un número del 1 al 5.\n" + todas[idx]["texto"]
                 else:
-                    estado["respuestas"][clave_actual] = texto
+                    estado["respuestas"][clave_actual] = valor_normalizado if valor_normalizado is not None else texto
                     idx += 1
                     estado["pregunta_actual"] = idx
                     if idx < len(todas):
@@ -621,17 +628,35 @@ def handle_message_events(event, logger):
         elif modo == "modificando_respuesta_area":
             campo = estado.get("campo_modificando")
             if campo and texto:
-                estado["respuestas"][campo] = texto
-                if campo == "proyecto":
-                    estado["proyecto_actual"] = texto
-                estado.pop("campo_modificando", None)
-                estado["modo"] = "confirmacion"
-                accion = "mostrar_resumen"
-                pregunta = resumen_respuestas(
-                    estado["respuestas"],
-                    area=estado.get("area", "negocio"),
-                    preguntas_area=estado.get("preguntas_area"),
-                )
+                if campo in {"q1", "mo_contribucion"}:
+                    valor_norm = _normalizar_valoracion(texto)
+                    if valor_norm is None:
+                        accion = "pedir_valor_modificacion"
+                        todas = estado.get("preguntas_area", [])
+                        pregunta_base = next((q["texto"] for q in todas if q["clave"] == campo), "")
+                        pregunta = "Por favor, responde solo con un número del 1 al 5.\n" + pregunta_base
+                    else:
+                        estado["respuestas"][campo] = valor_norm
+                        estado.pop("campo_modificando", None)
+                        estado["modo"] = "confirmacion"
+                        accion = "mostrar_resumen"
+                        pregunta = resumen_respuestas(
+                            estado["respuestas"],
+                            area=estado.get("area", "negocio"),
+                            preguntas_area=estado.get("preguntas_area"),
+                        )
+                else:
+                    estado["respuestas"][campo] = texto
+                    if campo == "proyecto":
+                        estado["proyecto_actual"] = texto
+                    estado.pop("campo_modificando", None)
+                    estado["modo"] = "confirmacion"
+                    accion = "mostrar_resumen"
+                    pregunta = resumen_respuestas(
+                        estado["respuestas"],
+                        area=estado.get("area", "negocio"),
+                        preguntas_area=estado.get("preguntas_area"),
+                    )
             else:
                 accion = "pedir_valor_modificacion"
                 pregunta = "Escribe la nueva respuesta."
@@ -674,8 +699,7 @@ def handle_message_events(event, logger):
                 estado["proyecto_actual"] = None
                 accion = "pedir_proyecto"
                 pregunta = (
-                    "Perfecto. ¿En qué proyecto estás trabajando ahora? "
-                    "Si estás en más de uno, elige solo uno y escribe el nombre, después podrás evaluar otros proyectos."
+                    "Perfecto. Escribe el nombre de uno de los proyectos en los que estás trabajando. Más adelante podrás evaluar el resto"
                 )
             elif _es_no(texto):
                 estado["modo"] = "terminado"

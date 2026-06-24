@@ -222,7 +222,7 @@ class ApiHandler(BaseHTTPRequestHandler):
                         self.responder_json({
                             "disponible": True,
                             "accesoActivo": True,
-                            "docxUrl": self.url_archivo(informe["docx"], evaluado),
+                            "pdfUrl": self.url_archivo(informe["pdf"], evaluado),
                             "htmlUrl": self.url_archivo(informe["html"], evaluado) if informe.get("html") else None,
                         })
                     elif acceso:
@@ -238,7 +238,7 @@ class ApiHandler(BaseHTTPRequestHandler):
                     return
                 self.responder_json({
                     "disponible": True,
-                    "docxUrl": self.url_archivo(informe["docx"], evaluado),
+                    "pdfUrl": self.url_archivo(informe["pdf"], evaluado),
                     "htmlUrl": self.url_archivo(informe["html"], evaluado) if informe.get("html") else None,
                 })
                 return
@@ -376,32 +376,22 @@ class ApiHandler(BaseHTTPRequestHandler):
                     raise PermissionError("Solo puedes subir informes para tus advisees.")
                 slug_ev = slug_archivo(evaluado_subida)
                 ts = int(time.time())
-                docx_filename = f"informe_final_{slug_ev}_{ts}.docx"
-                docx_path = os.path.join(config.CARPETA_WEB, docx_filename)
-                with open(docx_path, "wb") as f:
+                pdf_filename = f"informe_final_{slug_ev}_{ts}.pdf"
+                pdf_path = os.path.join(config.CARPETA_WEB, pdf_filename)
+                with open(pdf_path, "wb") as f:
                     f.write(archivo_field.file.read())
-                html_filename = None
-                if mammoth:
-                    html_filename = f"informe_final_{slug_ev}_{ts}.html"
-                    html_path = os.path.join(config.CARPETA_WEB, html_filename)
-                    with open(docx_path, "rb") as f:
-                        resultado = mammoth.convert_to_html(f)
-                    html_body = f"<!DOCTYPE html><html><head><meta charset='utf-8'><style>{config.IGENERIS_CSS}</style></head><body class='page'>{resultado.value}</body></html>"
-                    with open(html_path, "w", encoding="utf-8") as f:
-                        f.write(html_body)
-                url_notion = f"{config.APP_PUBLIC_URL}/api/files/{urllib.parse.quote(docx_filename)}?evaluado={urllib.parse.quote(evaluado_subida)}"
+                url_notion = f"{config.APP_PUBLIC_URL}/api/files/{urllib.parse.quote(pdf_filename)}?evaluado={urllib.parse.quote(evaluado_subida)}"
                 ca_subida = sesion.get("persona", "") if not sesion.get("is_admin") else ""
                 guardar_informe_final(
                     ca_nombre=ca_subida,
                     advisee=evaluado_subida,
-                    docx_filename=docx_filename,
-                    html_filename=html_filename or "",
+                    pdf_filename=pdf_filename,
+                    html_filename="",
                     url=url_notion,
                 )
                 self.responder_json({
                     "ok": True,
-                    "docxUrl": self.url_archivo(docx_filename, evaluado_subida),
-                    "htmlUrl": self.url_archivo(html_filename, evaluado_subida) if html_filename else None,
+                    "pdfUrl": self.url_archivo(pdf_filename, evaluado_subida),
                 })
                 return
             self.responder_json({"error": "No encontrado"}, 404)

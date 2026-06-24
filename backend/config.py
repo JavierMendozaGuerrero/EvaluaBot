@@ -61,7 +61,7 @@ NOTION_ANNUAL_DATABASE_NAME = os.environ.get("NOTION_ANNUAL_DATABASE_NAME", "Eva
 NOTION_QUESTIONS_DATABASE_NAME = os.environ.get("NOTION_QUESTIONS_DATABASE_NAME", "Preguntas").strip()
 ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY", "").strip()
 PREGUNTAS = [
-    {"clave": "proyecto", "texto": "¿En qué proyecto estás trabajando ahora?"},
+    {"clave": "proyecto", "texto": "Escribe el nombre de uno de los proyectos en los que estás trabajando. Más adelante podrás evaluar el resto"},
     {"clave": "evaluado", "texto": "Indica el nombre del miembro del proyecto"},
 ]
 

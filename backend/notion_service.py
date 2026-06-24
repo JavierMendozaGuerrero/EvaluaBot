@@ -2132,7 +2132,7 @@ _PROPS_INFORMES_FINALES = {
     "Name": {"title": {}},
     "CA": {"rich_text": {}},
     "Fecha": {"date": {}},
-    "Archivo_docx": {"rich_text": {}},
+    "Archivo_pdf": {"rich_text": {}},
     "Archivo_html": {"rich_text": {}},
     "URL": {"url": {}},
 }
@@ -2178,7 +2178,7 @@ def _obtener_o_crear_bbdd_informes_finales() -> str:
     return db_id
 
 
-def guardar_informe_final(ca_nombre: str, advisee: str, docx_filename: str, html_filename: str, url: str) -> None:
+def guardar_informe_final(ca_nombre: str, advisee: str, pdf_filename: str, html_filename: str, url: str) -> None:
     db_id = _obtener_o_crear_bbdd_informes_finales()
     advisee_norm = normalizar_nombre(advisee)
 
@@ -2197,6 +2197,7 @@ def guardar_informe_final(ca_nombre: str, advisee: str, docx_filename: str, html
             existentes.append({
                 "page_id": fila["id"],
                 "fecha": (props.get("Fecha", {}).get("date") or {}).get("start", ""),
+                "pdf": _texto_rich_text(props, "Archivo_pdf"),
                 "docx": _texto_rich_text(props, "Archivo_docx"),
                 "html": _texto_rich_text(props, "Archivo_html"),
             })
@@ -2211,7 +2212,7 @@ def guardar_informe_final(ca_nombre: str, advisee: str, docx_filename: str, html
             notion.pages.update(page_id=oldest["page_id"], archived=True)
         except Exception:
             logging.exception("No se pudo archivar informe final antiguo %s", oldest["page_id"])
-        for fname in (oldest.get("docx", ""), oldest.get("html", "")):
+        for fname in (oldest.get("pdf", ""), oldest.get("docx", ""), oldest.get("html", "")):
             if fname:
                 try:
                     ruta = os.path.join(config.CARPETA_WEB, os.path.basename(fname))
@@ -2225,14 +2226,14 @@ def guardar_informe_final(ca_nombre: str, advisee: str, docx_filename: str, html
         "Name": {"title": [{"text": {"content": advisee}}]},
         "CA": {"rich_text": [{"text": {"content": ca_nombre}}]},
         "Fecha": {"date": {"start": fecha.isoformat()}},
-        "Archivo_docx": {"rich_text": [{"text": {"content": docx_filename}}]},
+        "Archivo_pdf": {"rich_text": [{"text": {"content": pdf_filename}}]},
         "Archivo_html": {"rich_text": [{"text": {"content": html_filename}}]},
         "URL": {"url": url},
     })
 
 
 def obtener_informe_final_reciente(advisee: str) -> dict | None:
-    """Devuelve {docx, html} del informe final más reciente del advisee, o None."""
+    """Devuelve {pdf, html} del informe final más reciente del advisee, o None."""
     try:
         db_id = _obtener_o_crear_bbdd_informes_finales()
         advisee_norm = normalizar_nombre(advisee)
@@ -2250,7 +2251,7 @@ def obtener_informe_final_reciente(advisee: str) -> dict | None:
                     continue
                 registros.append({
                     "fecha": (props.get("Fecha", {}).get("date") or {}).get("start", ""),
-                    "docx": _texto_rich_text(props, "Archivo_docx"),
+                    "pdf": _texto_rich_text(props, "Archivo_pdf") or _texto_rich_text(props, "Archivo_docx"),
                     "html": _texto_rich_text(props, "Archivo_html"),
                 })
             if not resp.get("has_more"):
@@ -2291,7 +2292,7 @@ PREGUNTAS_PERSONALES_DEFAULT = {
         "📝 *Tienes opción de seguimiento personal pendiente*\n"
         "_Si quieres cancelar, escribe SOS en cualquier momento._\n"
         "_Esta evaluación es totalmente privada, solo podrá verla tu CA._\n\n"
-        "_Pulsa cualquier tecla para comenzar_"
+        "_Envía cualquier mensaje en el hilo para comenzar la evaluación_"
     ),
 }
 

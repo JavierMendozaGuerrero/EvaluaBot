@@ -441,7 +441,7 @@ def enviar_pregunta_inicial_ca() -> None:
                     channel=dm_channel,
                     text=(
                         "📋 *CA: Tienes evaluación de advisees pendiente*\n"
-                        "_Pulsa cualquier tecla para comenzar_\n"
+                        "_Envía cualquier mensaje en el hilo para comenzar la evaluación_\n"
                         "_Si quieres cancelar en cualquier momento, escribe SOS en el hilo._\n"
                         "_Esta evaluación es totalmente privada, solo podrás verlas TÚ._"
                     ),

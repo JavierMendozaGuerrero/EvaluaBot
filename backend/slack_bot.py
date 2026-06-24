@@ -61,6 +61,7 @@ def enviar_una_evaluacion():
                     channel=dm_channel,
                     text=(
                         "📍 *Tienes una evaluación mensual pendiente.*\n"
+                        "_Pulsa cualquier tecla para comenzar_\n"
                         "_Si en algún momento quieres cancelar, escribe SOS en el hilo._\n"
                         "_Esta evaluación es totalmente privada, solo podrá verla el CA de la persona evaluada._"
                     ),
@@ -122,23 +123,17 @@ def resumen_respuestas(respuestas, area="negocio", preguntas_area=None):
         "\n\n¿Estás satisfecho con tus respuestas?\n"
         "Responde `sí` para guardar en Notion o `modificar` para cambiar una respuesta concreta."
     )
-    if area == "negocio" or not preguntas_area:
-        return (
-            "Resumen de tus respuestas:\n"
-            f"- Persona evaluada: {respuestas.get('evaluado', '')}\n"
-            f"- Proyecto: {respuestas.get('proyecto', '')}\n"
-            f"- Satisfacción: {respuestas.get('satisfaccion', '')}\n"
-            f"- Mejor aspecto: {respuestas.get('mejor_aspecto', '')}\n"
-            f"- Peor aspecto: {respuestas.get('peor_aspecto', '')}"
-            + _sufijo
-        )
-    lineas = [
-        "Resumen de tus respuestas:",
-        f"- Persona evaluada: {respuestas.get('evaluado', '')}",
-        f"- Proyecto: {respuestas.get('proyecto', '')}",
-    ]
-    for q in preguntas_area:
-        lineas.append(f"- {q['texto']}: {respuestas.get(q['clave'], '')}")
+    lineas = ["Resumen de tus respuestas:"]
+    lineas.append(f"- Persona evaluada: {respuestas.get('evaluado', '')}")
+    if respuestas.get("proyecto"):
+        lineas.append(f"- Proyecto: {respuestas.get('proyecto', '')}")
+    if respuestas.get("satisfaccion"):
+        lineas.append(f"- Satisfacción: {respuestas.get('satisfaccion', '')}")
+    if preguntas_area:
+        for q in preguntas_area:
+            val = respuestas.get(q["clave"], "")
+            label = q["texto"].split("\n")[0][:55]
+            lineas.append(f"- {label}: {val}")
     return "\n".join(lineas) + _sufijo
 
 
@@ -146,7 +141,7 @@ def _texto_menu_modificacion_area(estado):
     preguntas_area = estado.get("preguntas_area", [])
     lineas = ["¿Qué respuesta quieres modificar?", "1. Persona evaluada", "2. Proyecto"]
     for i, q in enumerate(preguntas_area, start=3):
-        lineas.append(f"{i}. {q['texto'][:60]}")
+        lineas.append(f"{i}. {q['texto'].split(chr(10))[0][:55]}")
     lineas.append("\nResponde con el número.")
     return "\n".join(lineas)
 
@@ -167,29 +162,10 @@ def _clave_modificacion_area(texto, estado):
     return None
 
 
-OPCIONES_MODIFICACION = {
-    "1": "evaluado", "persona": "evaluado", "persona evaluada": "evaluado", "evaluado": "evaluado",
-    "2": "proyecto", "proyecto": "proyecto",
-    "3": "satisfaccion", "satisfaccion": "satisfaccion", "satisfacción": "satisfaccion",
-    "4": "mejor_aspecto", "mejor": "mejor_aspecto", "mejor aspecto": "mejor_aspecto",
-    "5": "peor_aspecto", "peor": "peor_aspecto", "peor aspecto": "peor_aspecto",
-}
-
-
-def texto_menu_modificacion():
-    return (
-        "¿Qué respuesta quieres modificar?\n"
-        "1. Persona evaluada\n2. Proyecto\n3. Satisfacción\n4. Mejor aspecto\n5. Peor aspecto\n\n"
-        "Responde con el número o el nombre del campo."
-    )
-
-
-def clave_modificacion(texto):
-    return OPCIONES_MODIFICACION.get(normalizar_nombre(texto))
 
 
 def texto_pregunta_por_clave(clave, preguntas=None):
-    if preguntas and clave in ("satisfaccion", "mejor_aspecto", "peor_aspecto"):
+    if preguntas and clave == "satisfaccion":
         if preguntas.get(clave):
             return preguntas[clave]
     for pregunta in config.PREGUNTAS:
@@ -212,6 +188,31 @@ def _es_si(texto):
 
 def _es_no(texto):
     return normalizar_nombre(texto) in {"no", "n", "nope", "nel"}
+
+
+_Q5_EJEMPLO = "Indica un ejemplo concreto que justifique tu valoración"
+
+
+def _pregunta_contribucion(relacion: str) -> str:
+    if relacion == "inferior":
+        rol = "Project Leader"
+    elif relacion == "superior":
+        rol = "miembro del equipo"
+    else:
+        rol = "tu compañero"
+    return (
+        f"Este mes, ¿cómo valorarías la contribución del {rol} al buen avance del proyecto? (número del 1 al 5)\n"
+        "_Puedes considerar claridad, comunicación, prioridades, riesgos, equipo o cliente, "
+        "pero no es necesario cubrir todos los aspectos._"
+    )
+
+
+def _preguntas_negocio(relacion: str, preguntas_notion: dict = None) -> list:
+    pn = preguntas_notion or {}
+    return [
+        {"clave": "q1", "texto": pn.get("q1") or _pregunta_contribucion(relacion)},
+        {"clave": "q2", "texto": pn.get("q2") or _Q5_EJEMPLO},
+    ]
 
 
 def _es_valor_satisfaccion(texto):
@@ -344,14 +345,16 @@ def handle_message_events(event, logger):
             if _empleado_pre:
                 if _area_peek == "middleoffice":
                     _preguntas_area_pre = obtener_preguntas_mo()
+                elif _area_peek == "palantir":
+                    if _cargo_ev_peek is None:
+                        _cargo_evaluador_pre = obtener_cargo_por_slack_id(user_id)
+                    _relacion_pre = comparar_jerarquia(_cargo_evaluador_pre or "", _cargo_pre or "")
+                    _preguntas_area_pre = obtener_preguntas_palantir(tipo_relacion(_relacion_pre))
                 else:
                     if _cargo_ev_peek is None:
                         _cargo_evaluador_pre = obtener_cargo_por_slack_id(user_id)
                     _relacion_pre = comparar_jerarquia(_cargo_evaluador_pre or "", _cargo_pre or "")
-                    if _area_peek == "palantir":
-                        _preguntas_area_pre = obtener_preguntas_palantir(tipo_relacion(_relacion_pre))
-                    else:
-                        _preguntas_pre = obtener_preguntas_desde_notion(tipo_relacion(_relacion_pre))
+                    _preguntas_pre = obtener_preguntas_desde_notion(tipo_relacion(_relacion_pre))
             else:
                 _invalido_pre = _mensaje_empleado_no_encontrado(texto)
         except Exception:
@@ -467,12 +470,14 @@ def handle_message_events(event, logger):
                                 else "⚠️ No hay preguntas configuradas en Notion para esta área."
                             )
                         else:
-                            estado["modo"] = "esperando_satisfaccion"
-                            accion = "pedir_satisfaccion"
-                            pregunta = _preguntas_pre.get(
-                                "satisfaccion",
-                                "¿Cómo de satisfecho estás con esa persona? (responde un número del 1 al 5)",
-                            )
+                            preguntas = _preguntas_negocio(estado.get("relacion_jerarquica", "igual"), _preguntas_pre)
+                            for _k in [k for k in estado["respuestas"] if k not in ("evaluado", "proyecto")]:
+                                del estado["respuestas"][_k]
+                            estado["preguntas_area"] = preguntas
+                            estado["pregunta_actual"] = 0
+                            estado["modo"] = "preguntando_area_secuencial"
+                            accion = "preguntar"
+                            pregunta = preguntas[0]["texto"]
                 else:
                     accion = "pedir_persona_invalida"
                     pregunta = _invalido_pre
@@ -480,47 +485,30 @@ def handle_message_events(event, logger):
                 accion = "pedir_persona"
                 pregunta = "¿Qué miembro del proyecto quieres evaluar?"
 
-        elif modo == "esperando_satisfaccion":
-            preguntas = obtener_preguntas_desde_notion(tipo_relacion(estado.get("relacion_jerarquica", "igual")))
-            if _es_valor_satisfaccion(texto):
-                estado["respuestas"]["satisfaccion"] = texto
-                estado["modo"] = "esperando_mejor"
-                accion = "pedir_mejor"
-                pregunta = preguntas.get("mejor_aspecto", "¿Cuál es el mejor aspecto de esa persona?")
-            else:
-                accion = "pedir_satisfaccion"
-                pregunta = "Responde un número del 1 al 5 para la satisfacción."
-
-        elif modo == "esperando_mejor":
-            preguntas = obtener_preguntas_desde_notion(tipo_relacion(estado.get("relacion_jerarquica", "igual")))
-            if texto:
-                estado["respuestas"]["mejor_aspecto"] = texto
-                estado["modo"] = "esperando_peor"
-                accion = "pedir_peor"
-                pregunta = preguntas.get("peor_aspecto", "¿Cuál es el peor aspecto de esa persona?")
-            else:
-                accion = "pedir_mejor"
-                pregunta = preguntas.get("mejor_aspecto", "¿Cuál es el mejor aspecto de esa persona?")
-
-        elif modo == "esperando_peor":
-            if texto:
-                estado["respuestas"]["peor_aspecto"] = texto
-                estado["modo"] = "confirmacion"
-                accion = "mostrar_resumen"
-                pregunta = resumen_respuestas(estado["respuestas"])
-            else:
-                preguntas = obtener_preguntas_desde_notion(tipo_relacion(estado.get("relacion_jerarquica", "igual")))
-                accion = "pedir_peor"
-                pregunta = preguntas.get("peor_aspecto", "¿Cuál es el peor aspecto de esa persona?")
-
         elif modo == "preguntando_area_secuencial":
             todas = estado.get("preguntas_area", [])
             idx = estado.get("pregunta_actual", 0)
             if texto and todas and idx < len(todas):
-                estado["respuestas"][todas[idx]["clave"]] = texto
-                idx += 1
-                estado["pregunta_actual"] = idx
-            if idx < len(todas):
+                clave_actual = todas[idx]["clave"]
+                if clave_actual == "q1" and texto.strip() not in {"1", "2", "3", "4", "5"}:
+                    accion = "preguntar"
+                    pregunta = "Por favor, responde solo con un número del 1 al 5.\n" + todas[idx]["texto"]
+                else:
+                    estado["respuestas"][clave_actual] = texto
+                    idx += 1
+                    estado["pregunta_actual"] = idx
+                    if idx < len(todas):
+                        accion = "preguntar"
+                        pregunta = todas[idx]["texto"]
+                    else:
+                        estado["modo"] = "confirmacion"
+                        accion = "mostrar_resumen"
+                        pregunta = resumen_respuestas(
+                            estado["respuestas"],
+                            area=estado.get("area", "negocio"),
+                            preguntas_area=todas,
+                        )
+            elif idx < len(todas):
                 accion = "preguntar"
                 pregunta = todas[idx]["texto"]
             else:
@@ -537,15 +525,9 @@ def handle_message_events(event, logger):
                 estado["modo"] = "guardar"
                 accion = "guardar"
             elif respuesta_es_modificacion(texto):
-                _area_conf = estado.get("area", "negocio")
-                if _area_conf in ("middleoffice", "palantir"):
-                    estado["modo"] = "seleccionando_modificacion_area"
-                    accion = "pedir_modificacion"
-                    pregunta = _texto_menu_modificacion_area(estado)
-                else:
-                    estado["modo"] = "seleccionando_modificacion"
-                    accion = "pedir_modificacion"
-                    pregunta = texto_menu_modificacion()
+                estado["modo"] = "seleccionando_modificacion_area"
+                accion = "pedir_modificacion"
+                pregunta = _texto_menu_modificacion_area(estado)
             elif _es_no(texto):
                 estado["modo"] = "terminado"
                 accion = "terminar"
@@ -556,21 +538,6 @@ def handle_message_events(event, logger):
                     area=estado.get("area", "negocio"),
                     preguntas_area=estado.get("preguntas_area"),
                 )
-
-        elif modo == "seleccionando_modificacion":
-            campo = clave_modificacion(texto)
-            if campo:
-                estado["campo_modificando"] = campo
-                estado["modo"] = "modificando_respuesta"
-                accion = "pedir_valor_modificacion"
-                if campo in ("satisfaccion", "mejor_aspecto", "peor_aspecto"):
-                    preguntas = obtener_preguntas_desde_notion(tipo_relacion(estado.get("relacion_jerarquica", "igual")))
-                    pregunta = preguntas.get(campo) or texto_pregunta_por_clave(campo)
-                else:
-                    pregunta = texto_pregunta_por_clave(campo)
-            else:
-                accion = "pedir_modificacion"
-                pregunta = texto_menu_modificacion()
 
         elif modo == "modificando_respuesta":
             campo = estado.get("campo_modificando")
@@ -606,7 +573,7 @@ def handle_message_events(event, logger):
                     )
             else:
                 accion = "pedir_valor_modificacion"
-                pregunta = texto_pregunta_por_clave(campo) if campo else texto_menu_modificacion()
+                pregunta = texto_pregunta_por_clave(campo) if campo else "Escribe la nueva respuesta."
 
         elif modo == "seleccionando_modificacion_area":
             campo = _clave_modificacion_area(texto, estado)
@@ -702,7 +669,7 @@ def handle_message_events(event, logger):
     _ACCIONES_PREGUNTA = {
         "pedir_area", "preguntar",
         "pedir_persona", "pedir_persona_invalida", "pedir_persona_mismo_proyecto",
-        "pedir_proyecto", "pedir_satisfaccion", "pedir_mejor", "pedir_peor",
+        "pedir_proyecto",
         "pedir_modificacion", "pedir_valor_modificacion", "pedir_mas_personas",
         "pedir_mas_proyectos",
     }

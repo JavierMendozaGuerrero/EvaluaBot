@@ -61,14 +61,8 @@ NOTION_ANNUAL_DATABASE_NAME = os.environ.get("NOTION_ANNUAL_DATABASE_NAME", "Eva
 NOTION_QUESTIONS_DATABASE_NAME = os.environ.get("NOTION_QUESTIONS_DATABASE_NAME", "Preguntas").strip()
 ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY", "").strip()
 PREGUNTAS = [
-    {"clave": "proyecto", "texto": "1️⃣ ¿En qué proyecto estás trabajando ahora?"},
-    {"clave": "evaluado", "texto": "2️⃣ Indica el nombre del miembro del proyecto"},
-    {
-        "clave": "satisfaccion",
-        "texto": "3️⃣ ¿Cómo de satisfecho estás con esa persona? (responde un número del 1 al 5)",
-    },
-    {"clave": "mejor_aspecto", "texto": "4️⃣ Indica el mejor aspecto de esa persona"},
-    {"clave": "peor_aspecto", "texto": "5️⃣ Indica el peor aspecto de esa persona"},
+    {"clave": "proyecto", "texto": "¿En qué proyecto estás trabajando ahora?"},
+    {"clave": "evaluado", "texto": "Indica el nombre del miembro del proyecto"},
 ]
 
 IGENERIS_CSS = """

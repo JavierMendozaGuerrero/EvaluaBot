@@ -39,15 +39,12 @@ def _propiedades_bbdd_evaluaciones():
         "Area": {"select": {"options": [
             {"name": "Negocio"}, {"name": "MiddleOffice"}, {"name": "Palantir"},
         ]}},
-        "Satisfaccion de superiores": {"rich_text": {}},
-        "Satisfaccion de iguales": {"rich_text": {}},
-        "Satisfaccion de inferiores": {"rich_text": {}},
-        "Mejor aspecto de superiores": {"rich_text": {}},
-        "Mejor aspecto de iguales": {"rich_text": {}},
-        "Mejor aspecto de inferiores": {"rich_text": {}},
-        "Peor aspecto de superiores": {"rich_text": {}},
-        "Peor aspecto de iguales": {"rich_text": {}},
-        "Peor aspecto de inferiores": {"rich_text": {}},
+        "Valoración de superiores": {"rich_text": {}},
+        "Valoración de iguales": {"rich_text": {}},
+        "Valoración de inferiores": {"rich_text": {}},
+        "Justificación de superiores": {"rich_text": {}},
+        "Justificación de iguales": {"rich_text": {}},
+        "Justificación de inferiores": {"rich_text": {}},
     }
 
 
@@ -550,9 +547,8 @@ def _propiedades_bbdd_preguntas():
             {"name": "Same Level"},
         ]}},
         "Clave": {"select": {"options": [
-            {"name": "satisfaccion"},
-            {"name": "mejor_aspecto"},
-            {"name": "peor_aspecto"},
+            {"name": "q1"},
+            {"name": "q2"},
         ]}},
     }
 
@@ -566,10 +562,12 @@ def _obtener_o_crear_bbdd_preguntas():
     if preguntas_page_id:
         bbdd_id = _buscar_bbdd_en_pagina_id(preguntas_page_id, _NOMBRE_BBDD_PREGUNTAS_NEGOCIO)
         if bbdd_id:
+            _poblar_bbdd_preguntas(bbdd_id)
             return bbdd_id
     # 2. Fallback: buscar "Preguntas" en la ubicación antigua
     bbdd_id = _buscar_bbdd_en_pagina(config.NOTION_DATA_LISTS_PAGE_NAME, NOTION_QUESTIONS_DATABASE_NAME)
     if bbdd_id:
+        _poblar_bbdd_preguntas(bbdd_id)
         return bbdd_id
     # 3. Crear "Preguntas Negocio" dentro de la sub-página
     parent_page_id = preguntas_page_id
@@ -603,29 +601,58 @@ def _obtener_o_crear_bbdd_preguntas():
         return None
 
 
+_Q4_BOTTOM_TOP = (
+    "Este mes, ¿cómo valorarías la contribución del Project Leader al buen avance del proyecto?\n"
+    "Puedes considerar claridad, comunicación, prioridades, riesgos, equipo o cliente, pero no es necesario cubrir todos los aspectos."
+)
+_Q4_TOP_BOTTOM = (
+    "Este mes, ¿cómo valorarías la contribución del miembro del equipo al buen avance del proyecto?\n"
+    "Puedes considerar claridad, comunicación, prioridades, riesgos, equipo o cliente, pero no es necesario cubrir todos los aspectos."
+)
+_Q4_SAME_LEVEL = (
+    "Este mes, ¿cómo valorarías la contribución de tu compañero al buen avance del proyecto?\n"
+    "Puedes considerar claridad, comunicación, prioridades, riesgos, equipo o cliente, pero no es necesario cubrir todos los aspectos."
+)
+_Q5_TEXTO = "Indica un ejemplo concreto que justifique tu valoración"
+
 _PREGUNTAS_INICIALES = [
-    ("Top-Bottom", "satisfaccion", "¿Cómo de satisfecho estás con el desempeño de esta persona? (responde un número del 1 al 5)"),
-    ("Top-Bottom", "mejor_aspecto", "¿Cuál es el mejor aspecto de esta persona en su rol?"),
-    ("Top-Bottom", "peor_aspecto", "¿Cuál es el principal aspecto a mejorar de esta persona?"),
-    ("Bottom-Top", "satisfaccion", "¿Cómo de satisfecho estás con esta persona como líder? (responde un número del 1 al 5)"),
-    ("Bottom-Top", "mejor_aspecto", "¿Cuál es el mejor aspecto de esta persona como líder?"),
-    ("Bottom-Top", "peor_aspecto", "¿Cuál es el principal aspecto a mejorar de esta persona como líder?"),
-    ("Same Level", "satisfaccion", "¿Cómo de satisfecho estás trabajando con esta persona? (responde un número del 1 al 5)"),
-    ("Same Level", "mejor_aspecto", "¿Cuál es el mejor aspecto de esta persona como compañero?"),
-    ("Same Level", "peor_aspecto", "¿Cuál es el principal aspecto a mejorar de esta persona como compañero?"),
+    ("Top-Bottom", "q1", _Q4_TOP_BOTTOM + " (número del 1 al 5)"),
+    ("Top-Bottom", "q2", _Q5_TEXTO),
+    ("Bottom-Top", "q1", _Q4_BOTTOM_TOP + " (número del 1 al 5)"),
+    ("Bottom-Top", "q2", _Q5_TEXTO),
+    ("Same Level", "q1", _Q4_SAME_LEVEL + " (número del 1 al 5)"),
+    ("Same Level", "q2", _Q5_TEXTO),
 ]
+
+_preguntas_bbdd_pobladas: set = set()
 
 
 def _poblar_bbdd_preguntas(bbdd_id):
+    """Añade las entradas que falten en la BD de preguntas. Idempotente."""
+    if bbdd_id in _preguntas_bbdd_pobladas:
+        return
+    existentes: set = set()
+    try:
+        resp = _query_bbdd(bbdd_id)
+        for pag in resp.get("results", []):
+            props = pag.get("properties", {})
+            tipo = ((props.get("Tipo") or {}).get("select") or {}).get("name", "")
+            clave = ((props.get("Clave") or {}).get("select") or {}).get("name", "")
+            if tipo and clave:
+                existentes.add((tipo, clave))
+    except Exception:
+        logging.exception("Error leyendo entradas existentes en BD Preguntas")
     for tipo, clave, texto in _PREGUNTAS_INICIALES:
-        try:
-            _crear_pagina_en_bbdd(bbdd_id, {
-                "Texto": {"title": [{"text": {"content": texto}}]},
-                "Tipo": {"select": {"name": tipo}},
-                "Clave": {"select": {"name": clave}},
-            })
-        except Exception:
-            logging.exception("Error creando fila '%s'/'%s' en BD Preguntas", tipo, clave)
+        if (tipo, clave) not in existentes:
+            try:
+                _crear_pagina_en_bbdd(bbdd_id, {
+                    "Texto": {"title": [{"text": {"content": texto}}]},
+                    "Tipo": {"select": {"name": tipo}},
+                    "Clave": {"select": {"name": clave}},
+                })
+            except Exception:
+                logging.exception("Error creando fila '%s'/'%s' en BD Preguntas", tipo, clave)
+    _preguntas_bbdd_pobladas.add(bbdd_id)
 
 
 def obtener_preguntas_desde_notion(tipo: str) -> dict:
@@ -675,6 +702,8 @@ _PREGUNTAS_MO_DEFAULT = [
     ("pregunta_2", "¿Qué mejora propondrías para los procesos actuales de MiddleOffice?"),
 ]
 
+_preguntas_mo_bbdd_pobladas: set = set()
+
 
 def _obtener_o_crear_bbdd_preguntas_mo() -> str | None:
     with _lock_preguntas_mo:
@@ -687,6 +716,8 @@ def _obtener_o_crear_bbdd_preguntas_mo() -> str | None:
         db_id = _buscar_bbdd_en_pagina_id(preguntas_page_id, _NOMBRE_BBDD_PREGUNTAS_MO)
     if not db_id:
         db_id = _buscar_bbdd_en_pagina(config.NOTION_DATA_LISTS_PAGE_NAME, _NOMBRE_BBDD_PREGUNTAS_MO)
+    if db_id:
+        _poblar_bbdd_preguntas_mo(db_id)
     if not db_id:
         parent_page_id = preguntas_page_id
         if not parent_page_id:
@@ -724,7 +755,33 @@ def _obtener_o_crear_bbdd_preguntas_mo() -> str | None:
 
 
 def _poblar_bbdd_preguntas_mo(db_id: str) -> None:
+    if db_id in _preguntas_mo_bbdd_pobladas:
+        return
+    try:
+        existentes: set[str] = set()
+        cursor = None
+        while True:
+            kwargs = {"database_id": db_id, "page_size": 100}
+            if cursor:
+                kwargs["start_cursor"] = cursor
+            resp = notion.databases.query(**kwargs)
+            for page in resp.get("results", []):
+                clave_raw = page.get("properties", {}).get("Clave", {})
+                clave_val = ""
+                if clave_raw.get("type") == "title":
+                    titles = clave_raw.get("title", [])
+                    clave_val = titles[0].get("plain_text", "") if titles else ""
+                if clave_val:
+                    existentes.add(clave_val)
+            if not resp.get("has_more"):
+                break
+            cursor = resp.get("next_cursor")
+    except Exception:
+        logging.exception("Error leyendo entradas existentes en BD MO '%s'", db_id)
+        existentes = set()
     for clave, texto in _PREGUNTAS_MO_DEFAULT:
+        if clave in existentes:
+            continue
         try:
             _crear_pagina_en_bbdd(db_id, {
                 "Clave": {"title": [{"type": "text", "text": {"content": clave}}]},
@@ -732,6 +789,7 @@ def _poblar_bbdd_preguntas_mo(db_id: str) -> None:
             })
         except Exception:
             logging.exception("Error poblando pregunta MO '%s'", clave)
+    _preguntas_mo_bbdd_pobladas.add(db_id)
 
 
 def obtener_preguntas_mo() -> list[dict]:
@@ -795,13 +853,15 @@ _PROPS_PREGUNTAS_PALANTIR = {
 }
 
 _PREGUNTAS_PALANTIR_DEFAULT = [
-    ("Top-Bottom", "pregunta_1", "¿Cómo de satisfecho estás con el rendimiento de esta persona en Palantir? (1–5)"),
-    ("Top-Bottom", "pregunta_2", "¿Qué aspecto mejorarías de esta persona en su rol en Palantir?"),
-    ("Bottom-Top", "pregunta_1", "¿Cómo de satisfecho estás con este líder en Palantir? (1–5)"),
-    ("Bottom-Top", "pregunta_2", "¿Qué mejorarías de este líder en el contexto Palantir?"),
-    ("Same Level", "pregunta_1", "¿Cómo de satisfecho estás trabajando con este compañero en Palantir? (1–5)"),
-    ("Same Level", "pregunta_2", "¿Qué aspecto mejorarías de esta persona como compañero en Palantir?"),
+    ("Top-Bottom", "q1", _Q4_TOP_BOTTOM + " (número del 1 al 5)"),
+    ("Top-Bottom", "q2", _Q5_TEXTO),
+    ("Bottom-Top", "q1", _Q4_BOTTOM_TOP + " (número del 1 al 5)"),
+    ("Bottom-Top", "q2", _Q5_TEXTO),
+    ("Same Level", "q1", _Q4_SAME_LEVEL + " (número del 1 al 5)"),
+    ("Same Level", "q2", _Q5_TEXTO),
 ]
+
+_preguntas_palantir_bbdd_pobladas: set = set()
 
 
 def _obtener_o_crear_bbdd_preguntas_palantir() -> str | None:
@@ -815,6 +875,11 @@ def _obtener_o_crear_bbdd_preguntas_palantir() -> str | None:
         db_id = _buscar_bbdd_en_pagina_id(preguntas_page_id, _NOMBRE_BBDD_PREGUNTAS_PALANTIR)
     if not db_id:
         db_id = _buscar_bbdd_en_pagina(config.NOTION_DATA_LISTS_PAGE_NAME, _NOMBRE_BBDD_PREGUNTAS_PALANTIR)
+    if db_id:
+        _poblar_bbdd_preguntas_palantir(db_id)
+        with _lock_preguntas_palantir:
+            _cache_preguntas_palantir_db["db_id"] = db_id
+        return db_id
     if not db_id:
         parent_page_id = preguntas_page_id
         if not parent_page_id:
@@ -852,15 +917,31 @@ def _obtener_o_crear_bbdd_preguntas_palantir() -> str | None:
 
 
 def _poblar_bbdd_preguntas_palantir(db_id: str) -> None:
+    """Añade las entradas que falten en la BD de Palantir. Idempotente."""
+    if db_id in _preguntas_palantir_bbdd_pobladas:
+        return
+    existentes: set = set()
+    try:
+        resp = _query_bbdd(db_id)
+        for pag in resp.get("results", []):
+            props = pag.get("properties", {})
+            tipo = ((props.get("Tipo") or {}).get("select") or {}).get("name", "")
+            clave = "".join(p.get("plain_text", "") for p in props.get("Clave", {}).get("title", [])).strip()
+            if tipo and clave:
+                existentes.add((tipo, clave))
+    except Exception:
+        logging.exception("Error leyendo entradas existentes en BD Palantir")
     for tipo, clave, texto in _PREGUNTAS_PALANTIR_DEFAULT:
-        try:
-            _crear_pagina_en_bbdd(db_id, {
-                "Clave": {"title": [{"type": "text", "text": {"content": clave}}]},
-                "Tipo": {"select": {"name": tipo}},
-                "Texto": {"rich_text": [{"type": "text", "text": {"content": texto}}]},
-            })
-        except Exception:
-            logging.exception("Error poblando pregunta Palantir '%s'/'%s'", tipo, clave)
+        if (tipo, clave) not in existentes:
+            try:
+                _crear_pagina_en_bbdd(db_id, {
+                    "Clave": {"title": [{"type": "text", "text": {"content": clave}}]},
+                    "Tipo": {"select": {"name": tipo}},
+                    "Texto": {"rich_text": [{"type": "text", "text": {"content": texto}}]},
+                })
+            except Exception:
+                logging.exception("Error poblando pregunta Palantir '%s'/'%s'", tipo, clave)
+    _preguntas_palantir_bbdd_pobladas.add(db_id)
 
 
 def obtener_preguntas_palantir(tipo: str) -> list[dict]:
@@ -896,13 +977,17 @@ def obtener_preguntas_palantir(tipo: str) -> list[dict]:
             cursor = resp.get("next_cursor")
         if not resultado:
             resultado = [{"clave": c, "texto": t} for tp, c, t in _PREGUNTAS_PALANTIR_DEFAULT if tp == tipo]
+        resultado.sort(key=lambda x: x["clave"])
         with _lock_preguntas_palantir:
             _cache_preguntas_palantir_data[tipo] = resultado
             _cache_preguntas_palantir_ts[tipo] = time.time()
         return resultado
     except Exception:
         logging.exception("Error leyendo preguntas Palantir tipo '%s'", tipo)
-        return [{"clave": c, "texto": t} for tp, c, t in _PREGUNTAS_PALANTIR_DEFAULT if tp == tipo]
+        return sorted(
+            [{"clave": c, "texto": t} for tp, c, t in _PREGUNTAS_PALANTIR_DEFAULT if tp == tipo],
+            key=lambda x: x["clave"],
+        )
 
 
 def obtener_o_crear_bbdd_evaluado(nombre_evaluado):
@@ -951,15 +1036,10 @@ def guardar_en_notion(nombre, respuestas, relacion="igual", area="Negocio"):
         database_id = obtener_o_crear_bbdd_evaluado(nombre_evaluado)
         asegurar_propiedades_bbdd(database_id)
         fecha = datetime.now(timezone.utc)
-        satisfaccion = respuestas.get("satisfaccion", "")
-        if area == "Negocio":
-            mejor = respuestas.get("mejor_aspecto", "")
-            peor = respuestas.get("peor_aspecto", "")
-        else:
-            _skip = {"evaluado", "proyecto", "satisfaccion", "mejor_aspecto", "peor_aspecto"}
-            _extras = [v for k, v in respuestas.items() if k not in _skip and v]
-            mejor = _extras[0] if len(_extras) > 0 else ""
-            peor = _extras[1] if len(_extras) > 1 else ""
+        _skip = {"evaluado", "proyecto", "satisfaccion"}
+        _extras = [v for k, v in respuestas.items() if k not in _skip and v]
+        valoracion = _extras[0] if len(_extras) > 0 else ""
+        justificacion = _extras[1] if len(_extras) > 1 else ""
         suf_col = {"superior": "de superiores", "inferior": "de inferiores"}.get(relacion, "de iguales")
         _crear_pagina_en_bbdd(
             database_id,
@@ -969,9 +1049,8 @@ def guardar_en_notion(nombre, respuestas, relacion="igual", area="Negocio"):
                 "Proyecto": {"rich_text": [{"text": {"content": proyecto}}]},
                 "Fecha": {"date": {"start": fecha.isoformat()}},
                 "Area": {"select": {"name": area}},
-                f"Satisfaccion {suf_col}": {"rich_text": [{"text": {"content": satisfaccion}}]},
-                f"Mejor aspecto {suf_col}": {"rich_text": [{"text": {"content": mejor}}]},
-                f"Peor aspecto {suf_col}": {"rich_text": [{"text": {"content": peor}}]},
+                f"Valoración {suf_col}": {"rich_text": [{"text": {"content": valoracion}}]},
+                f"Justificación {suf_col}": {"rich_text": [{"text": {"content": justificacion}}]},
             },
         )
         return True
@@ -1367,38 +1446,33 @@ def obtener_evaluaciones_de_bbdd(database_id, evaluado):
                 nombre_tecnico = titulo_items[0]["text"]["content"] if titulo_items else ""
                 evaluador = _texto_rich_text(props, "Evaluador") or _texto_rich_text(props, "Persona que evalua") or nombre_tecnico or "Desconocido"
                 fecha = (props.get("Fecha", {}).get("date") or {}).get("start", "")
-                sat_sup  = _texto_rich_text(props, "Satisfaccion de superiores")
-                sat_igu  = _texto_rich_text(props, "Satisfaccion de iguales")
-                sat_inf  = _texto_rich_text(props, "Satisfaccion de inferiores")
-                mej_sup  = _texto_rich_text(props, "Mejor aspecto de superiores")
-                mej_igu  = _texto_rich_text(props, "Mejor aspecto de iguales")
-                mej_inf  = _texto_rich_text(props, "Mejor aspecto de inferiores")
-                peor_sup = _texto_rich_text(props, "Peor aspecto de superiores")
-                peor_igu = _texto_rich_text(props, "Peor aspecto de iguales")
-                peor_inf = _texto_rich_text(props, "Peor aspecto de inferiores")
-                if sat_sup or mej_sup or peor_sup:
+                val_sup  = _texto_rich_text(props, "Valoración de superiores") or _texto_rich_text(props, "Mejor aspecto de superiores")
+                val_igu  = _texto_rich_text(props, "Valoración de iguales") or _texto_rich_text(props, "Mejor aspecto de iguales")
+                val_inf  = _texto_rich_text(props, "Valoración de inferiores") or _texto_rich_text(props, "Mejor aspecto de inferiores")
+                jus_sup  = _texto_rich_text(props, "Justificación de superiores") or _texto_rich_text(props, "Peor aspecto de superiores")
+                jus_igu  = _texto_rich_text(props, "Justificación de iguales") or _texto_rich_text(props, "Peor aspecto de iguales")
+                jus_inf  = _texto_rich_text(props, "Justificación de inferiores") or _texto_rich_text(props, "Peor aspecto de inferiores")
+                if val_sup or jus_sup:
                     relacion = "superior"
-                    sat_act, mej_act, peor_act = sat_sup, mej_sup, peor_sup
-                elif sat_inf or mej_inf or peor_inf:
+                    q1_act, q2_act = val_sup, jus_sup
+                elif val_inf or jus_inf:
                     relacion = "inferior"
-                    sat_act, mej_act, peor_act = sat_inf, mej_inf, peor_inf
-                elif sat_igu or mej_igu or peor_igu:
+                    q1_act, q2_act = val_inf, jus_inf
+                elif val_igu or jus_igu:
                     relacion = "igual"
-                    sat_act, mej_act, peor_act = sat_igu, mej_igu, peor_igu
+                    q1_act, q2_act = val_igu, jus_igu
                 else:
                     relacion = ""
-                    sat_act  = _texto_rich_text(props, "Satisfaccion")
-                    mej_act  = _texto_rich_text(props, "Mejor aspecto")
-                    peor_act = _texto_rich_text(props, "Peor aspecto")
+                    q1_act = _texto_rich_text(props, "Mejor aspecto")
+                    q2_act = _texto_rich_text(props, "Peor aspecto")
                 evaluaciones.append({
                     "nombre": evaluador,
                     "evaluado": evaluado,
                     "persona_evaluada": evaluado,
                     "persona_que_evalua": evaluador,
                     "proyecto": _texto_rich_text(props, "Proyecto"),
-                    "satisfaccion": sat_act,
-                    "mejor_aspecto": mej_act,
-                    "peor_aspecto": peor_act,
+                    "q1": q1_act,
+                    "q2": q2_act,
                     "relacion": relacion,
                     "fecha": fecha,
                 })
@@ -2210,6 +2284,7 @@ _PROPS_PERSONAL_PREGUNTAS = {
 PREGUNTAS_PERSONALES_DEFAULT = {
     "mensaje_inicial": (
         "📝 *Tienes opción de seguimiento personal pendiente*\n"
+        "_Pulsa cualquier tecla para comenzar_\n"
         "Este es tu espacio privado para compartir lo que quieras. "
         "¿Qué me quieres contar? Responde a este mensaje con lo que tengas en mente.\n\n"
         "_Si quieres cancelar, escribe SOS en cualquier momento._\n"

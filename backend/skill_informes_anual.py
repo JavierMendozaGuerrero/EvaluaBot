@@ -356,12 +356,11 @@ def _formatear_contexto(emp_data: dict) -> str:
                 proyecto  = ev.get("proyecto") or "Sin proyecto"
                 evaluador = ev.get("persona_que_evalua") or ev.get("nombre") or "Desconocido"
                 fecha     = (ev.get("fecha") or "")[:10]
-                sat       = ev.get("satisfaccion", "")
-                mejor     = ev.get("mejor_aspecto", "")
-                peor      = ev.get("peor_aspecto", "")
+                q1        = ev.get("q1", "")
+                q2        = ev.get("q2", "")
                 bloques.append(
                     f"[{fecha}] Proyecto: {proyecto} | Evaluador: {evaluador} | "
-                    f"Satisfacción: {sat}/5 | Mejor: {mejor} | Peor: {peor}"
+                    f"Valoración: {q1} | Ejemplo: {q2}"
                 )
 
     return "\n".join(bloques) if bloques else "(Sin datos de evaluación disponibles)"

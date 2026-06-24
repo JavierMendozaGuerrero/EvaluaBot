@@ -223,14 +223,13 @@ def evaluaciones_a_texto(evaluaciones: list[dict]) -> str:
         evaluador = ev.get("persona_que_evalua") or ev.get("nombre") or "Desconocido"
         proyecto = ev.get("proyecto") or "Sin proyecto"
         fecha = (ev.get("fecha") or "")[:10]
-        sat = ev.get("satisfaccion", "")
-        mejor = ev.get("mejor_aspecto", "")
-        peor = ev.get("peor_aspecto", "")
+        q1 = ev.get("q1", "")
+        q2 = ev.get("q2", "")
         rel = ev.get("relacion", "")
         nivel = {"superior": "líder", "igual": "igual nivel", "inferior": "subordinado"}.get(rel, "sin nivel")
         lineas.append(
             f"[{fecha}] {evaluador} ({nivel}) — Proyecto: {proyecto} | "
-            f"Satisfacción: {sat}/5 | Mejor: {mejor} | A mejorar: {peor}"
+            f"Valoración: {q1} | Ejemplo: {q2}"
         )
     return "\n".join(lineas)
 

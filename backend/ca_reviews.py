@@ -219,9 +219,8 @@ def _resumen_advisee(advisee: str, desde_fecha: str | None) -> str:
         fecha = ev.get("fecha", "")[:10] if ev.get("fecha") else "?"
         lineas.append(
             f"• [{fecha}] *{ev.get('persona_que_evalua', '?')}* en {ev.get('proyecto', '?')} – "
-            f"Satisfacción {ev.get('satisfaccion', '?')}/5 | "
-            f"Mejor: {ev.get('mejor_aspecto', '?')} | "
-            f"Peor: {ev.get('peor_aspecto', '?')}"
+            f"Valoración: {ev.get('q1', '?')} | "
+            f"Ejemplo: {ev.get('q2', '?')}"
         )
 
     n = len(lineas)
@@ -436,6 +435,7 @@ def enviar_pregunta_inicial_ca() -> None:
                     channel=dm_channel,
                     text=(
                         "📋 *CA: Tienes evaluación de advisees pendiente*\n"
+                        "_Pulsa cualquier tecla para comenzar_\n"
                         "_Si quieres cancelar en cualquier momento, escribe SOS en el hilo._\n"
                         "_Esta evaluación es totalmente privada, solo podrás verlas TÚ._"
                     ),

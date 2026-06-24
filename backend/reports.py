@@ -24,8 +24,8 @@ def _evaluaciones_para_prompt(evaluaciones):
             f"- Evaluado: {e['evaluado']} | "
             f"Evaluador: {e.get('persona_que_evalua') or e.get('nombre') or 'Desconocido'}{nivel_str} | "
             f"Proyecto: {e.get('proyecto') or 'Sin proyecto'} | "
-            f"Satisfacción: {e['satisfaccion']} | Mejor aspecto: {e['mejor_aspecto']} | "
-            f"Peor aspecto: {e['peor_aspecto']} | Fecha: {e['fecha']}"
+            f"Valoración: {e.get('q1', '')} | "
+            f"Ejemplo: {e.get('q2', '')} | Fecha: {e['fecha']}"
         )
     return "\n".join(lineas)
 
@@ -269,12 +269,12 @@ function render() {{
             <p>Proyecto: ${{escapeHtml(actual.proyecto || "Sin proyecto")}}</p>
             <div class="quote-grid">
               <div class="quote">
-                <h2>Lo mejor</h2>
-                <p>${{escapeHtml(actual.mejor_aspecto || "Sin respuesta")}}</p>
+                <h2>Valoración</h2>
+                <p>${{escapeHtml(actual.q1 || "Sin respuesta")}}</p>
               </div>
               <div class="quote">
-                <h2>A mejorar</h2>
-                <p>${{escapeHtml(actual.peor_aspecto || "Sin respuesta")}}</p>
+                <h2>Ejemplo</h2>
+                <p>${{escapeHtml(actual.q2 || "Sin respuesta")}}</p>
               </div>
             </div>
           </article>

@@ -1258,6 +1258,30 @@ function AdviseeDetail({ token, advisee, advisees, onBack, onNavigate }) {
   const [gestionOpen, setGestionOpen] = useState(false);
   const [opiniones, setOpiniones] = useState(null);
   const [loadingOpiniones, setLoadingOpiniones] = useState(false);
+  const [accesoIndividual, setAccesoIndividual] = useState(false);
+  const [togglingAccesoIndividual, setTogglingAccesoIndividual] = useState(false);
+
+  useEffect(() => {
+    const apply = (data) => setAccesoIndividual(data.activo || false);
+    apiRequestCached(`/api/acceso-advisee-individual?advisee=${encodeURIComponent(advisee.nombre)}`, { token }, apply)
+      .then(apply)
+      .catch(() => {});
+  }, [token, advisee.nombre]);
+
+  async function toggleAccesoIndividual() {
+    setTogglingAccesoIndividual(true);
+    try {
+      const data = await apiRequest("/api/acceso-advisee-individual", {
+        token,
+        method: "POST",
+        body: { advisee: advisee.nombre, activo: !accesoIndividual },
+      });
+      setAccesoIndividual(data.activo);
+    } catch {
+    } finally {
+      setTogglingAccesoIndividual(false);
+    }
+  }
 
   async function cargarOpiniones() {
     if (opiniones !== null) { setOpiniones(null); return; }
@@ -1304,6 +1328,17 @@ function AdviseeDetail({ token, advisee, advisees, onBack, onNavigate }) {
                 </button>
                 <button className="secondary" onClick={() => onNavigate({ type: "subir-informe", advisee, from: "advisee-detail", advisees })}>
                   Subir informe final
+                </button>
+                <button
+                  className={accesoIndividual ? "" : "secondary"}
+                  onClick={toggleAccesoIndividual}
+                  disabled={togglingAccesoIndividual}
+                >
+                  {togglingAccesoIndividual
+                    ? "Guardando..."
+                    : accesoIndividual
+                    ? "Acceso a informe activo — revocar"
+                    : "Dar acceso a su informe"}
                 </button>
               </div>
             )}

@@ -27,6 +27,8 @@ from .notion_service import (
     obtener_ca_de_empleado,
     ca_tiene_acceso_activo,
     toggle_acceso_advisees,
+    advisee_tiene_acceso_individual,
+    toggle_acceso_advisee_individual,
     obtener_perfil_empleado,
 )
 from .reports import generar_archivo_trayectoria, generar_archivos_informe
@@ -200,6 +202,18 @@ class ApiHandler(BaseHTTPRequestHandler):
                 activo = ca_tiene_acceso_activo(sesion.get("persona", ""), ca_aliases=ca_aliases_sesion)
                 self.responder_json({"activo": activo})
                 return
+            if ruta == "/api/acceso-advisee-individual":
+                sesion = self.sesion_actual()
+                if not sesion:
+                    raise PermissionError("Inicia sesión para acceder.")
+                query_params = urllib.parse.parse_qs(parsed.query)
+                advisee_nombre = query_params.get("advisee", [""])[0]
+                if not advisee_nombre:
+                    self.responder_json({"error": "Falta el parámetro advisee."}, 400)
+                    return
+                activo = advisee_tiene_acceso_individual(advisee_nombre, sesion.get("persona", ""))
+                self.responder_json({"activo": activo})
+                return
             if ruta == "/api/informe-final":
                 sesion = self.sesion_actual()
                 if not sesion:
@@ -216,7 +230,10 @@ class ApiHandler(BaseHTTPRequestHandler):
                 es_propio = normalizar_nombre(evaluado) == normalizar_nombre(ca_nombre)
                 if es_propio and not es_admin and not es_ca:
                     ca_del_evaluado = obtener_ca_de_empleado(evaluado)
-                    acceso = bool(ca_del_evaluado and ca_tiene_acceso_activo(ca_del_evaluado))
+                    acceso = bool(ca_del_evaluado and (
+                        ca_tiene_acceso_activo(ca_del_evaluado)
+                        or advisee_tiene_acceso_individual(evaluado, ca_del_evaluado)
+                    ))
                     informe = obtener_informe_final_reciente(evaluado) if acceso else None
                     if acceso and informe:
                         self.responder_json({
@@ -321,7 +338,7 @@ class ApiHandler(BaseHTTPRequestHandler):
                     if not es_propio_tray:
                         raise PermissionError("Solo administradores o CAs pueden generar informes.")
                     ca_tray = obtener_ca_de_empleado(evaluado)
-                    if not (ca_tray and ca_tiene_acceso_activo(ca_tray)):
+                    if not (ca_tray and (ca_tiene_acceso_activo(ca_tray) or advisee_tiene_acceso_individual(evaluado, ca_tray))):
                         raise PermissionError("Tu CA aún no ha publicado tu informe final.")
                 validar_acceso_sesion(sesion, evaluado, extra_permitidos=advisees_ca)
                 total, slug = generar_archivo_trayectoria(evaluado)
@@ -357,6 +374,17 @@ class ApiHandler(BaseHTTPRequestHandler):
                 exito = toggle_acceso_advisees(sesion.get("persona", ""), activo, ca_aliases=ca_aliases_sesion)
                 if not exito:
                     raise RuntimeError("No se encontró tu fila en Lista CA. Contacta con el administrador.")
+                self.responder_json({"ok": True, "activo": activo})
+                return
+            if ruta == "/api/acceso-advisee-individual":
+                advisee_nombre = datos.get("advisee", "")
+                activo = datos.get("activo", False)
+                if not advisee_nombre:
+                    self.responder_json({"error": "Falta el campo advisee."}, 400)
+                    return
+                exito = toggle_acceso_advisee_individual(sesion.get("persona", ""), advisee_nombre, activo)
+                if not exito:
+                    raise RuntimeError("No se pudo actualizar el acceso individual.")
                 self.responder_json({"ok": True, "activo": activo})
                 return
             if ruta == "/api/subir-informe-final":

@@ -2125,6 +2125,103 @@ def toggle_acceso_advisees(ca_nombre: str, activo: bool, ca_aliases=None) -> boo
 
 
 # ---------------------------------------------------------------------------
+# Acceso individual por advisee
+# ---------------------------------------------------------------------------
+
+_cache_acceso_individual_db: dict = {"db_id": None}
+
+
+def _obtener_o_crear_bbdd_acceso_individual() -> str:
+    with lock:
+        db_id = _cache_acceso_individual_db["db_id"]
+    if db_id:
+        return db_id
+    titulo = "Acceso Individual Advisee"
+    resultado = notion.search(
+        query=titulo,
+        filter={"value": _tipo_objeto_busqueda_bbdd(), "property": "object"},
+        page_size=10,
+    )
+    for bbdd in resultado.get("results", []):
+        if normalizar_nombre(_extraer_titulo_bbdd(bbdd)) == normalizar_nombre(titulo):
+            db_id = _data_source_id(bbdd)
+            with lock:
+                _cache_acceso_individual_db["db_id"] = db_id
+            return db_id
+    parent = _parent_bbdd_referencia()
+    props = {"Name": {"title": {}}, "CA": {"rich_text": {}}, "Activo": {"checkbox": {}}}
+    if _usa_data_sources():
+        nueva = notion.databases.create(
+            parent=parent,
+            title=[{"type": "text", "text": {"content": titulo}}],
+            initial_data_source={"title": [{"type": "text", "text": {"content": titulo}}], "properties": props},
+        )
+        nueva = notion.databases.retrieve(database_id=nueva["id"])
+    else:
+        nueva = notion.databases.create(
+            parent=parent,
+            title=[{"type": "text", "text": {"content": titulo}}],
+            properties=props,
+        )
+    db_id = _data_source_id(nueva)
+    with lock:
+        _cache_acceso_individual_db["db_id"] = db_id
+    logging.info("Base de datos 'Acceso Individual Advisee' creada en Notion")
+    return db_id
+
+
+def _acceso_individual_fila(db_id: str, advisee_key: str, ca_key: str) -> dict | None:
+    cursor = None
+    while True:
+        kwargs: dict = {"page_size": 100}
+        if cursor:
+            kwargs["start_cursor"] = cursor
+        resp = _query_bbdd(db_id, **kwargs)
+        for fila in resp.get("results", []):
+            nombre = _extraer_titulo_pagina(fila)
+            ca_val = ""
+            ca_prop = fila.get("properties", {}).get("CA", {}).get("rich_text", [])
+            if ca_prop:
+                ca_val = ca_prop[0].get("plain_text", "")
+            if _norm_ca(nombre) == advisee_key and _norm_ca(ca_val) == ca_key:
+                return fila
+        if not resp.get("has_more"):
+            break
+        cursor = resp.get("next_cursor")
+    return None
+
+
+def advisee_tiene_acceso_individual(advisee: str, ca_nombre: str) -> bool:
+    try:
+        db_id = _obtener_o_crear_bbdd_acceso_individual()
+        fila = _acceso_individual_fila(db_id, _norm_ca(advisee), _norm_ca(ca_nombre))
+        if not fila:
+            return False
+        return bool(fila.get("properties", {}).get("Activo", {}).get("checkbox", False))
+    except Exception:
+        logging.exception("Error verificando acceso individual de advisee '%s'", advisee)
+        return False
+
+
+def toggle_acceso_advisee_individual(ca_nombre: str, advisee: str, activo: bool) -> bool:
+    try:
+        db_id = _obtener_o_crear_bbdd_acceso_individual()
+        fila = _acceso_individual_fila(db_id, _norm_ca(advisee), _norm_ca(ca_nombre))
+        if fila:
+            notion.pages.update(page_id=fila["id"], properties={"Activo": {"checkbox": activo}})
+        else:
+            _crear_pagina_en_bbdd(db_id, {
+                "Name": {"title": [{"text": {"content": advisee}}]},
+                "CA": {"rich_text": [{"text": {"content": ca_nombre}}]},
+                "Activo": {"checkbox": activo},
+            })
+        return True
+    except Exception:
+        logging.exception("Error actualizando acceso individual de advisee '%s'", advisee)
+        return False
+
+
+# ---------------------------------------------------------------------------
 # Informes Finales
 # ---------------------------------------------------------------------------
 

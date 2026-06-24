@@ -139,7 +139,12 @@ def manejar_mensaje_personal(event, logger) -> None:
         if modo == "pre_inicial":
             estado["modo"] = "esperando_comentario"
             accion = "preguntar"
-            pregunta = "Ya puedes responder."
+            pregunta = (
+                "Este espacio es para registrar información personal que consideres relevante: "
+                "pequeños logros que te hayan acercado a tus objetivos marcados con tu CA, "
+                "dificultades que hayan afectado tu avance en proyectos u objetivos y que no hayas podido comunicar a tu CA, "
+                "o información que consideres relevante mencionar.\n\nResponde aquí:"
+            )
 
         elif modo == "esperando_comentario":
             if texto:

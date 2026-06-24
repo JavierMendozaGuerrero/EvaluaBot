@@ -2289,13 +2289,9 @@ _PROPS_PERSONAL_PREGUNTAS = {
 PREGUNTAS_PERSONALES_DEFAULT = {
     "mensaje_inicial": (
         "📝 *Tienes opción de seguimiento personal pendiente*\n"
-        "Este espacio es para registrar información personal que consideres relevante: "
-        "pequeños logros que te hayan acercado a tus objetivos marcados con tu CA, "
-        "dificultades que hayan afectado tu avance en proyectos u objetivos y que no hayas podido comunicar a tu CA, "
-        "o información que consideres relevante mencionar.\n\n"
-        "_Pulsa cualquier tecla para comenzar_\n"
         "_Si quieres cancelar, escribe SOS en cualquier momento._\n"
-        "_Esta evaluación es totalmente privada, solo podrá verla tu CA._"
+        "_Esta evaluación es totalmente privada, solo podrá verla tu CA._\n\n"
+        "_Pulsa cualquier tecla para comenzar_"
     ),
 }
 

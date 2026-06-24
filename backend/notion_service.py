@@ -601,26 +601,17 @@ def _obtener_o_crear_bbdd_preguntas():
         return None
 
 
-_Q4_BOTTOM_TOP = (
-    "Este mes, ¿cómo valorarías la contribución del Project Leader al buen avance del proyecto?\n"
-    "Puedes considerar claridad, comunicación, prioridades, riesgos, equipo o cliente, pero no es necesario cubrir todos los aspectos."
-)
-_Q4_TOP_BOTTOM = (
-    "Este mes, ¿cómo valorarías la contribución del miembro del equipo al buen avance del proyecto?\n"
-    "Puedes considerar claridad, comunicación, prioridades, riesgos, equipo o cliente, pero no es necesario cubrir todos los aspectos."
-)
-_Q4_SAME_LEVEL = (
-    "Este mes, ¿cómo valorarías la contribución de tu compañero al buen avance del proyecto?\n"
-    "Puedes considerar claridad, comunicación, prioridades, riesgos, equipo o cliente, pero no es necesario cubrir todos los aspectos."
-)
+_Q4_BOTTOM_TOP = "¿Cómo valorarías del 1 al 5 la contribución del Project Leader al buen avance del proyecto?"
+_Q4_TOP_BOTTOM = "¿Cómo valorarías del 1 al 5 la contribución de {nombre} al buen avance del proyecto?"
+_Q4_SAME_LEVEL = "¿Cómo valorarías del 1 al 5 la contribución de {nombre} al buen avance del proyecto?"
 _Q5_TEXTO = "Indica un ejemplo concreto que justifique tu valoración"
 
 _PREGUNTAS_INICIALES = [
-    ("Top-Bottom", "q1", _Q4_TOP_BOTTOM + " (número del 1 al 5)"),
+    ("Top-Bottom", "q1", _Q4_TOP_BOTTOM),
     ("Top-Bottom", "q2", _Q5_TEXTO),
-    ("Bottom-Top", "q1", _Q4_BOTTOM_TOP + " (número del 1 al 5)"),
+    ("Bottom-Top", "q1", _Q4_BOTTOM_TOP),
     ("Bottom-Top", "q2", _Q5_TEXTO),
-    ("Same Level", "q1", _Q4_SAME_LEVEL + " (número del 1 al 5)"),
+    ("Same Level", "q1", _Q4_SAME_LEVEL),
     ("Same Level", "q2", _Q5_TEXTO),
 ]
 
@@ -631,19 +622,21 @@ def _poblar_bbdd_preguntas(bbdd_id):
     """Añade las entradas que falten en la BD de preguntas. Idempotente."""
     if bbdd_id in _preguntas_bbdd_pobladas:
         return
-    existentes: set = set()
+    existentes: dict = {}
     try:
         resp = _query_bbdd(bbdd_id)
         for pag in resp.get("results", []):
             props = pag.get("properties", {})
             tipo = ((props.get("Tipo") or {}).get("select") or {}).get("name", "")
             clave = ((props.get("Clave") or {}).get("select") or {}).get("name", "")
+            texto_actual = "".join(t.get("plain_text", "") for t in (props.get("Texto") or {}).get("title", []))
             if tipo and clave:
-                existentes.add((tipo, clave))
+                existentes[(tipo, clave)] = {"page_id": pag["id"], "texto": texto_actual}
     except Exception:
         logging.exception("Error leyendo entradas existentes en BD Preguntas")
     for tipo, clave, texto in _PREGUNTAS_INICIALES:
-        if (tipo, clave) not in existentes:
+        entrada = existentes.get((tipo, clave))
+        if entrada is None:
             try:
                 _crear_pagina_en_bbdd(bbdd_id, {
                     "Texto": {"title": [{"text": {"content": texto}}]},
@@ -652,6 +645,14 @@ def _poblar_bbdd_preguntas(bbdd_id):
                 })
             except Exception:
                 logging.exception("Error creando fila '%s'/'%s' en BD Preguntas", tipo, clave)
+        elif clave == "q1" and entrada["texto"].startswith("Este mes"):
+            try:
+                notion.pages.update(
+                    page_id=entrada["page_id"],
+                    properties={"Texto": {"title": [{"type": "text", "text": {"content": texto}}]}},
+                )
+            except Exception:
+                logging.exception("Error actualizando q1 en BD Preguntas '%s'/'%s'", tipo, clave)
     _preguntas_bbdd_pobladas.add(bbdd_id)
 
 
@@ -858,11 +859,11 @@ _PROPS_PREGUNTAS_PALANTIR = {
 }
 
 _PREGUNTAS_PALANTIR_DEFAULT = [
-    ("Top-Bottom", "q1", _Q4_TOP_BOTTOM + " (número del 1 al 5)"),
+    ("Top-Bottom", "q1", _Q4_TOP_BOTTOM),
     ("Top-Bottom", "q2", _Q5_TEXTO),
-    ("Bottom-Top", "q1", _Q4_BOTTOM_TOP + " (número del 1 al 5)"),
+    ("Bottom-Top", "q1", _Q4_BOTTOM_TOP),
     ("Bottom-Top", "q2", _Q5_TEXTO),
-    ("Same Level", "q1", _Q4_SAME_LEVEL + " (número del 1 al 5)"),
+    ("Same Level", "q1", _Q4_SAME_LEVEL),
     ("Same Level", "q2", _Q5_TEXTO),
 ]
 
@@ -925,19 +926,21 @@ def _poblar_bbdd_preguntas_palantir(db_id: str) -> None:
     """Añade las entradas que falten en la BD de Palantir. Idempotente."""
     if db_id in _preguntas_palantir_bbdd_pobladas:
         return
-    existentes: set = set()
+    existentes: dict = {}
     try:
         resp = _query_bbdd(db_id)
         for pag in resp.get("results", []):
             props = pag.get("properties", {})
             tipo = ((props.get("Tipo") or {}).get("select") or {}).get("name", "")
             clave = "".join(p.get("plain_text", "") for p in props.get("Clave", {}).get("title", [])).strip()
+            texto_actual = "".join(p.get("plain_text", "") for p in props.get("Texto", {}).get("rich_text", [])).strip()
             if tipo and clave:
-                existentes.add((tipo, clave))
+                existentes[(tipo, clave)] = {"page_id": pag["id"], "texto": texto_actual}
     except Exception:
         logging.exception("Error leyendo entradas existentes en BD Palantir")
     for tipo, clave, texto in _PREGUNTAS_PALANTIR_DEFAULT:
-        if (tipo, clave) not in existentes:
+        entrada = existentes.get((tipo, clave))
+        if entrada is None:
             try:
                 _crear_pagina_en_bbdd(db_id, {
                     "Clave": {"title": [{"type": "text", "text": {"content": clave}}]},
@@ -946,6 +949,14 @@ def _poblar_bbdd_preguntas_palantir(db_id: str) -> None:
                 })
             except Exception:
                 logging.exception("Error poblando pregunta Palantir '%s'/'%s'", tipo, clave)
+        elif clave == "q1" and entrada["texto"].startswith("Este mes"):
+            try:
+                notion.pages.update(
+                    page_id=entrada["page_id"],
+                    properties={"Texto": {"rich_text": [{"type": "text", "text": {"content": texto}}]}},
+                )
+            except Exception:
+                logging.exception("Error actualizando q1 en BD Palantir '%s'/'%s'", tipo, clave)
     _preguntas_palantir_bbdd_pobladas.add(db_id)
 
 
@@ -2386,12 +2397,36 @@ _PROPS_PERSONAL_PREGUNTAS = {
 
 PREGUNTAS_PERSONALES_DEFAULT = {
     "mensaje_inicial": (
-        "📝 *Tienes opción de seguimiento personal pendiente*\n"
-        "_Si quieres cancelar, escribe SOS en cualquier momento._\n"
-        "_Esta evaluación es totalmente privada, solo podrá verla tu CA._\n\n"
-        "_Envía cualquier mensaje en el hilo para comenzar la evaluación_"
+        "📝 *Tienes opción de seguimiento personal pendiente*\n\n"
+        "_Esta evaluación es totalmente privada, solo podrá verla tu CA._\n"
+        "_Si en algún momento quieres cancelar, escribe SOS en el hilo._\n\n"
+        "*Envía cualquier mensaje en el hilo* para comenzar la evaluación. "
+        "Inmediatamente se te mandarán tus objetivos actuales para que puedas reflexionar "
+        "si te estás dirigiendo hacia conseguirlos. 🏆"
     ),
 }
+
+_mensaje_inicial_migrado: set = set()
+
+
+def _migrar_mensaje_inicial(db_id: str) -> None:
+    if db_id in _mensaje_inicial_migrado:
+        return
+    _mensaje_inicial_migrado.add(db_id)
+    try:
+        resp = _query_bbdd(db_id, filter={"property": "Clave", "title": {"equals": "mensaje_inicial"}})
+        for fila in resp.get("results", []):
+            props = fila.get("properties", {})
+            texto_actual = " ".join(p.get("plain_text", "") for p in props.get("Texto", {}).get("rich_text", [])).strip()
+            if "SOS en cualquier momento" in texto_actual or "Pulsa cualquier tecla" in texto_actual:
+                notion.pages.update(
+                    page_id=fila["id"],
+                    properties={"Texto": {"rich_text": [{"type": "text", "text": {"content": PREGUNTAS_PERSONALES_DEFAULT["mensaje_inicial"]}}]}},
+                )
+                with lock:
+                    _cache_personal_preguntas.clear()
+    except Exception:
+        logging.exception("Error migrando mensaje_inicial personal")
 
 
 def _obtener_o_crear_pagina_personales() -> str | None:
@@ -2484,6 +2519,8 @@ def obtener_preguntas_personales() -> dict:
     )
     if not db_id:
         return dict(PREGUNTAS_PERSONALES_DEFAULT)
+
+    _migrar_mensaje_inicial(db_id)
 
     try:
         resultado = {}

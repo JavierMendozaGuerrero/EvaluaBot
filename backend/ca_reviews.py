@@ -8,6 +8,7 @@ Notion → pregunta si hay otro advisee.
 """
 
 import logging
+import re
 import threading
 import time
 from datetime import datetime, timedelta, timezone
@@ -54,6 +55,24 @@ _cache_nombre_usuario: dict = {}
 _cache_lista_empleados: dict = {"db_id": None, "nombres": None}
 
 PREFIJO_BBDD = "Opiniones - "
+
+_PALABRAS_NUMERO_CA = {
+    "uno": 1, "dos": 2, "tres": 3, "cuatro": 4, "cinco": 5,
+    "seis": 6, "siete": 7, "ocho": 8, "nueve": 9, "diez": 10,
+}
+
+
+def _resolver_numero_advisee(texto, estado):
+    t = texto.strip().lower()
+    idx = _PALABRAS_NUMERO_CA.get(t)
+    if idx is None and t.isdigit():
+        idx = int(t)
+    if idx is not None:
+        lista = estado.get("lista_advisees", [])
+        if 1 <= idx <= len(lista):
+            return lista[idx - 1]
+    return texto
+
 
 _PROPS_CA = {
     "Name":    {"title": {}},
@@ -469,10 +488,10 @@ def enviar_pregunta_inicial_ca() -> None:
                 resp = slack_app.client.chat_postMessage(
                     channel=dm_channel,
                     text=(
-                        "📋 *CA: Tienes evaluación de advisees pendiente*\n"
-                        "_Envía cualquier mensaje en el hilo para comenzar la evaluación_\n"
-                        "_Si quieres cancelar en cualquier momento, escribe SOS en el hilo._\n"
-                        "_Esta evaluación es totalmente privada, solo podrás verlas TÚ._"
+                        "📋 *CA: Tienes evaluación de advisees pendiente*\n\n"
+                        "_Esta evaluación es totalmente privada, solo podrás verla tú._\n"
+                        "_Si en algún momento quieres cancelar, escribe SOS en el hilo._\n\n"
+                        "*Envía cualquier mensaje en el hilo* para comenzar la evaluación"
                     ),
                 )
                 with _lock:
@@ -530,7 +549,7 @@ def manejar_mensaje_ca(event, logger) -> None:
             accion = "pedir_advisee"
 
         elif modo == "esperando_advisee":
-            payload["advisee"] = texto
+            payload["advisee"] = _resolver_numero_advisee(texto, estado)
             payload["ca_nombre"] = estado.get("ca_nombre")
             accion = "validar_y_mostrar"
 
@@ -622,7 +641,7 @@ def manejar_mensaje_ca(event, logger) -> None:
                 estado["modo"] = "terminado"
                 accion = "terminar"
             else:
-                payload["advisee"] = texto
+                payload["advisee"] = _resolver_numero_advisee(texto, estado)
                 payload["ca_nombre"] = estado.get("ca_nombre")
                 accion = "validar_y_mostrar"
 
@@ -632,11 +651,12 @@ def manejar_mensaje_ca(event, logger) -> None:
     def _reply_lista_advisees(prefijo=""):
         ca_nombre_l, ca_aliases_l = _identidad_usuario_slack(user_id, logger)
         advisees_l = obtener_advisees(ca_nombre_l, ca_aliases=ca_aliases_l)
+        estado["lista_advisees"] = advisees_l
         if advisees_l:
-            lista = "\n".join(f"- {a}" for a in advisees_l)
-            reply(f"{prefijo}¿De qué advisee te gustaría hacer seguimiento? (escribe el nombre o `no` para terminar)\n{lista}")
+            lista = "\n".join(f"{i + 1} {a}" for i, a in enumerate(advisees_l))
+            reply(f"{prefijo}¿De qué advisee te gustaría hacer seguimiento? (escribe `no` para terminar)\n{lista}")
         else:
-            reply(f"{prefijo}¿De qué advisee te gustaría hacer seguimiento? (escribe el nombre o `no` para terminar)")
+            reply(f"{prefijo}¿De qué advisee te gustaría hacer seguimiento? (escribe `no` para terminar)")
 
     if accion == "pedir_advisee":
         _reply_lista_advisees()
@@ -673,18 +693,71 @@ def manejar_mensaje_ca(event, logger) -> None:
             if sin_novedades:
                 _reply_lista_advisees(f"{resumen}\n\n")
             else:
-                reply(
-                    f"{resumen}\n\n"
-                    "¿Quieres un resumen estructurado por competencias generado por Claude? (`sí` / `no`)\n"
-                    "_Evitar el uso excesivo por favor._"
+                reply(resumen)
+                slack_app.client.chat_postMessage(
+                    channel=channel,
+                    thread_ts=thread_ts,
+                    text="¿Quieres un resumen estructurado por competencias generado por Claude?",
+                    blocks=[
+                        {
+                            "type": "section",
+                            "text": {
+                                "type": "mrkdwn",
+                                "text": "¿Quieres un resumen estructurado por competencias generado por Claude?\n_Evitar el uso excesivo por favor._",
+                            },
+                        },
+                        {
+                            "type": "actions",
+                            "block_id": f"blq_claude_{user_id}",
+                            "elements": [
+                                {
+                                    "type": "button",
+                                    "text": {"type": "plain_text", "text": "Sí"},
+                                    "value": "si",
+                                    "action_id": "permiso_claude_si",
+                                    "style": "primary",
+                                },
+                                {
+                                    "type": "button",
+                                    "text": {"type": "plain_text", "text": "No"},
+                                    "value": "no",
+                                    "action_id": "permiso_claude_no",
+                                },
+                            ],
+                        },
+                    ],
                 )
 
     elif accion == "mostrar_confirmacion_ca":
-        reply(
+        texto_conf = (
             f"*Resumen de tu valoración:*\n"
             f"• Advisee: *{payload.get('advisee', '?')}*\n"
             f"• Opinión: {payload.get('opinion', '?')}\n\n"
-            "Responde `sí` para guardar en Notion o `modificar` para cambiar una respuesta concreta."
+            "Responde o haz click en sí para guardar en Notion o modificar para cambiar una respuesta concreta."
+        )
+        slack_app.client.chat_postMessage(
+            channel=channel,
+            thread_ts=thread_ts,
+            text=texto_conf,
+            blocks=[
+                {"type": "section", "text": {"type": "mrkdwn", "text": texto_conf}},
+                {
+                    "type": "actions",
+                    "elements": [
+                        {
+                            "type": "button",
+                            "text": {"type": "plain_text", "text": "✅ Sí, guardar"},
+                            "style": "primary",
+                            "action_id": "ca_confirmar",
+                        },
+                        {
+                            "type": "button",
+                            "text": {"type": "plain_text", "text": "✏️ Modificar"},
+                            "action_id": "ca_modificar",
+                        },
+                    ],
+                },
+            ],
         )
 
     elif accion == "pedir_modificacion_ca":
@@ -726,16 +799,16 @@ def manejar_mensaje_ca(event, logger) -> None:
             with _lock:
                 if conv_key in conversaciones_ca:
                     conversaciones_ca[conv_key]["resumen_actual"] = resumen_claude
-            reply(f"📊 *Resumen generado por Claude:*\n\n{resumen_claude}\n\n*¿Qué opinas de esto?*")
+            reply(f"📊 *Resumen generado por Claude:*\n\n{resumen_claude}\n\n¿Qué opinas de esto?")
         except Exception:
             logging.exception("Error generando resumen Claude para '%s'", advisee)
             with _lock:
                 if conv_key in conversaciones_ca:
                     conversaciones_ca[conv_key]["resumen_actual"] = resumen_bruto
-            reply("⚠️ No se pudo generar el resumen con Claude.\n\n*¿Qué opinas de esto?*")
+            reply("⚠️ No se pudo generar el resumen con Claude.\n\n¿Qué opinas de esto?")
 
     elif accion == "pedir_opinion_sin_claude":
-        reply("*¿Qué opinas de esto?*")
+        reply("¿Qué opinas de esto?")
 
     elif accion == "aclarar_permiso_claude":
         reply("Responde `sí` para generar un resumen con Claude, o `no` para continuar directamente.")
@@ -845,3 +918,67 @@ def ciclo_envio_ca() -> None:
             enviar_pregunta_inicial_ca()
         except Exception:
             logging.exception("Error en ciclo CA producción")
+
+
+# ---------------------------------------------------------------------------
+# Action handler – botones Sí / No para permiso Claude
+# ---------------------------------------------------------------------------
+
+@slack_app.action("ca_confirmar")
+def _handle_ca_confirmar(ack, body, logger):
+    ack()
+    try:
+        evento = {
+            "user": body["user"]["id"],
+            "channel": body["channel"]["id"],
+            "thread_ts": body["message"].get("thread_ts") or body["message"]["ts"],
+            "text": "sí",
+        }
+        manejar_mensaje_ca(evento, logger)
+    except Exception:
+        logger.exception("Error procesando confirmación CA interactiva")
+
+
+@slack_app.action("ca_modificar")
+def _handle_ca_modificar(ack, body, logger):
+    ack()
+    try:
+        evento = {
+            "user": body["user"]["id"],
+            "channel": body["channel"]["id"],
+            "thread_ts": body["message"].get("thread_ts") or body["message"]["ts"],
+            "text": "modificar",
+        }
+        manejar_mensaje_ca(evento, logger)
+    except Exception:
+        logger.exception("Error procesando modificación CA interactiva")
+
+
+@slack_app.action(re.compile(r"^permiso_claude_(si|no)$"))
+def _handle_permiso_claude(ack, body, client, logger):
+    ack()
+    try:
+        user_id = body["user"]["id"]
+        valor = body["actions"][0]["value"]
+        channel = body["channel"]["id"]
+        msg = body.get("message", {})
+        thread_ts = msg.get("thread_ts") or msg.get("ts", "")
+        texto_sel = "✅ Sí, generar resumen con Claude" if valor == "si" else "❌ No, continuar sin resumen"
+        try:
+            client.chat_update(
+                channel=channel,
+                ts=msg["ts"],
+                blocks=[{"type": "section", "text": {"type": "mrkdwn", "text": texto_sel}}],
+                text=texto_sel,
+            )
+        except Exception:
+            logger.warning("No se pudo actualizar el mensaje de permiso Claude")
+        evento = {
+            "user": user_id,
+            "channel": channel,
+            "thread_ts": thread_ts,
+            "text": "sí" if valor == "si" else "no",
+        }
+        manejar_mensaje_ca(evento, logger)
+    except Exception:
+        logger.exception("Error procesando permiso Claude interactivo")

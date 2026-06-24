@@ -96,6 +96,34 @@ def enviar_pregunta_inicial_personal() -> None:
         logging.exception("Error en enviar_pregunta_inicial_personal")
 
 
+def _enviar_preguntando_otro(channel, thread_ts):
+    texto = "✅ Evaluación guardada. ¿Quieres añadir otro comentario?"
+    slack_app.client.chat_postMessage(
+        channel=channel,
+        thread_ts=thread_ts,
+        text=texto,
+        blocks=[
+            {"type": "section", "text": {"type": "mrkdwn", "text": texto}},
+            {
+                "type": "actions",
+                "elements": [
+                    {
+                        "type": "button",
+                        "text": {"type": "plain_text", "text": "✅ Sí"},
+                        "style": "primary",
+                        "action_id": "personal_otro_si",
+                    },
+                    {
+                        "type": "button",
+                        "text": {"type": "plain_text", "text": "❌ No"},
+                        "action_id": "personal_otro_no",
+                    },
+                ],
+            },
+        ],
+    )
+
+
 def manejar_mensaje_personal(event, logger) -> None:
     user_id = event.get("user")
     channel = event.get("channel", "")
@@ -140,10 +168,9 @@ def manejar_mensaje_personal(event, logger) -> None:
             estado["modo"] = "esperando_comentario"
             accion = "preguntar"
             pregunta = (
-                "Este espacio es para registrar información personal que consideres relevante: "
-                "pequeños logros que te hayan acercado a tus objetivos marcados con tu CA, "
-                "dificultades que hayan afectado tu avance en proyectos u objetivos y que no hayas podido comunicar a tu CA, "
-                "o información que consideres relevante mencionar.\n\nResponde aquí:"
+                "Aquí puedes mandar cualquier progreso o comentario que consideres relevante para tu CA. "
+                "_Ejemplo: algún entregable concreto que hayas realizado estas semanas, "
+                "cómo te has acercado a tus objetivos, o alguna dificultad encontrada._"
             )
 
         elif modo == "esperando_comentario":
@@ -191,14 +218,44 @@ def manejar_mensaje_personal(event, logger) -> None:
                 personal_dm_activas.discard(user_id)
                 accion = "ya_terminado"
             else:
-                accion = "preguntar"
-                pregunta = "¿Quieres añadir otro comentario? Responde *sí* para continuar o *no* para finalizar."
+                accion = "preguntar_otro"
 
         elif modo == "terminado":
             accion = "ya_terminado"
 
-    if accion in ("preguntar", "mostrar_resumen"):
+    if accion == "preguntar":
         reply(pregunta)
+        return
+
+    if accion == "mostrar_resumen":
+        slack_app.client.chat_postMessage(
+            channel=dm_channel,
+            thread_ts=thread_ts,
+            text=pregunta,
+            blocks=[
+                {"type": "section", "text": {"type": "mrkdwn", "text": pregunta}},
+                {
+                    "type": "actions",
+                    "elements": [
+                        {
+                            "type": "button",
+                            "text": {"type": "plain_text", "text": "✅ Sí, guardar"},
+                            "style": "primary",
+                            "action_id": "personal_confirmar",
+                        },
+                        {
+                            "type": "button",
+                            "text": {"type": "plain_text", "text": "✏️ Modificar"},
+                            "action_id": "personal_modificar",
+                        },
+                    ],
+                },
+            ],
+        )
+        return
+
+    if accion == "preguntar_otro":
+        _enviar_preguntando_otro(dm_channel, thread_ts)
         return
 
     if accion == "guardar":
@@ -223,7 +280,7 @@ def manejar_mensaje_personal(event, logger) -> None:
             with _lock:
                 if conversaciones_personal.get(user_id, {}).get("modo") == "guardar":
                     conversaciones_personal[user_id]["modo"] = "preguntando_otro"
-            reply("✅ Evaluación guardada. ¿Quieres añadir otro comentario? Responde *sí* para continuar o *no* para finalizar.")
+            _enviar_preguntando_otro(dm_channel, thread_ts)
         else:
             reply("⚠️ No se pudo guardar en Notion. Revisa los permisos o contacta con soporte.")
         return
@@ -231,6 +288,70 @@ def manejar_mensaje_personal(event, logger) -> None:
     if accion == "ya_terminado":
         reply("Evaluación finalizada, por favor salga del hilo. 👋")
         return
+
+
+@slack_app.action("personal_confirmar")
+def _handle_personal_confirmar(ack, body, logger):
+    ack()
+    try:
+        msg = body.get("message", {})
+        evento = {
+            "user": body["user"]["id"],
+            "channel": body["channel"]["id"],
+            "thread_ts": msg.get("thread_ts") or msg.get("ts", ""),
+            "text": "sí",
+        }
+        manejar_mensaje_personal(evento, logger)
+    except Exception:
+        logger.exception("Error procesando confirmación personal interactiva")
+
+
+@slack_app.action("personal_modificar")
+def _handle_personal_modificar(ack, body, logger):
+    ack()
+    try:
+        msg = body.get("message", {})
+        evento = {
+            "user": body["user"]["id"],
+            "channel": body["channel"]["id"],
+            "thread_ts": msg.get("thread_ts") or msg.get("ts", ""),
+            "text": "modificar",
+        }
+        manejar_mensaje_personal(evento, logger)
+    except Exception:
+        logger.exception("Error procesando modificación personal interactiva")
+
+
+@slack_app.action("personal_otro_si")
+def _handle_personal_otro_si(ack, body, logger):
+    ack()
+    try:
+        msg = body.get("message", {})
+        evento = {
+            "user": body["user"]["id"],
+            "channel": body["channel"]["id"],
+            "thread_ts": msg.get("thread_ts") or msg.get("ts", ""),
+            "text": "sí",
+        }
+        manejar_mensaje_personal(evento, logger)
+    except Exception:
+        logger.exception("Error procesando personal_otro_si")
+
+
+@slack_app.action("personal_otro_no")
+def _handle_personal_otro_no(ack, body, logger):
+    ack()
+    try:
+        msg = body.get("message", {})
+        evento = {
+            "user": body["user"]["id"],
+            "channel": body["channel"]["id"],
+            "thread_ts": msg.get("thread_ts") or msg.get("ts", ""),
+            "text": "no",
+        }
+        manejar_mensaje_personal(evento, logger)
+    except Exception:
+        logger.exception("Error procesando personal_otro_no")
 
 
 def ciclo_envio_personal() -> None:

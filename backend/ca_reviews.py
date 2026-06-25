@@ -491,7 +491,7 @@ def enviar_pregunta_inicial_ca() -> None:
                         "📋 *CA: Tienes evaluación de advisees pendiente*\n\n"
                         "_Esta evaluación es totalmente privada, solo podrás verla tú._\n"
                         "_Si en algún momento quieres cancelar, escribe SOS en el hilo._\n\n"
-                        "*Envía cualquier mensaje en el hilo* para comenzar la evaluación"
+                        "> 👉 *Envía cualquier mensaje en el hilo para comenzar la evaluación*"
                     ),
                 )
                 with _lock:

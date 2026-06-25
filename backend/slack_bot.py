@@ -18,6 +18,7 @@ from .hierarchy import comparar_jerarquia, tipo_relacion
 from .notion_service import (
     buscar_empleado_y_cargo,
     evaluacion_proyecto_guardada_desde,
+    guardar_barbecho_en_notion,
     guardar_en_notion,
     obtener_cargo_por_slack_id,
     obtener_config_calendario,
@@ -66,7 +67,7 @@ def enviar_una_evaluacion():
                         "📍 *Tienes una evaluación mensual pendiente.*\n\n"
                         "_Esta evaluación es totalmente privada, solo podrá verla el CA de la persona evaluada._\n"
                         "_Si en algún momento quieres cancelar, escribe SOS en el hilo._\n\n"
-                        "*Envía cualquier mensaje en el hilo* para comenzar la evaluación"
+                        "> 👉 *Envía cualquier mensaje en el hilo para comenzar la evaluación*"
                     ),
                 )
                 with lock:
@@ -195,7 +196,7 @@ def _es_no(texto):
 
 _Q5_EJEMPLO = "Indica un ejemplo concreto que justifique tu valoración"
 
-_PALABRAS_NUMERO = {"uno": "1", "dos": "2", "tres": "3", "cuatro": "4", "cinco": "5"}
+_PALABRAS_NUMERO = {"uno": "1", "dos": "2", "tres": "3", "cuatro": "4"}
 
 _sugerencias_por_usuario: dict = {}  # user_id -> [nombre, ...]
 
@@ -215,10 +216,44 @@ def _bloques_valoracion(texto_pregunta: str, user_id: str) -> list:
                     "value": str(i),
                     "action_id": f"valoracion_{i}",
                 }
-                for i in range(1, 6)
+                for i in range(1, 5)
             ],
         },
     ]
+
+
+def _bloques_area(texto: str, user_id: str = "") -> list:
+    return [
+        {"type": "section", "text": {"type": "mrkdwn", "text": texto}},
+        {
+            "type": "actions",
+            "block_id": f"blq_area_{user_id}" if user_id else "blq_area",
+            "elements": [
+                {"type": "button", "text": {"type": "plain_text", "text": "Negocio"}, "value": "negocio", "action_id": "area_negocio"},
+                {"type": "button", "text": {"type": "plain_text", "text": "MiddleOffice"}, "value": "middleoffice", "action_id": "area_middleoffice"},
+                {"type": "button", "text": {"type": "plain_text", "text": "Palantir"}, "value": "palantir", "action_id": "area_palantir"},
+            ],
+        },
+    ]
+
+
+def _bloques_sugerencias(texto_intro: str, sugerencias: list, user_id: str) -> list:
+    bloques = [{"type": "section", "text": {"type": "mrkdwn", "text": texto_intro}}]
+    if sugerencias:
+        bloques.append({
+            "type": "actions",
+            "block_id": f"blq_sug_{user_id}",
+            "elements": [
+                {
+                    "type": "button",
+                    "text": {"type": "plain_text", "text": nombre},
+                    "value": nombre,
+                    "action_id": f"sugerencia_{i}",
+                }
+                for i, nombre in enumerate(sugerencias)
+            ],
+        })
+    return bloques
 
 
 def _aplicar_respuesta_valoracion(user_id: str, valor: str):
@@ -244,7 +279,7 @@ def _aplicar_respuesta_valoracion(user_id: str, valor: str):
         )
 
 
-@slack_app.action(re.compile(r"^valoracion_[1-5]$"))
+@slack_app.action(re.compile(r"^valoracion_[1-4]$"))
 def _handle_valoracion_interactiva(ack, body, client, logger):
     ack()
     try:
@@ -269,10 +304,354 @@ def _handle_valoracion_interactiva(ack, body, client, logger):
         logger.exception("Error procesando valoración interactiva")
 
 
+@slack_app.action(re.compile(r"^area_(negocio|middleoffice|palantir)$"))
+def _handle_area_interactiva(ack, body, client, logger):
+    ack()
+    try:
+        user_id = body["user"]["id"]
+        area_elegida = body["actions"][0]["value"]
+        channel = body["channel"]["id"]
+        msg = body.get("message", {})
+        thread_ts = msg.get("thread_ts") or msg.get("ts", "")
+        dm_channel = evaluacion_dm_canal.get(user_id, channel)
+
+        def reply(text):
+            client.chat_postMessage(channel=dm_channel, thread_ts=thread_ts, text=text)
+
+        _AREA_DISPLAY = {"negocio": "Negocio", "middleoffice": "MiddleOffice", "palantir": "Palantir"}
+        try:
+            client.chat_update(
+                channel=channel,
+                ts=msg["ts"],
+                blocks=[{"type": "section", "text": {"type": "mrkdwn", "text": f"Área: *{_AREA_DISPLAY[area_elegida]}* ✅"}}],
+                text=f"Área: {_AREA_DISPLAY[area_elegida]}",
+            )
+        except Exception:
+            logger.warning("No se pudo actualizar el mensaje de área")
+
+        accion = None
+        with lock:
+            es_activo = user_id in evaluaciones_dm_activas
+            estado = conversaciones.get(user_id)
+            if not es_activo or not estado or estado.get("modo") != "esperando_area":
+                return
+            estado["area"] = area_elegida
+            if area_elegida == "middleoffice":
+                estado["respuestas"]["proyecto"] = ""
+                estado["modo"] = "esperando_persona"
+                accion = "pedir_persona_mo"
+            else:
+                estado["modo"] = "esperando_situacion"
+                accion = "pedir_situacion"
+
+        if accion == "pedir_persona_mo":
+            nombre_ev = obtener_nombre_por_id_usuario(user_id)
+            mo_ev = obtener_evaluados_middleoffice(nombre_ev or user_id, [user_id])
+            if mo_ev:
+                lista = "\n".join(f"- {e}" for e in mo_ev)
+                reply(f"¿A quién quieres evaluar?\n{lista}")
+            else:
+                reply("¿A quién quieres evaluar? Dime el nombre de la persona.")
+        elif accion == "pedir_situacion":
+            client.chat_postMessage(
+                channel=dm_channel,
+                thread_ts=thread_ts,
+                text="¿Estás actualmente en proyecto o en barbecho?",
+                blocks=[
+                    {"type": "section", "text": {"type": "mrkdwn", "text": "¿Estás actualmente en proyecto o en barbecho?"}},
+                    {
+                        "type": "actions",
+                        "elements": [
+                            {"type": "button", "text": {"type": "plain_text", "text": "🏗️ En proyecto"}, "value": "proyecto", "action_id": "situacion_proyecto"},
+                            {"type": "button", "text": {"type": "plain_text", "text": "⏸️ En barbecho"}, "value": "barbecho", "action_id": "situacion_barbecho"},
+                        ],
+                    },
+                ],
+            )
+    except Exception:
+        logger.exception("Error procesando selección de área")
+
+
+@slack_app.action(re.compile(r"^situacion_(proyecto|barbecho)$"))
+def _handle_situacion_interactiva(ack, body, client, logger):
+    ack()
+    try:
+        user_id = body["user"]["id"]
+        situacion = body["actions"][0]["value"]
+        channel = body["channel"]["id"]
+        msg = body.get("message", {})
+        thread_ts = msg.get("thread_ts") or msg.get("ts", "")
+        dm_channel = evaluacion_dm_canal.get(user_id, channel)
+
+        _SITUACION_DISPLAY = {"proyecto": "En proyecto 🏗️", "barbecho": "En barbecho ⏸️"}
+        try:
+            client.chat_update(
+                channel=channel,
+                ts=msg["ts"],
+                blocks=[{"type": "section", "text": {"type": "mrkdwn", "text": f"Situación: *{_SITUACION_DISPLAY[situacion]}* ✅"}}],
+                text=f"Situación: {_SITUACION_DISPLAY[situacion]}",
+            )
+        except Exception:
+            logger.warning("No se pudo actualizar el mensaje de situación")
+
+        with lock:
+            es_activo = user_id in evaluaciones_dm_activas
+            estado = conversaciones.get(user_id)
+            if not es_activo or not estado or estado.get("modo") != "esperando_situacion":
+                return
+            if situacion == "proyecto":
+                estado["modo"] = "esperando_proyecto"
+                client.chat_postMessage(
+                    channel=dm_channel,
+                    thread_ts=thread_ts,
+                    text="Escribe el nombre de uno de los proyectos en los que estás trabajando. Más adelante podrás evaluar el resto",
+                )
+            else:
+                estado["modo"] = "esperando_labores_barbecho"
+                client.chat_postMessage(
+                    channel=dm_channel,
+                    thread_ts=thread_ts,
+                    text="¿Qué labores estás realizando?",
+                )
+    except Exception:
+        logger.exception("Error procesando selección de situación")
+
+
+@slack_app.action("barbecho_entregar")
+def _handle_barbecho_entregar(ack, body, logger):
+    ack()
+    try:
+        user_id = body["user"]["id"]
+        msg = body.get("message", {})
+        channel = body["channel"]["id"]
+        thread_ts = msg.get("thread_ts") or msg.get("ts", "")
+        dm_channel = evaluacion_dm_canal.get(user_id, channel)
+
+        try:
+            slack_app.client.chat_update(
+                channel=channel,
+                ts=msg["ts"],
+                blocks=[{"type": "section", "text": {"type": "mrkdwn", "text": "✅ Entregado"}}],
+                text="✅ Entregado",
+            )
+        except Exception:
+            pass
+
+        with lock:
+            es_activo = user_id in evaluaciones_dm_activas
+            estado = conversaciones.get(user_id)
+            if not es_activo or not estado or estado.get("modo") != "confirmacion_barbecho":
+                return
+            _AREA_DISPLAY = {"negocio": "Negocio", "middleoffice": "MiddleOffice", "palantir": "Palantir"}
+            area_final = _AREA_DISPLAY.get(estado.get("area", "negocio"), "Negocio")
+            labores = estado.get("labores_barbecho", "")
+            estado["modo"] = "terminado"
+            evaluaciones_dm_activas.discard(user_id)
+
+        nombre = _nombre_real(user_id, logger)
+        guardado = guardar_barbecho_en_notion(nombre, area_final, labores)
+        if guardado:
+            slack_app.client.chat_postMessage(channel=dm_channel, thread_ts=thread_ts, text="✅ Registrado. Muchas gracias, ya puedes salir del hilo 👋")
+        else:
+            slack_app.client.chat_postMessage(channel=dm_channel, thread_ts=thread_ts, text="⚠️ No se pudo guardar en Notion. Revisa permisos/logs.")
+    except Exception:
+        logger.exception("Error procesando barbecho_entregar")
+
+
+@slack_app.action("barbecho_modificar")
+def _handle_barbecho_modificar(ack, body, logger):
+    ack()
+    try:
+        user_id = body["user"]["id"]
+        msg = body.get("message", {})
+        channel = body["channel"]["id"]
+        thread_ts = msg.get("thread_ts") or msg.get("ts", "")
+        dm_channel = evaluacion_dm_canal.get(user_id, channel)
+
+        try:
+            slack_app.client.chat_update(
+                channel=channel,
+                ts=msg["ts"],
+                blocks=[{"type": "section", "text": {"type": "mrkdwn", "text": "✏️ Modificando..."}}],
+                text="✏️ Modificando...",
+            )
+        except Exception:
+            pass
+
+        with lock:
+            es_activo = user_id in evaluaciones_dm_activas
+            estado = conversaciones.get(user_id)
+            if not es_activo or not estado or estado.get("modo") != "confirmacion_barbecho":
+                return
+            estado["modo"] = "esperando_labores_barbecho"
+            estado.pop("labores_barbecho", None)
+
+        slack_app.client.chat_postMessage(channel=dm_channel, thread_ts=thread_ts, text="Escribe de nuevo tus labores:")
+    except Exception:
+        logger.exception("Error procesando barbecho_modificar")
+
+
+@slack_app.action(re.compile(r"^sugerencia_\d+$"))
+def _handle_sugerencia_interactiva(ack, body, client, logger):
+    ack()
+    try:
+        user_id = body["user"]["id"]
+        nombre_elegido = body["actions"][0]["value"]
+        channel = body["channel"]["id"]
+        msg = body.get("message", {})
+        thread_ts = msg.get("thread_ts") or msg.get("ts", "")
+        dm_channel = evaluacion_dm_canal.get(user_id, channel)
+
+        def reply(text):
+            client.chat_postMessage(channel=dm_channel, thread_ts=thread_ts, text=text)
+
+        try:
+            client.chat_update(
+                channel=channel,
+                ts=msg["ts"],
+                blocks=[{"type": "section", "text": {"type": "mrkdwn", "text": f"Empleado seleccionado: *{nombre_elegido}* ✅"}}],
+                text=f"Empleado seleccionado: {nombre_elegido}",
+            )
+        except Exception:
+            logger.warning("No se pudo actualizar el mensaje de sugerencias")
+
+        _sugerencias_por_usuario.pop(user_id, None)
+
+        with lock:
+            es_activo = user_id in evaluaciones_dm_activas
+            estado = conversaciones.get(user_id)
+            if not es_activo or not estado:
+                return
+            modo = estado.get("modo")
+            if modo not in ("esperando_persona", "modificando_respuesta"):
+                return
+            _cargo_ev_peek = estado.get("cargo_evaluador")
+            _area_peek = estado.get("area", "negocio")
+
+        # Notion lookups fuera del lock
+        _empleado, _cargo = buscar_empleado_y_cargo(nombre_elegido)
+        if not _empleado:
+            reply(f"No encontré a *{nombre_elegido}* en la base de datos. Escribe nombre y apellido completos.")
+            return
+
+        _cargo_evaluador = _cargo_ev_peek
+        _relacion = "igual"
+        _preguntas_pre = {}
+        _preguntas_area_pre = []
+        _mo_invalido = False
+
+        if _area_peek == "middleoffice":
+            _nombre_ev = obtener_nombre_por_id_usuario(user_id)
+            _mo_evaluados = obtener_evaluados_middleoffice(_nombre_ev or "") if _nombre_ev else []
+            _preguntas_area_pre = obtener_preguntas_mo()
+            if _mo_evaluados and not any(normalizar_nombre(_empleado) == normalizar_nombre(e) for e in _mo_evaluados):
+                _mo_invalido = True
+        elif _area_peek == "palantir":
+            if _cargo_ev_peek is None:
+                _cargo_evaluador = obtener_cargo_por_slack_id(user_id)
+            _relacion = comparar_jerarquia(_cargo_evaluador or "", _cargo or "")
+            _preguntas_area_pre = obtener_preguntas_palantir(tipo_relacion(_relacion))
+        else:
+            if _cargo_ev_peek is None:
+                _cargo_evaluador = obtener_cargo_por_slack_id(user_id)
+            _relacion = comparar_jerarquia(_cargo_evaluador or "", _cargo or "")
+            _preguntas_pre = obtener_preguntas_desde_notion(tipo_relacion(_relacion))
+
+        if _mo_invalido:
+            nombre_ev = obtener_nombre_por_id_usuario(user_id)
+            mo_ev = obtener_evaluados_middleoffice(nombre_ev or user_id, [user_id])
+            if mo_ev:
+                lista = "\n".join(f"- {e}" for e in mo_ev)
+                reply(f"¿A quién quieres evaluar?\n{lista}")
+            else:
+                reply("¿A quién quieres evaluar? Dime el nombre de la persona.")
+            return
+
+        accion = None
+        pregunta = None
+        with lock:
+            estado = conversaciones.get(user_id)
+            if not estado:
+                return
+            modo = estado.get("modo")
+
+            if modo == "esperando_persona":
+                proyecto_actual = estado.get("proyecto_actual", "")
+                clave_ev = (normalizar_nombre(proyecto_actual), normalizar_nombre(_empleado))
+                if clave_ev in estado.get("evaluados_en_sesion", set()):
+                    accion = "pedir_persona"
+                    pregunta = (
+                        f"Ya has evaluado a *{_empleado}* en *{proyecto_actual or '?'}* en esta sesión. "
+                        "Dime el nombre de otro miembro del proyecto."
+                    )
+                else:
+                    estado["respuestas"]["evaluado"] = _empleado
+                    if _cargo_evaluador and _cargo_evaluador != _cargo_ev_peek:
+                        estado["cargo_evaluador"] = _cargo_evaluador
+                    estado["relacion_jerarquica"] = _relacion
+                    _area_actual = estado.get("area", "negocio")
+                    if _area_actual in ("middleoffice", "palantir"):
+                        for _k in [k for k in estado["respuestas"] if k not in ("evaluado", "proyecto")]:
+                            del estado["respuestas"][_k]
+                        _preguntas_inyectadas = [
+                            {**q, "texto": _resolver_texto_q1(q["texto"], _relacion, _empleado)}
+                            if q["clave"] == "q1"
+                            else q
+                            for q in _preguntas_area_pre
+                        ]
+                        estado["preguntas_area"] = _preguntas_inyectadas
+                        estado["pregunta_actual"] = 0
+                        estado["modo"] = "preguntando_area_secuencial"
+                        _primera = _preguntas_inyectadas[0] if _preguntas_inyectadas else None
+                        if _primera and _primera["clave"] in _VALORACION_CLAVES:
+                            accion = "preguntar_valoracion"
+                            pregunta = _primera["texto"]
+                        else:
+                            accion = "preguntar"
+                            pregunta = _primera["texto"] if _primera else "⚠️ No hay preguntas configuradas en Notion para esta área."
+                    else:
+                        preguntas = _preguntas_negocio(_relacion, _preguntas_pre, nombre_evaluado=_empleado)
+                        for _k in [k for k in estado["respuestas"] if k not in ("evaluado", "proyecto")]:
+                            del estado["respuestas"][_k]
+                        estado["preguntas_area"] = preguntas
+                        estado["pregunta_actual"] = 0
+                        estado["modo"] = "preguntando_area_secuencial"
+                        accion = "preguntar_valoracion"
+                        pregunta = preguntas[0]["texto"]
+
+            elif modo == "modificando_respuesta":
+                if _cargo_evaluador and _cargo_evaluador != _cargo_ev_peek:
+                    estado["cargo_evaluador"] = _cargo_evaluador
+                estado["relacion_jerarquica"] = _relacion
+                estado["respuestas"]["evaluado"] = _empleado
+                estado.pop("campo_modificando", None)
+                estado["modo"] = "confirmacion"
+                accion = "mostrar_resumen"
+                pregunta = resumen_respuestas(
+                    estado["respuestas"],
+                    area=estado.get("area", "negocio"),
+                    preguntas_area=estado.get("preguntas_area"),
+                )
+
+        if accion == "preguntar_valoracion":
+            client.chat_postMessage(
+                channel=dm_channel,
+                thread_ts=thread_ts,
+                blocks=_bloques_valoracion(pregunta, user_id),
+                text=pregunta,
+            )
+        elif accion == "mostrar_resumen":
+            _enviar_resumen_con_botones(dm_channel, thread_ts, pregunta)
+        elif pregunta:
+            reply(pregunta)
+    except Exception:
+        logger.exception("Error procesando sugerencia de empleado")
+
+
 def _normalizar_valoracion(texto: str) -> str | None:
-    """Devuelve '1'-'5' si el texto es un número válido (dígito o palabra), None si no."""
+    """Devuelve '1'-'4' si el texto es un número válido (dígito o palabra), None si no."""
     t = texto.strip().lower()
-    if t in {"1", "2", "3", "4", "5"}:
+    if t in {"1", "2", "3", "4"}:
         return t
     return _PALABRAS_NUMERO.get(t)
 
@@ -282,7 +661,7 @@ def _pregunta_contribucion(relacion: str, nombre_evaluado: str = "") -> str:
         sujeto = "del Project Leader"
     else:
         sujeto = f"de {nombre_evaluado}" if nombre_evaluado else "de tu compañero"
-    return f"¿Cómo valorarías del 1 al 5 la contribución {sujeto} al buen avance del proyecto?"
+    return f"¿Cómo valorarías del 1 al 4 la contribución {sujeto} al buen avance del proyecto?"
 
 
 def _es_q1_texto_default(texto: str) -> bool:
@@ -310,7 +689,7 @@ def _preguntas_negocio(relacion: str, preguntas_notion: dict = None, nombre_eval
 
 def _es_valor_satisfaccion(texto):
     try:
-        return int(texto) in {1, 2, 3, 4, 5}
+        return int(texto) in {1, 2, 3, 4}
     except Exception:
         return False
 
@@ -322,10 +701,9 @@ def _parece_saludo(texto):
 def _mensaje_empleado_no_encontrado(texto):
     sugerencias = sugerir_empleados_parecidos(texto)
     if sugerencias:
-        opciones = "\n".join(f"{i + 1}. {nombre}" for i, nombre in enumerate(sugerencias))
         return (
             f"*{texto}* no aparece en la lista de empleados.\n"
-            f"¿Querías decir alguno de estos nombres?\n{opciones}"
+            f"¿Querías decir alguno de estos nombres?"
         ), sugerencias
     return (
         f"*{texto}* no aparece en la lista de empleados. "
@@ -585,12 +963,7 @@ def handle_message_events(event, logger):
         if modo == "pre_inicial":
             estado["modo"] = "esperando_area"
             accion = "pedir_area"
-            pregunta = (
-                "¿A qué área perteneces?\n"
-                "*1.* Negocio\n"
-                "*2.* MiddleOffice\n"
-                "*3.* Palantir"
-            )
+            pregunta = "¿A qué área perteneces?"
 
         elif modo == "esperando_area":
             _AREA_MAP = {
@@ -607,16 +980,50 @@ def handle_message_events(event, logger):
                     estado["modo"] = "esperando_persona"
                     accion = "pedir_persona_mo"
                 else:
-                    estado["modo"] = "esperando_proyecto"
-                    accion = "pedir_proyecto"
-                    pregunta = (
-                        "Escribe el nombre de uno de los proyectos en los que estás trabajando. Más adelante podrás evaluar el resto"
-                    )
+                    estado["modo"] = "esperando_situacion"
+                    accion = "pedir_situacion"
             else:
                 accion = "pedir_area"
-                pregunta = (
-                    "Por favor, escribe el número o el nombre del área al que perteneces 😊"
-                )
+                pregunta = "Por favor, pulsa el botón del área al que perteneces 😊"
+
+        elif modo == "esperando_situacion":
+            _SITUACION_MAP = {
+                "proyecto": "proyecto", "en proyecto": "proyecto",
+                "barbecho": "barbecho", "en barbecho": "barbecho",
+            }
+            _situacion = _SITUACION_MAP.get(normalizar_nombre(texto))
+            if _situacion == "proyecto":
+                estado["modo"] = "esperando_proyecto"
+                accion = "pedir_proyecto"
+                pregunta = "Escribe el nombre de uno de los proyectos en los que estás trabajando. Más adelante podrás evaluar el resto"
+            elif _situacion == "barbecho":
+                estado["modo"] = "esperando_labores_barbecho"
+                accion = "preguntar"
+                pregunta = "¿Qué labores estás realizando?"
+            else:
+                accion = "pedir_situacion"
+
+        elif modo == "esperando_labores_barbecho":
+            if texto:
+                estado["labores_barbecho"] = texto
+                estado["modo"] = "confirmacion_barbecho"
+                accion = "mostrar_resumen_barbecho"
+                pregunta = texto
+            else:
+                accion = "preguntar"
+                pregunta = "¿Qué labores estás realizando?"
+
+        elif modo == "confirmacion_barbecho":
+            if _es_si(texto) or normalizar_nombre(texto) in {"entregar", "guardar", "confirmar"}:
+                accion = "guardar_barbecho"
+            elif normalizar_nombre(texto) in {"modificar", "cambiar", "editar"}:
+                estado["modo"] = "esperando_labores_barbecho"
+                estado.pop("labores_barbecho", None)
+                accion = "preguntar"
+                pregunta = "Escribe de nuevo tus labores:"
+            else:
+                accion = "mostrar_resumen_barbecho"
+                pregunta = estado.get("labores_barbecho", "")
 
         elif modo == "esperando_proyecto":
             if texto:
@@ -706,7 +1113,7 @@ def handle_message_events(event, logger):
                 valor_normalizado = _normalizar_valoracion(texto) if clave_actual in {"q1", "mo_contribucion"} else None
                 if clave_actual in {"q1", "mo_contribucion"} and valor_normalizado is None:
                     accion = "preguntar"
-                    pregunta = "Por favor, responde con un número del 1 al 5 🔢"
+                    pregunta = "Por favor, responde con un número del 1 al 4 🔢"
                 else:
                     estado["respuestas"][clave_actual] = valor_normalizado if valor_normalizado is not None else texto
                     idx += 1
@@ -820,7 +1227,7 @@ def handle_message_events(event, logger):
                         accion = "pedir_valor_modificacion"
                         todas = estado.get("preguntas_area", [])
                         pregunta_base = next((q["texto"] for q in todas if q["clave"] == campo), "")
-                        pregunta = "Por favor, responde con un número del 1 al 5 🔢"
+                        pregunta = "Por favor, responde con un número del 1 al 4 🔢"
                     else:
                         estado["respuestas"][campo] = valor_norm
                         estado.pop("campo_modificando", None)
@@ -899,11 +1306,82 @@ def handle_message_events(event, logger):
 
     # Despacho de acciones — fuera del lock
     _ACCIONES_PREGUNTA = {
-        "pedir_area", "preguntar",
-        "pedir_persona", "pedir_persona_invalida", "pedir_persona_mismo_proyecto",
+        "preguntar",
+        "pedir_persona", "pedir_persona_mismo_proyecto",
         "pedir_proyecto",
         "pedir_modificacion", "pedir_valor_modificacion", "pedir_mas_personas",
     }
+    if accion == "pedir_situacion":
+        slack_app.client.chat_postMessage(
+            channel=dm_channel,
+            thread_ts=thread_ts,
+            text="¿Estás actualmente en proyecto o en barbecho?",
+            blocks=[
+                {"type": "section", "text": {"type": "mrkdwn", "text": "¿Estás actualmente en proyecto o en barbecho?"}},
+                {
+                    "type": "actions",
+                    "elements": [
+                        {"type": "button", "text": {"type": "plain_text", "text": "🏗️ En proyecto"}, "value": "proyecto", "action_id": "situacion_proyecto"},
+                        {"type": "button", "text": {"type": "plain_text", "text": "⏸️ En barbecho"}, "value": "barbecho", "action_id": "situacion_barbecho"},
+                    ],
+                },
+            ],
+        )
+        return
+    if accion == "mostrar_resumen_barbecho":
+        labores = pregunta or estado.get("labores_barbecho", "")
+        texto_resumen = f"📋 Tus labores:\n_{labores}_\n\n¿Lo entrego o prefieres modificarlo?"
+        slack_app.client.chat_postMessage(
+            channel=dm_channel,
+            thread_ts=thread_ts,
+            text=texto_resumen,
+            blocks=[
+                {"type": "section", "text": {"type": "mrkdwn", "text": texto_resumen}},
+                {
+                    "type": "actions",
+                    "elements": [
+                        {"type": "button", "text": {"type": "plain_text", "text": "✅ Entregar"}, "style": "primary", "action_id": "barbecho_entregar"},
+                        {"type": "button", "text": {"type": "plain_text", "text": "✏️ Modificar"}, "action_id": "barbecho_modificar"},
+                    ],
+                },
+            ],
+        )
+        return
+    if accion == "guardar_barbecho":
+        nombre = _nombre_real(user_id, logger)
+        with lock:
+            _AREA_DISPLAY = {"negocio": "Negocio", "middleoffice": "MiddleOffice", "palantir": "Palantir"}
+            area_final = _AREA_DISPLAY.get(estado.get("area", "negocio"), "Negocio")
+            labores = estado.get("labores_barbecho", "")
+            estado["modo"] = "terminado"
+            evaluaciones_dm_activas.discard(user_id)
+        guardado = guardar_barbecho_en_notion(nombre, area_final, labores)
+        if guardado:
+            reply("✅ Registrado. Muchas gracias, ya puedes salir del hilo 👋")
+        else:
+            reply("⚠️ No se pudo guardar en Notion. Revisa permisos/logs.")
+        return
+    if accion == "pedir_area":
+        _texto_area = pregunta or "¿A qué área perteneces?"
+        slack_app.client.chat_postMessage(
+            channel=dm_channel,
+            thread_ts=thread_ts,
+            blocks=_bloques_area(_texto_area, user_id),
+            text=_texto_area,
+        )
+        return
+    if accion == "pedir_persona_invalida":
+        _sug = _sugerencias_por_usuario.get(user_id, [])
+        if _sug:
+            slack_app.client.chat_postMessage(
+                channel=dm_channel,
+                thread_ts=thread_ts,
+                blocks=_bloques_sugerencias(pregunta or "", _sug, user_id),
+                text=pregunta or "",
+            )
+        else:
+            reply(pregunta if pregunta else "")
+        return
     if accion in _ACCIONES_PREGUNTA:
         reply(pregunta if pregunta else "")
         return

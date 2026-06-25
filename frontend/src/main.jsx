@@ -1218,27 +1218,6 @@ function SubirInformePage({ token, advisee, onBack }) {
 }
 
 function AdviseesList({ token, advisees, onBack, onNavigate }) {
-  const [accesoActivo, setAccesoActivo] = useState(false);
-  const [toggling, setToggling] = useState(false);
-
-  useEffect(() => {
-    const apply = (data) => setAccesoActivo(data.activo || false);
-    apiRequestCached("/api/acceso-advisees", { token }, apply)
-      .then(apply)
-      .catch(() => {});
-  }, [token]);
-
-  async function toggleAcceso() {
-    setToggling(true);
-    try {
-      const data = await apiRequest("/api/acceso-advisees", { token, method: "POST", body: { activo: !accesoActivo } });
-      setAccesoActivo(data.activo);
-    } catch {
-    } finally {
-      setToggling(false);
-    }
-  }
-
   return (
     <main className="page">
       <nav className="nav">
@@ -1262,15 +1241,6 @@ function AdviseesList({ token, advisees, onBack, onNavigate }) {
               <span className="advisee-page-nombre">{a.nombre}</span>
             </button>
           ))}
-        </div>
-        <div style={{ marginTop: "40px" }}>
-          <button
-            className={accesoActivo ? "" : "secondary"}
-            onClick={toggleAcceso}
-            disabled={toggling}
-          >
-            {toggling ? "Guardando..." : accesoActivo ? "Acceso activo — revocar" : "Dar acceso a mis advisees"}
-          </button>
         </div>
       </div>
       <Footer />

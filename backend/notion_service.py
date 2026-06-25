@@ -345,6 +345,12 @@ _NOTION_PAGE_STYLE = {
         "title": "Seguimiento Career Advisor",
         "body": "Opiniones y revisiones de CA generadas desde Slack. Pensado para consulta, no para mantenimiento diario.",
     },
+    config.NOTION_CONTINUOUS_EVALUATIONS_PAGE_NAME: {
+        "emoji": "📝",
+        "color": "yellow",
+        "title": "Evaluaciones Continuas",
+        "body": "Registros de empleados en barbecho: área y labores que están realizando.",
+    },
 }
 
 
@@ -601,9 +607,9 @@ def _obtener_o_crear_bbdd_preguntas():
         return None
 
 
-_Q4_BOTTOM_TOP = "¿Cómo valorarías del 1 al 5 la contribución del Project Leader al buen avance del proyecto?"
-_Q4_TOP_BOTTOM = "¿Cómo valorarías del 1 al 5 la contribución de {nombre} al buen avance del proyecto?"
-_Q4_SAME_LEVEL = "¿Cómo valorarías del 1 al 5 la contribución de {nombre} al buen avance del proyecto?"
+_Q4_BOTTOM_TOP = "¿Cómo valorarías del 1 al 4 la contribución del Project Leader al buen avance del proyecto?"
+_Q4_TOP_BOTTOM = "¿Cómo valorarías del 1 al 4 la contribución de {nombre} al buen avance del proyecto?"
+_Q4_SAME_LEVEL = "¿Cómo valorarías del 1 al 4 la contribución de {nombre} al buen avance del proyecto?"
 _Q5_TEXTO = "Indica un ejemplo concreto que justifique tu valoración"
 
 _PREGUNTAS_INICIALES = [
@@ -1075,6 +1081,66 @@ def guardar_en_notion(nombre, respuestas, relacion="igual", area="Negocio"):
         return False
 
 
+_cache_bbdd_continuas: dict = {"db_id": None}
+
+
+def _obtener_o_crear_bbdd_continuas() -> str:
+    with lock:
+        db_id = _cache_bbdd_continuas["db_id"]
+    if db_id:
+        return db_id
+    parent = _parent_bbdd_referencia()
+    titulo = "Registros barbecho"
+    resultado = notion.search(query=titulo, filter={"value": _tipo_objeto_busqueda_bbdd(), "property": "object"}, page_size=50)
+    for bbdd in resultado.get("results", []):
+        if _extraer_titulo_bbdd(bbdd) == titulo and _coincide_parent_bbdd(bbdd, parent):
+            found_id = _data_source_id(bbdd)
+            with lock:
+                _cache_bbdd_continuas["db_id"] = found_id
+            return found_id
+    props = {
+        "Name": {"title": {}},
+        "Empleado": {"rich_text": {}},
+        "Area": {"select": {}},
+        "Labores": {"rich_text": {}},
+        "Fecha": {"date": {}},
+    }
+    if _usa_data_sources():
+        nueva = notion.databases.create(
+            parent=parent,
+            title=[{"type": "text", "text": {"content": titulo}}],
+            initial_data_source={"title": [{"type": "text", "text": {"content": titulo}}], "properties": props},
+        )
+        nueva = notion.databases.retrieve(database_id=nueva["id"])
+    else:
+        nueva = notion.databases.create(parent=parent, title=[{"type": "text", "text": {"content": titulo}}], properties=props)
+    new_id = _data_source_id(nueva)
+    with lock:
+        _cache_bbdd_continuas["db_id"] = new_id
+    logging.info("Base de datos 'Registros barbecho' creada en Evaluaciones Continuas")
+    return new_id
+
+
+def guardar_barbecho_en_notion(nombre: str, area: str, labores: str) -> bool:
+    try:
+        db_id = _obtener_o_crear_bbdd_continuas()
+        fecha = datetime.now(timezone.utc)
+        _crear_pagina_en_bbdd(
+            db_id,
+            {
+                "Name": {"title": [{"text": {"content": f"Barbecho {nombre} {fecha.strftime('%Y-%m-%d %H:%M')}"}}]},
+                "Empleado": {"rich_text": [{"text": {"content": nombre}}]},
+                "Area": {"select": {"name": area}},
+                "Labores": {"rich_text": [{"text": {"content": labores}}]},
+                "Fecha": {"date": {"start": fecha.isoformat()}},
+            },
+        )
+        return True
+    except Exception:
+        logging.exception("Error guardando barbecho en Notion para '%s'", nombre)
+        return False
+
+
 def _texto_rich_text(propiedades, nombre_propiedad):
     items = propiedades.get(nombre_propiedad, {}).get("rich_text", [])
     return items[0]["text"]["content"] if items else ""
@@ -1456,6 +1522,15 @@ def obtener_cargo_por_slack_id(user_id: str) -> str | None:
 def obtener_slack_ids_empleados() -> list[str]:
     """Devuelve todos los ID_usuario (Slack IDs) no vacíos de la lista de empleados."""
     return [r["id_usuario"] for r in _obtener_registros_empleados() if r.get("id_usuario")]
+
+
+def obtener_slack_id_por_nombre(nombre: str) -> str | None:
+    """Devuelve el Slack ID del empleado cuyo nombre coincide (normalizado)."""
+    nombre_norm = normalizar_nombre(nombre)
+    for registro in _obtener_registros_empleados():
+        if normalizar_nombre(registro.get("nombre", "")) == nombre_norm:
+            return registro.get("id_usuario") or None
+    return None
 
 
 

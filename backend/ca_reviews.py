@@ -508,7 +508,7 @@ def enviar_pregunta_inicial_ca() -> None:
                         "📋 *CA: Tienes evaluación de advisees pendiente*\n\n"
                         "_Esta evaluación es totalmente privada, solo podrás verla tú._\n"
                         "_Si en algún momento quieres cancelar, escribe SOS en el hilo._\n\n"
-                        "*Envía cualquier mensaje en el hilo* para comenzar la evaluación"
+                        "> 👉 *Envía cualquier mensaje en el hilo para comenzar la evaluación*"
                     ),
                 )
                 with _lock:
@@ -546,7 +546,10 @@ def manejar_mensaje_ca(event, logger) -> None:
 
     if normalizar_nombre(texto) == "sos":
         with _lock:
-            conversaciones_ca.pop(conv_key, None)
+            estado_anterior = conversaciones_ca.pop(conv_key, {})
+            guardados = estado_anterior.get("advisees_guardados", set())
+            if guardados:
+                conversaciones_ca[conv_key] = {"modo": "pre_inicial", "ca_nombre": None, "advisees_guardados": guardados}
         reply("Evaluación *cancelada* voluntariamente. Si quieres volver a empezar, escribe cualquier mensaje en este hilo.")
         return
 
@@ -672,12 +675,37 @@ def manejar_mensaje_ca(event, logger) -> None:
     def _reply_lista_advisees(prefijo=""):
         ca_nombre_l, ca_aliases_l = _identidad_usuario_slack(user_id, logger)
         advisees_l = obtener_advisees(ca_nombre_l, ca_aliases=ca_aliases_l)
+        guardados = estado.get("advisees_guardados", set())
+        advisees_l = [a for a in advisees_l if a not in guardados]
         estado["lista_advisees"] = advisees_l
+        texto_header = f"{prefijo}¿De qué advisee te gustaría hacer seguimiento?"
         if advisees_l:
-            lista = "\n".join(f"{i + 1} {a}" for i, a in enumerate(advisees_l))
-            reply(f"{prefijo}¿De qué advisee te gustaría hacer seguimiento? (escribe `no` para terminar)\n{lista}")
+            elementos = [
+                {
+                    "type": "button",
+                    "text": {"type": "plain_text", "text": nombre},
+                    "value": nombre,
+                    "action_id": f"ca_advisee_{i}",
+                }
+                for i, nombre in enumerate(advisees_l)
+            ]
+            elementos.append({
+                "type": "button",
+                "text": {"type": "plain_text", "text": "❌ Terminar"},
+                "action_id": "ca_advisee_no",
+            })
+            blocks = [
+                {"type": "section", "text": {"type": "mrkdwn", "text": texto_header}},
+                {"type": "actions", "elements": elementos},
+            ]
+            slack_app.client.chat_postMessage(
+                channel=channel,
+                thread_ts=thread_ts,
+                text=texto_header,
+                blocks=blocks,
+            )
         else:
-            reply(f"{prefijo}¿De qué advisee te gustaría hacer seguimiento? (escribe `no` para terminar)")
+            reply(texto_header)
 
     if accion == "pedir_advisee":
         _reply_lista_advisees()
@@ -829,7 +857,7 @@ def manejar_mensaje_ca(event, logger) -> None:
             reply("⚠️ No se pudo generar el resumen con Claude.\n\n¿Qué opinas de esto?")
 
     elif accion == "pedir_opinion_sin_claude":
-        reply("¿Qué opinas de esto?")
+        reply("¿Qué comentario deseas registrar sobre las evaluaciones de tu advisee?")
 
     elif accion == "aclarar_permiso_claude":
         reply("Responde `sí` para generar un resumen con Claude, o `no` para continuar directamente.")
@@ -852,6 +880,8 @@ def manejar_mensaje_ca(event, logger) -> None:
         resumen = estado.get("resumen_actual", "")
         ok, error = _guardar_opinion(ca_nombre, payload["advisee"], payload["opinion"], resumen)
         if ok:
+            guardados = estado.setdefault("advisees_guardados", set())
+            guardados.add(payload["advisee"])
             _reply_lista_advisees("✅ Opinión guardada en Notion.\n\n")
         else:
             _reply_lista_advisees(f"⚠️ No se pudo guardar en Notion: `{error[:300]}`\n\n")
@@ -861,6 +891,63 @@ def manejar_mensaje_ca(event, logger) -> None:
 
     elif accion == "ya_terminado":
         reply("Esta evaluación ya ha concluido. 👋")
+
+
+@slack_app.action(re.compile(r"^ca_advisee_\d+$"))
+def _handle_ca_elegir_advisee(ack, body, client, logger):
+    ack()
+    try:
+        user_id = body["user"]["id"]
+        advisee_name = body["actions"][0]["value"]
+        msg = body.get("message", {})
+        channel = body["channel"]["id"]
+        thread_ts = msg.get("thread_ts") or msg.get("ts", "")
+        try:
+            client.chat_update(
+                channel=channel,
+                ts=msg["ts"],
+                blocks=[{"type": "section", "text": {"type": "mrkdwn", "text": f"Advisee: *{advisee_name}* ✅"}}],
+                text=f"Advisee: {advisee_name}",
+            )
+        except Exception:
+            logger.warning("No se pudo actualizar el mensaje de selección de advisee")
+        evento = {
+            "user": user_id,
+            "channel": channel,
+            "thread_ts": thread_ts,
+            "text": advisee_name,
+        }
+        manejar_mensaje_ca(evento, logger)
+    except Exception:
+        logger.exception("Error procesando selección de advisee")
+
+
+@slack_app.action("ca_advisee_no")
+def _handle_ca_advisee_no(ack, body, client, logger):
+    ack()
+    try:
+        user_id = body["user"]["id"]
+        msg = body.get("message", {})
+        channel = body["channel"]["id"]
+        thread_ts = msg.get("thread_ts") or msg.get("ts", "")
+        try:
+            client.chat_update(
+                channel=channel,
+                ts=msg["ts"],
+                blocks=[{"type": "section", "text": {"type": "mrkdwn", "text": "❌ Terminado"}}],
+                text="❌ Terminado",
+            )
+        except Exception:
+            pass
+        evento = {
+            "user": user_id,
+            "channel": channel,
+            "thread_ts": thread_ts,
+            "text": "sos",
+        }
+        manejar_mensaje_ca(evento, logger)
+    except Exception:
+        logger.exception("Error procesando ca_advisee_no")
 
 
 # ---------------------------------------------------------------------------

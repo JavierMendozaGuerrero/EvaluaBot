@@ -8,13 +8,13 @@ from .clients import slack_app
 from .notion_service import (
     evaluacion_personal_guardada_desde,
     guardar_evaluacion_personal,
+    obtener_ca_de_empleado,
     obtener_config_calendario,
     obtener_nombre_por_id_usuario,
-    obtener_objetivos_persona,
-    obtener_preguntas_personales,
+    obtener_objetivos,
+    obtener_slack_id_por_nombre,
     obtener_slack_ids_empleados,
     siguiente_envio_calendario,
-    PREGUNTAS_PERSONALES_DEFAULT,
 )
 from .utils import normalizar_nombre
 
@@ -30,6 +30,75 @@ conversaciones_personal: dict = {}
 _RECORDATORIO_SEGUNDOS = 7 * 24 * 60 * 60  # 1 semana
 
 
+_BLOQUES_OPORTUNIDAD_SIN_URGENCIA = [
+    {
+        "type": "section",
+        "text": {"type": "mrkdwn", "text": "*Esta es tu oportunidad para:*"},
+    },
+    {
+        "type": "section",
+        "text": {
+            "type": "mrkdwn",
+            "text": '*1.* Explicar cómo estás ayudando en _"Contribution to the firm"_',
+        },
+    },
+    {
+        "type": "section",
+        "text": {
+            "type": "mrkdwn",
+            "text": "*2.* Cómo te estás acercando a tus objetivos",
+        },
+        "accessory": {
+            "type": "button",
+            "text": {"type": "plain_text", "text": "📋 Ver mis objetivos"},
+            "action_id": "personal_ver_objetivos",
+        },
+    },
+]
+
+_BLOQUES_OPORTUNIDAD = [
+    {
+        "type": "section",
+        "text": {"type": "mrkdwn", "text": "*Esta es tu oportunidad para:*"},
+    },
+    {
+        "type": "section",
+        "text": {
+            "type": "mrkdwn",
+            "text": '*1.* Explicar cómo estás ayudando en _"Contribution to the firm"_',
+        },
+    },
+    {
+        "type": "section",
+        "text": {
+            "type": "mrkdwn",
+            "text": "*2.* Cómo te estás acercando a tus objetivos",
+        },
+        "accessory": {
+            "type": "button",
+            "text": {"type": "plain_text", "text": "📋 Ver mis objetivos"},
+            "action_id": "personal_ver_objetivos",
+        },
+    },
+    {
+        "type": "section",
+        "text": {
+            "type": "mrkdwn",
+            "text": (
+                "*3.* Si necesitas ayuda con algún tema o has tenido alguna dificultad que quieras comentar\n"
+                "_El botón de urgencia notifica a tu CA por Slack. Si no lo pulsas, el problema no se notifica automáticamente y solo quedará registrado._"
+            ),
+        },
+        "accessory": {
+            "type": "button",
+            "text": {"type": "plain_text", "text": "🚨 Urgencia"},
+            "style": "danger",
+            "action_id": "personal_urgencia",
+        },
+    },
+]
+
+
 def enviar_pregunta_inicial_personal() -> None:
     try:
         if config.APP_MODE != "produccion" and config.SLACK_TEST_USER_ID:
@@ -40,14 +109,23 @@ def enviar_pregunta_inicial_personal() -> None:
                 logging.warning("No se encontraron Slack IDs para evaluación personal")
                 return
 
-        try:
-            pq = obtener_preguntas_personales()
-            mensaje_inicial = pq.get("mensaje_inicial", PREGUNTAS_PERSONALES_DEFAULT["mensaje_inicial"])
-        except Exception:
-            mensaje_inicial = PREGUNTAS_PERSONALES_DEFAULT["mensaje_inicial"]
-
         with _lock:
             personal_dm_activas.clear()
+
+        bloques_principal = [
+            {
+                "type": "section",
+                "text": {
+                    "type": "mrkdwn",
+                    "text": (
+                        "📝 *Tienes opción de seguimiento personal pendiente*\n\n"
+                        "_Esta evaluación es totalmente privada, solo podrá verla tu CA._\n"
+                        "_Si en algún momento quieres cancelar, escribe SOS en el hilo._\n\n"
+                        "👉 *Envía cualquier mensaje en el hilo para comenzar la evaluación*"
+                    ),
+                },
+            },
+        ]
 
         for user_id in slack_ids:
             try:
@@ -55,7 +133,8 @@ def enviar_pregunta_inicial_personal() -> None:
                 dm_channel = resp_dm["channel"]["id"]
                 resp = slack_app.client.chat_postMessage(
                     channel=dm_channel,
-                    text=mensaje_inicial,
+                    text="📝 Tienes opción de seguimiento personal pendiente",
+                    blocks=bloques_principal,
                 )
                 msg_ts = resp["ts"]
                 with _lock:
@@ -65,34 +144,6 @@ def enviar_pregunta_inicial_personal() -> None:
                     personal_hora[user_id] = time.time()
                     conversaciones_personal.pop(user_id, None)
                 logging.info("Evaluación personal enviada a %s", user_id)
-
-                try:
-                    nombre = obtener_nombre_por_id_usuario(user_id)
-                    if not nombre:
-                        resp_u = slack_app.client.users_info(user=user_id)
-                        u = resp_u.get("user", {})
-                        p = u.get("profile", {})
-                        nombre = u.get("real_name") or p.get("real_name") or p.get("display_name") or u.get("name") or ""
-                    objetivos = obtener_objetivos_persona(nombre) if nombre else []
-                    if objetivos:
-                        lineas_obj = []
-                        for obj in objetivos:
-                            linea = f"• *{obj.get('titulo', '')}*"
-                            kpis_o = obj.get("kpis", "")
-                            if kpis_o:
-                                linea += f"\n  _KPIs: {kpis_o}_"
-                            lineas_obj.append(linea)
-                        texto_obj = "\n".join(lineas_obj)
-                        msg_obj = f"📌 Como recordatorio, tus objetivos son:\n\n{texto_obj}\n\n*Envía cualquier mensaje en el hilo* para comenzar la evaluación"
-                    else:
-                        msg_obj = "📌 Como recordatorio: no tienes objetivos registrados.\n\n*Envía cualquier mensaje en el hilo* para comenzar la evaluación"
-                    slack_app.client.chat_postMessage(
-                        channel=dm_channel,
-                        thread_ts=msg_ts,
-                        text=msg_obj,
-                    )
-                except Exception:
-                    logging.exception("Error enviando objetivos en hilo personal a %s", user_id)
             except Exception as exc:
                 err_str = str(exc)
                 if "user_not_found" in err_str or "channel_not_found" in err_str:
@@ -124,6 +175,68 @@ def _enviar_preguntando_otro(channel, thread_ts):
                         "type": "button",
                         "text": {"type": "plain_text", "text": "❌ No"},
                         "action_id": "personal_otro_no",
+                    },
+                ],
+            },
+        ],
+    )
+
+
+def _notificar_urgencia_al_ca(nombre, descripcion, logger):
+    nombre_ca = obtener_ca_de_empleado(nombre)
+    if not nombre_ca:
+        logger.warning("No se encontró CA para '%s', no se puede notificar urgencia", nombre)
+        return False
+    slack_id_ca = obtener_slack_id_por_nombre(nombre_ca)
+    if not slack_id_ca:
+        logger.warning("No se encontró Slack ID para el CA '%s'", nombre_ca)
+        return False
+    try:
+        resp_dm = slack_app.client.conversations_open(users=[slack_id_ca])
+        dm_ca = resp_dm["channel"]["id"]
+        slack_app.client.chat_postMessage(
+            channel=dm_ca,
+            text=(
+                f"🚨 *Urgencia de {nombre}*\n\n"
+                f"*Descripción:* {descripcion}\n\n"
+                "Por favor, contacta con él/ella lo antes posible."
+            ),
+        )
+        logger.info("Urgencia de '%s' notificada al CA '%s'", nombre, nombre_ca)
+        return True
+    except Exception as e:
+        if "user_not_found" in str(e):
+            logger.warning(
+                "Slack ID '%s' del CA '%s' no encontrado en el workspace. "
+                "Comprueba el campo ID_usuario en Notion.",
+                slack_id_ca, nombre_ca,
+            )
+        else:
+            logger.exception("Error notificando urgencia al CA '%s'", nombre_ca)
+        return False
+
+
+def _enviar_resumen_urgencia(channel, thread_ts, descripcion):
+    texto = f"📋 Tu descripción de urgencia:\n_{descripcion}_\n\n¿La envío a tu CA?"
+    slack_app.client.chat_postMessage(
+        channel=channel,
+        thread_ts=thread_ts,
+        text=texto,
+        blocks=[
+            {"type": "section", "text": {"type": "mrkdwn", "text": texto}},
+            {
+                "type": "actions",
+                "elements": [
+                    {
+                        "type": "button",
+                        "text": {"type": "plain_text", "text": "✅ Enviar al CA"},
+                        "style": "primary",
+                        "action_id": "personal_urgencia_enviar",
+                    },
+                    {
+                        "type": "button",
+                        "text": {"type": "plain_text", "text": "✏️ Modificar"},
+                        "action_id": "personal_urgencia_modificar",
                     },
                 ],
             },
@@ -168,17 +281,35 @@ def manejar_mensaje_personal(event, logger) -> None:
             conversaciones_personal[user_id] = estado
 
         modo = estado.get("modo")
+        urgencia_modo = estado.get("urgencia_modo")
         accion = None
         pregunta = None
 
-        if modo == "pre_inicial":
+        if urgencia_modo == "esperando_descripcion":
+            if texto:
+                estado["urgencia_descripcion"] = texto
+                estado["urgencia_modo"] = "confirmacion_urgencia"
+                accion = "mostrar_resumen_urgencia"
+                pregunta = texto
+            else:
+                accion = "preguntar"
+                pregunta = "🚨 Describe en una frase breve la urgencia:"
+
+        elif urgencia_modo == "confirmacion_urgencia":
+            if texto_norm in {"si", "sí", "s", "enviar", "confirmar"}:
+                accion = "enviar_urgencia"
+            elif texto_norm in {"modificar", "cambiar", "editar"}:
+                estado["urgencia_modo"] = "esperando_descripcion"
+                estado.pop("urgencia_descripcion", None)
+                accion = "preguntar"
+                pregunta = "🚨 Describe de nuevo la urgencia:"
+            else:
+                accion = "mostrar_resumen_urgencia"
+                pregunta = estado.get("urgencia_descripcion", "")
+
+        elif modo == "pre_inicial":
             estado["modo"] = "esperando_comentario"
-            accion = "preguntar"
-            pregunta = (
-                "Aquí puedes mandar cualquier progreso o comentario que consideres relevante para tu CA. "
-                "_Ejemplo: algún entregable concreto que hayas realizado estas semanas, "
-                "cómo te has acercado a tus objetivos, o alguna dificultad encontrada._"
-            )
+            accion = "mostrar_bloque_inicio"
 
         elif modo == "esperando_comentario":
             if texto:
@@ -199,7 +330,7 @@ def manejar_mensaje_personal(event, logger) -> None:
                 accion = "guardar"
                 respuestas_snap = dict(estado["respuestas"])
             elif texto_norm in {"modificar", "cambiar", "editar"}:
-                estado["modo"] = "pre_inicial"
+                estado["modo"] = "esperando_comentario"
                 estado["respuestas"].pop("comentario", None)
                 accion = "preguntar"
                 pregunta = "Escribe de nuevo tu comentario:"
@@ -207,7 +338,7 @@ def manejar_mensaje_personal(event, logger) -> None:
                 accion = "mostrar_resumen"
                 pregunta = (
                     f"📋 Tu comentario:\n_{estado['respuestas'].get('comentario', '')}_\n\n"
-                    "¿Lo guardo? Responde *sí* para guardar o *modificar* para cambiar."
+                    "Las únicas opciones son elegir uno de los botones o escribir *SOS* para terminar y perder el contenido de la evaluación."
                 )
 
         elif modo == "guardar":
@@ -217,7 +348,7 @@ def manejar_mensaje_personal(event, logger) -> None:
         elif modo == "preguntando_otro":
             if texto_norm in {"si", "sí", "s", "ok", "okay"}:
                 estado["respuestas"] = {}
-                estado["modo"] = "pre_inicial"
+                estado["modo"] = "esperando_comentario"
                 accion = "preguntar"
                 pregunta = "¿Qué más me quieres contar? Responde con tu comentario."
             elif texto_norm in {"no", "n", "cancelar"}:
@@ -229,6 +360,47 @@ def manejar_mensaje_personal(event, logger) -> None:
 
         elif modo == "terminado":
             accion = "ya_terminado"
+
+    if accion == "mostrar_bloque_inicio":
+        slack_app.client.chat_postMessage(
+            channel=dm_channel,
+            thread_ts=thread_ts,
+            text="Esta es tu oportunidad para compartir tu progreso",
+            blocks=_BLOQUES_OPORTUNIDAD,
+        )
+        return
+
+    if accion == "mostrar_resumen_urgencia":
+        _enviar_resumen_urgencia(dm_channel, thread_ts, pregunta or "")
+        return
+
+    if accion == "enviar_urgencia":
+        nombre_u = obtener_nombre_por_id_usuario(user_id)
+        if not nombre_u:
+            try:
+                resp_u = slack_app.client.users_info(user=user_id)
+                u_d = resp_u.get("user", {})
+                p_d = u_d.get("profile", {})
+                nombre_u = u_d.get("real_name") or p_d.get("real_name") or p_d.get("display_name") or u_d.get("name") or user_id
+            except Exception:
+                nombre_u = user_id
+        with _lock:
+            descripcion = estado.get("urgencia_descripcion", "")
+            estado.pop("urgencia_modo", None)
+            estado.pop("urgencia_descripcion", None)
+            modo_actual = estado.get("modo", "pre_inicial")
+        ok = _notificar_urgencia_al_ca(nombre_u, descripcion, logger)
+        if ok:
+            reply("✅ Tu urgencia ha sido enviada a tu CA.")
+        else:
+            reply("⚠️ No se pudo notificar a tu CA. Contacta directamente.")
+        slack_app.client.chat_postMessage(
+            channel=dm_channel,
+            thread_ts=thread_ts,
+            text="Esta es tu oportunidad para compartir tu progreso",
+            blocks=_BLOQUES_OPORTUNIDAD_SIN_URGENCIA,
+        )
+        return
 
     if accion == "preguntar":
         reply(pregunta)
@@ -359,6 +531,158 @@ def _handle_personal_otro_no(ack, body, logger):
         manejar_mensaje_personal(evento, logger)
     except Exception:
         logger.exception("Error procesando personal_otro_no")
+
+
+@slack_app.action("personal_ver_objetivos")
+def _handle_personal_ver_objetivos(ack, body, logger):
+    ack()
+    try:
+        user_id = body["user"]["id"]
+        msg = body.get("message", {})
+        channel = body["channel"]["id"]
+        thread_ts = msg.get("ts", "")
+
+        nombre = obtener_nombre_por_id_usuario(user_id)
+        if not nombre:
+            try:
+                resp = slack_app.client.users_info(user=user_id)
+                u = resp.get("user", {})
+                p = u.get("profile", {})
+                nombre = u.get("real_name") or p.get("real_name") or p.get("display_name") or u.get("name") or user_id
+            except Exception:
+                nombre = user_id
+
+        objetivos = obtener_objetivos(nombre) if nombre else []
+        if objetivos:
+            texto_obj = objetivos[0]["objetivos"]
+            msg_obj = f"📌 *Tus objetivos actuales:*\n\n{texto_obj}"
+        else:
+            msg_obj = "📌 No tienes objetivos registrados actualmente."
+
+        slack_app.client.chat_postMessage(
+            channel=channel,
+            thread_ts=thread_ts,
+            text=msg_obj,
+        )
+    except Exception:
+        logger.exception("Error mostrando objetivos en evaluación personal")
+
+
+@slack_app.action("personal_urgencia")
+def _handle_personal_urgencia(ack, body, logger):
+    ack()
+    try:
+        user_id = body["user"]["id"]
+        msg = body.get("message", {})
+        channel = body["channel"]["id"]
+        thread_ts = msg.get("ts", "")
+        dm_channel = personal_dm_canal.get(user_id, channel)
+
+        with _lock:
+            if user_id not in personal_dm_activas:
+                return
+            estado = conversaciones_personal.get(user_id)
+            if estado is None:
+                estado = {"modo": "pre_inicial", "respuestas": {}}
+                conversaciones_personal[user_id] = estado
+            estado["urgencia_modo"] = "esperando_descripcion"
+
+        slack_app.client.chat_postMessage(
+            channel=dm_channel,
+            thread_ts=thread_ts,
+            text="🚨 Describe en una frase breve la urgencia:",
+        )
+    except Exception:
+        logger.exception("Error procesando urgencia en evaluación personal")
+
+
+@slack_app.action("personal_urgencia_enviar")
+def _handle_personal_urgencia_enviar(ack, body, logger):
+    ack()
+    try:
+        user_id = body["user"]["id"]
+        msg = body.get("message", {})
+        channel = body["channel"]["id"]
+        thread_ts = msg.get("thread_ts") or msg.get("ts", "")
+        dm_channel = personal_dm_canal.get(user_id, channel)
+
+        try:
+            slack_app.client.chat_update(
+                channel=channel,
+                ts=msg["ts"],
+                blocks=[{"type": "section", "text": {"type": "mrkdwn", "text": "🚨 Urgencia enviada al CA ✅"}}],
+                text="🚨 Urgencia enviada al CA ✅",
+            )
+        except Exception:
+            pass
+
+        with _lock:
+            es_activo = user_id in personal_dm_activas
+            estado = conversaciones_personal.get(user_id)
+            if not es_activo or not estado or estado.get("urgencia_modo") != "confirmacion_urgencia":
+                return
+            descripcion = estado.get("urgencia_descripcion", "")
+            estado.pop("urgencia_modo", None)
+            estado.pop("urgencia_descripcion", None)
+            modo_actual = estado.get("modo", "pre_inicial")
+
+        nombre = obtener_nombre_por_id_usuario(user_id)
+        if not nombre:
+            try:
+                resp = slack_app.client.users_info(user=user_id)
+                u = resp.get("user", {})
+                p = u.get("profile", {})
+                nombre = u.get("real_name") or p.get("real_name") or p.get("display_name") or u.get("name") or user_id
+            except Exception:
+                nombre = user_id
+
+        ok = _notificar_urgencia_al_ca(nombre, descripcion, logger)
+        if ok:
+            slack_app.client.chat_postMessage(channel=dm_channel, thread_ts=thread_ts, text="✅ Tu urgencia ha sido enviada a tu CA.")
+        else:
+            slack_app.client.chat_postMessage(channel=dm_channel, thread_ts=thread_ts, text="⚠️ No se pudo notificar a tu CA. Contacta directamente.")
+
+        slack_app.client.chat_postMessage(
+            channel=dm_channel,
+            thread_ts=thread_ts,
+            text="Esta es tu oportunidad para compartir tu progreso",
+            blocks=_BLOQUES_OPORTUNIDAD_SIN_URGENCIA,
+        )
+    except Exception:
+        logger.exception("Error procesando personal_urgencia_enviar")
+
+
+@slack_app.action("personal_urgencia_modificar")
+def _handle_personal_urgencia_modificar(ack, body, logger):
+    ack()
+    try:
+        user_id = body["user"]["id"]
+        msg = body.get("message", {})
+        channel = body["channel"]["id"]
+        thread_ts = msg.get("thread_ts") or msg.get("ts", "")
+        dm_channel = personal_dm_canal.get(user_id, channel)
+
+        try:
+            slack_app.client.chat_update(
+                channel=channel,
+                ts=msg["ts"],
+                blocks=[{"type": "section", "text": {"type": "mrkdwn", "text": "✏️ Modificando..."}}],
+                text="✏️ Modificando...",
+            )
+        except Exception:
+            pass
+
+        with _lock:
+            es_activo = user_id in personal_dm_activas
+            estado = conversaciones_personal.get(user_id)
+            if not es_activo or not estado or estado.get("urgencia_modo") != "confirmacion_urgencia":
+                return
+            estado["urgencia_modo"] = "esperando_descripcion"
+            estado.pop("urgencia_descripcion", None)
+
+        slack_app.client.chat_postMessage(channel=dm_channel, thread_ts=thread_ts, text="🚨 Describe de nuevo la urgencia:")
+    except Exception:
+        logger.exception("Error procesando personal_urgencia_modificar")
 
 
 def ciclo_envio_personal() -> None:

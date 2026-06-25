@@ -3,7 +3,7 @@ Skill: Informe anual IGENERIS
 No requiere ninguna base de Notion adicional. Usa las bases existentes:
   - "Evaluaciones - {nombre}"  → evaluaciones mensuales
   - "Opiniones - {nombre}"     → opiniones del CA
-  - "Objetivos empleados"      → objetivos (y revela el nombre del CA)
+  - "Objetivos - {nombre}"     → objetivos por persona (y revela el nombre del CA)
 """
 
 import hashlib
@@ -20,7 +20,7 @@ from .notion_service import (
     obtener_ca_de_empleado,
     obtener_evaluaciones_por_evaluado,
     obtener_opiniones_ca_por_advisee,
-    obtener_objetivos,
+    obtener_objetivos_persona,
 )
 from .utils import slug_archivo
 
@@ -284,7 +284,7 @@ def obtener_datos_empleado_anual(nombre: str) -> dict:
     # 2. Objetivos (también revelan el nombre del CA)
     objetivos = []
     try:
-        objetivos = obtener_objetivos(nombre)
+        objetivos = obtener_objetivos_persona(nombre)
     except Exception:
         logging.warning("No se encontraron objetivos para %s.", nombre)
 
@@ -589,13 +589,22 @@ def guardar_informe_anual_html(emp_data: dict, comentarios: dict, cargo: str = "
     objetivos_html = ""
     objetivos = emp_data.get("objetivos", [])
     if objetivos:
-        obj = objetivos[0]
-        meta = ""
-        ca_obj = esc(obj.get("ca", ""))
-        fecha_obj = esc((obj.get("fecha") or "")[:10])
-        if ca_obj or fecha_obj:
-            meta = f"<p class='fine'>Definidos por {ca_obj} — {fecha_obj}</p>"
-        objetivos_html = f"{meta}<p>{bullets_html(obj.get('objetivos',''))}</p>"
+        items_html = ""
+        for obj in objetivos:
+            titulo_o = esc(obj.get("titulo", ""))
+            tipo_o = esc(obj.get("tipo", ""))
+            kpis_o = esc(obj.get("kpis", ""))
+            desc_o = esc(obj.get("descripcion", ""))
+            ca_o = esc(obj.get("ca", ""))
+            fecha_o = esc((obj.get("fecha") or "")[:10])
+            header = f"<strong>{titulo_o}</strong>"
+            if tipo_o:
+                header += f" <span class='fine'>({tipo_o})</span>"
+            meta = f"<span class='fine'>{ca_o} — {fecha_o}</span>" if (ca_o or fecha_o) else ""
+            kpis_block = f"<p><em>KPIs:</em> {kpis_o}</p>" if kpis_o else ""
+            desc_block = f"<p>{desc_o}</p>" if desc_o else ""
+            items_html += f"<div style='margin-bottom:12px'><p>{header}</p>{meta}{kpis_block}{desc_block}</div>"
+        objetivos_html = items_html
     else:
         objetivos_html = "<p>Sin objetivos registrados.</p>"
 
@@ -754,21 +763,25 @@ def guardar_informe_anual_word(emp_data: dict, comentarios: dict, cargo: str = "
     _dxt(doc, f"OBJETIVOS {año + 1}")
     objetivos = emp_data.get("objetivos", [])
     if objetivos:
-        obj_reciente = objetivos[0]
-        ca_obj   = obj_reciente.get("ca", "")
-        fecha_obj = (obj_reciente.get("fecha") or "")[:10]
-        texto_obj = obj_reciente.get("objetivos", "")
-        if ca_obj or fecha_obj:
-            p_meta = doc.add_paragraph()
-            _dxr(p_meta, f"Definidos por {ca_obj} — {fecha_obj}".strip(" —"), size=8)
-        p_obj = doc.add_paragraph()
-        p_obj.alignment = WD_ALIGN_PARAGRAPH.JUSTIFY
-        for linea in texto_obj.strip().splitlines():
-            linea = linea.strip()
-            if linea:
-                run = p_obj.add_run(f"• {linea}\n")
-                run.font.name = "Arial"
-                run.font.size = Pt(9)
+        for obj in objetivos:
+            titulo_o = obj.get("titulo", "")
+            tipo_o = obj.get("tipo", "")
+            kpis_o = obj.get("kpis", "")
+            desc_o = obj.get("descripcion", "")
+            ca_o = obj.get("ca", "")
+            fecha_o = (obj.get("fecha") or "")[:10]
+            p_titulo = doc.add_paragraph()
+            r = p_titulo.add_run(titulo_o + (f" ({tipo_o})" if tipo_o else ""))
+            r.bold = True
+            r.font.name = "Arial"
+            r.font.size = Pt(9)
+            if ca_o or fecha_o:
+                _dxr(doc.add_paragraph(), f"{ca_o} — {fecha_o}".strip(" —"), size=8)
+            if kpis_o:
+                _dxr(doc.add_paragraph(), f"KPIs: {kpis_o}", size=9)
+            if desc_o:
+                _dxr(doc.add_paragraph(), desc_o, size=9)
+            doc.add_paragraph()
     else:
         _dxr(doc.add_paragraph(), "Sin objetivos registrados.", size=9)
 

@@ -13,7 +13,7 @@ try:
 except ImportError:
     mammoth = None
 
-from datetime import timedelta
+from datetime import datetime, timedelta, timezone
 
 from . import config
 from .notion_service import (
@@ -374,6 +374,7 @@ class ApiHandler(BaseHTTPRequestHandler):
                     raise PermissionError("Inicia sesión para acceder.")
                 persona = sesion.get("persona", "")
                 completadas = {"proyecto": False, "personal": False}
+                _fallback_5w = (datetime.now(timezone.utc) - timedelta(weeks=5)).timestamp()
                 try:
                     cal = obtener_config_calendario()
                     fecha_proyecto = cal.get("proyecto_ca")
@@ -381,13 +382,19 @@ class ApiHandler(BaseHTTPRequestHandler):
                         siguiente = siguiente_envio_calendario(fecha_proyecto, 4)
                         ultimo = siguiente - timedelta(weeks=4)
                         completadas["proyecto"] = evaluacion_proyecto_guardada_desde(persona, ultimo.timestamp())
+                    else:
+                        completadas["proyecto"] = evaluacion_proyecto_guardada_desde(persona, _fallback_5w)
                     fecha_personal = cal.get("personal")
                     if fecha_personal:
                         siguiente_p = siguiente_envio_calendario(fecha_personal, 4)
                         ultimo_p = siguiente_p - timedelta(weeks=4)
                         completadas["personal"] = evaluacion_personal_guardada_desde(persona, ultimo_p.timestamp())
+                    else:
+                        completadas["personal"] = evaluacion_personal_guardada_desde(persona, _fallback_5w)
                 except Exception:
                     logging.exception("Error comprobando estado ciclo slack")
+                    completadas["proyecto"] = evaluacion_proyecto_guardada_desde(persona, _fallback_5w)
+                    completadas["personal"] = evaluacion_personal_guardada_desde(persona, _fallback_5w)
                 _ca_aliases = [sesion.get("username", ""), sesion.get("email", "")]
                 advisees_ca = list({
                     *obtener_advisees(persona, ca_aliases=_ca_aliases),

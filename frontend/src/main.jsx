@@ -1085,7 +1085,7 @@ function ChatEvalProyecto({ token, user, onComplete, onNavigate }) {
     );
     if (step === "preguntas") {
       if (esValoracion) return (
-        <div className="chat-input-area"><div className="chat-btns">{[1,2,3,4,5].map(n => <button key={n} className="chat-btn" onClick={() => handleValoracion(String(n))}>{n}</button>)}</div></div>
+        <div className="chat-input-area"><div className="chat-btns">{[1,2,3,4].map(n => <button key={n} className="chat-btn" onClick={() => handleValoracion(String(n))}>{n}</button>)}</div></div>
       );
       return (
         <div className="chat-input-area"><div className="chat-input-row">
@@ -1117,7 +1117,7 @@ function ChatEvalProyecto({ token, user, onComplete, onNavigate }) {
         </div>
       );
       if (esModValoracion) return (
-        <div className="chat-input-area"><div className="chat-btns">{[1,2,3,4,5].map(n => <button key={n} className="chat-btn" onClick={() => handleModificarValor(String(n))}>{n}</button>)}</div></div>
+        <div className="chat-input-area"><div className="chat-btns">{[1,2,3,4].map(n => <button key={n} className="chat-btn" onClick={() => handleModificarValor(String(n))}>{n}</button>)}</div></div>
       );
       return (
         <div className="chat-input-area"><div className="chat-input-row">
@@ -1144,22 +1144,8 @@ function ChatEvalProyecto({ token, user, onComplete, onNavigate }) {
     return null;
   }
 
-  const mostrarHistBar = evaluadoNombre && ["preguntas","confirmacion","modificar_menu","modificar_valor","mas_personas"].includes(step);
-
   return (
     <div className="eval-chat-area">
-      {mostrarHistBar && (
-        <div className="chat-hist-bar">
-          <span className="chat-hist-info">
-            {evaluadoNombre}{proyecto ? ` · ${proyecto}` : ""}
-          </span>
-          {onNavigate && (
-            <button className="chat-hist-btn" onClick={() => onNavigate({ type: "historial-evaluaciones", evaluado: evaluadoNombre, evaluador: persona, proyecto })}>
-              📊 Ver evaluaciones anteriores
-            </button>
-          )}
-        </div>
-      )}
       <div className="chat-msgs">
         {msgs.map((msg, i) => (
           <div key={i} className={`chat-msg-${msg.role}`}>
@@ -1253,16 +1239,22 @@ function HistorialEvaluacionesPage({ token, evaluado, evaluador, proyecto, onBac
   );
 }
 
-function EvaluacionesSlackSection({ token, user, advisees, onNavigate }) {
+function EvaluacionesSlackSection({ token, user, advisees, onNavigate, completadasApp = {}, onCompletada }) {
   const [estadoCiclo, setEstadoCiclo] = React.useState(null);
   const [tipoActivo, setTipoActivo] = React.useState(null);
-  const [completadas, setCompletadas] = React.useState({});
+  const [completadasApi, setCompletadasApi] = React.useState({});
 
   React.useEffect(() => {
     apiRequest("/api/estado-ciclo-slack", { token })
-      .then(d => { setEstadoCiclo(d); setCompletadas(d.completadas || {}); })
+      .then(d => { setEstadoCiclo(d); setCompletadasApi(d.completadas || {}); })
       .catch(() => setEstadoCiclo({ cicloActivo: true, completadas: {}, esCA: false }));
   }, [token]);
+
+  // Merge: API result + lo que ya se completó en esta sesión
+  const completadas = React.useMemo(
+    () => ({ ...completadasApi, ...completadasApp }),
+    [completadasApi, completadasApp]
+  );
 
   const esCA = estadoCiclo?.esCA || advisees.length > 0;
   const tipos = [
@@ -1298,7 +1290,7 @@ function EvaluacionesSlackSection({ token, user, advisees, onNavigate }) {
         </nav>
         <div style={{ minHeight: "500px", display: "flex", flexDirection: "column" }}>
           {tipoActivo === "proyecto"
-            ? <ChatEvalProyecto key="proyecto" token={token} user={user} onComplete={() => setCompletadas(c => ({ ...c, proyecto: true }))} onNavigate={onNavigate} />
+            ? <ChatEvalProyecto key="proyecto" token={token} user={user} onComplete={() => { setCompletadasApi(c => ({ ...c, proyecto: true })); onCompletada?.("proyecto"); }} onNavigate={onNavigate} />
             : <div className="eval-chat-area"><div className="eval-placeholder"><p className="fine">{tipoActivo ? "Esta evaluación estará disponible próximamente." : "Selecciona un tipo de evaluación."}</p></div></div>
           }
         </div>
@@ -2445,26 +2437,45 @@ function EvaluacionesProyectoPage({ token, user, proyectos, onBack, onNavigate, 
                 const completado =
                   (completedEvals[proyectoSeleccionado] || []).includes(evalKey) ||
                   completadasNotion.includes(evalKey);
+                const mostrarHistorial = tipo !== "autoevaluacion";
                 return (
-                  <button
-                    key={evalKey}
-                    className="secondary"
-                    style={{ textAlign: "left", padding: "14px 18px", opacity: completado ? 0.55 : 1 }}
-                    disabled={completado}
-                    onClick={() =>
-                      onNavigate({
-                        type: "formulario-evaluacion-proyecto",
-                        proyecto: proyectoSeleccionado,
-                        tipo,
-                        evaluado,
-                        manager: managerDelProyecto,
-                        proyectos,
-                      })
-                    }
-                  >
-                    {completado && <span style={{ marginRight: "8px", color: "#166534" }}>✓</span>}
-                    {label}
-                  </button>
+                  <div key={evalKey} style={{ display: "flex", gap: "10px", alignItems: "stretch" }}>
+                    <button
+                      className="secondary"
+                      style={{ flex: 1, textAlign: "left", padding: "14px 18px", opacity: completado ? 0.55 : 1 }}
+                      disabled={completado}
+                      onClick={() =>
+                        onNavigate({
+                          type: "formulario-evaluacion-proyecto",
+                          proyecto: proyectoSeleccionado,
+                          tipo,
+                          evaluado,
+                          manager: managerDelProyecto,
+                          proyectos,
+                        })
+                      }
+                    >
+                      {completado && <span style={{ marginRight: "8px", color: "#166534" }}>✓</span>}
+                      {label}
+                    </button>
+                    {mostrarHistorial && (
+                      <button
+                        className="secondary"
+                        style={{ padding: "10px 14px", fontSize: "13px", whiteSpace: "nowrap", flexShrink: 0 }}
+                        onClick={() => onNavigate({
+                          type: "historial-evaluaciones",
+                          evaluado,
+                          evaluador: persona,
+                          proyecto: proyectoSeleccionado,
+                          from: "evaluaciones-proyecto",
+                          proyectos,
+                        })}
+                        title="Ver evaluaciones anteriores de esta persona en este proyecto"
+                      >
+                        📊 Historial
+                      </button>
+                    )}
+                  </div>
                 );
               })}
             </div>
@@ -2690,7 +2701,7 @@ function FormularioEvaluacionProyecto({ token, user, proyecto, tipo, manager, ev
   );
 }
 
-function EvaluacionesSlackPage({ token, user, advisees, onBack, onNavigate }) {
+function EvaluacionesSlackPage({ token, user, advisees, onBack, onNavigate, completadasApp = {}, onCompletada }) {
   return (
     <main className="page">
       <nav className="nav">
@@ -2699,7 +2710,7 @@ function EvaluacionesSlackPage({ token, user, advisees, onBack, onNavigate }) {
       </nav>
       <div style={{ paddingTop: "40px" }}>
         <p className="kicker">Evaluaciones en Slack</p>
-        <EvaluacionesSlackSection token={token} user={user} advisees={advisees || []} onNavigate={onNavigate} />
+        <EvaluacionesSlackSection token={token} user={user} advisees={advisees || []} onNavigate={onNavigate} completadasApp={completadasApp} onCompletada={onCompletada} />
       </div>
       <Footer />
     </main>
@@ -2713,6 +2724,7 @@ function App() {
   const [page, setPage] = useState(null);
   const [adminMode, setAdminMode] = useState(null); // null | "personal" | "admin"
   const [completedEvals, setCompletedEvals] = useState({});
+  const [slackEvalCompletadas, setSlackEvalCompletadas] = useState({});
 
   function navigate(newPage, newAdminModeOverride) {
     setPage(newPage);
@@ -2814,17 +2826,22 @@ function App() {
         advisees={[]}
         onBack={() => navigate(null)}
         onNavigate={navigate}
+        completadasApp={slackEvalCompletadas}
+        onCompletada={(key) => setSlackEvalCompletadas(prev => ({ ...prev, [key]: true }))}
       />
     );
   }
   if (page?.type === "historial-evaluaciones") {
+    const backFromHistorial = page.from === "evaluaciones-proyecto"
+      ? () => navigate({ type: "evaluaciones-proyecto", proyectos: page.proyectos || [], initialProyecto: page.proyecto })
+      : () => navigate({ type: "evaluaciones-slack" });
     return (
       <HistorialEvaluacionesPage
         token={token}
         evaluado={page.evaluado}
         evaluador={page.evaluador}
         proyecto={page.proyecto}
-        onBack={() => navigate({ type: "evaluaciones-slack" })}
+        onBack={backFromHistorial}
       />
     );
   }

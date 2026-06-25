@@ -751,6 +751,562 @@ function AuthScreen({ onLogin }) {
   );
 }
 
+function renderMd(text) {
+  return text.split("\n").map((line, li, arr) => {
+    const parts = line.split(/(\*[^*]+\*|_[^_]+_)/g);
+    return (
+      <span key={li}>
+        {parts.map((part, pi) => {
+          if (part.startsWith("*") && part.endsWith("*") && part.length > 2)
+            return <strong key={pi}>{part.slice(1, -1)}</strong>;
+          if (part.startsWith("_") && part.endsWith("_") && part.length > 2)
+            return <em key={pi}>{part.slice(1, -1)}</em>;
+          return <span key={pi}>{part}</span>;
+        })}
+        {li < arr.length - 1 && <br />}
+      </span>
+    );
+  });
+}
+
+function ChatEvalProyecto({ token, user, onComplete, onNavigate }) {
+  const persona = user?.persona || user?.username || "";
+  const [msgs, setMsgs] = React.useState([{
+    role: "bot",
+    text: "📍 *Tienes una evaluación mensual pendiente.*\n\n_Esta evaluación es totalmente privada, solo podrá verla el CA de la persona evaluada._\n_Si en algún momento quieres cancelar, pulsa Cancelar._\n\n*Pulsa el botón* para comenzar la evaluación.",
+  }]);
+  const [step, setStep] = React.useState("intro");
+  const [area, setArea] = React.useState(null);
+  const [proyecto, setProyecto] = React.useState("");
+  const [evaluadoNombre, setEvaluadoNombre] = React.useState("");
+  const [relacion, setRelacion] = React.useState("igual");
+  const [preguntas, setPreguntas] = React.useState([]);
+  const [preguntaIdx, setPreguntaIdx] = React.useState(0);
+  const [respuestas, setRespuestas] = React.useState({});
+  const [evaluadosEnSesion, setEvaluadosEnSesion] = React.useState([]);
+  const [inputVal, setInputVal] = React.useState("");
+  const [loading, setLoading] = React.useState(false);
+  const [empleadosTodos, setEmpleadosTodos] = React.useState([]);
+  const [sugerencias, setSugerencias] = React.useState([]);
+  const [moEvaluables, setMoEvaluables] = React.useState([]);
+  const [modificandoCampo, setModificandoCampo] = React.useState(null);
+  const bottomRef = React.useRef(null);
+
+  React.useEffect(() => { bottomRef.current?.scrollIntoView({ behavior: "smooth" }); }, [msgs]);
+  React.useEffect(() => {
+    apiRequest("/api/todos-empleados", { token }).then(d => setEmpleadosTodos(d.empleados || [])).catch(() => {});
+  }, [token]);
+
+  const botSay = (text) => setMsgs(m => [...m, { role: "bot", text }]);
+  const userSay = (text) => setMsgs(m => [...m, { role: "user", text }]);
+
+  function buscarSugerencias(texto) {
+    if (!texto || texto.length < 2) { setSugerencias([]); return; }
+    const norm = texto.toLowerCase();
+    setSugerencias(empleadosTodos.filter(e => e.toLowerCase().includes(norm)).slice(0, 5));
+  }
+
+  function getResumen(resp, preg) {
+    const lines = ["*Resumen de tus respuestas:*"];
+    lines.push(`- *Persona evaluada*: ${resp.evaluado || ""}`);
+    if (resp.proyecto) lines.push(`- *Proyecto*: ${resp.proyecto}`);
+    for (const q of preg) {
+      const label = q.texto.split("\n")[0].replace(/\*/g, "").slice(0, 55);
+      lines.push(`- *${label}*: ${resp[q.clave] || ""}`);
+    }
+    lines.push("\n¿Estás satisfecho con tus respuestas?\nPulsa *✅ Sí, guardar* o *✏️ Modificar*.");
+    return lines.join("\n");
+  }
+
+  function handleComenzar() {
+    userSay("Comenzar");
+    botSay("¿A qué área perteneces?\n*1.* Negocio\n*2.* MiddleOffice\n*3.* Palantir");
+    setStep("pedir_area");
+  }
+
+  async function handleArea(areaVal) {
+    const LABELS = { negocio: "Negocio", middleoffice: "MiddleOffice", palantir: "Palantir" };
+    userSay(LABELS[areaVal]);
+    setArea(areaVal);
+    if (areaVal === "middleoffice") {
+      setLoading(true);
+      try {
+        const d = await apiRequest("/api/buscar-empleado-slack?area=middleoffice", { token });
+        const lista = d.moEvaluables || [];
+        setMoEvaluables(lista);
+        setPreguntas(d.preguntas || []);
+        setRespuestas({ proyecto: "" });
+        botSay(lista.length ? `¿A quién quieres evaluar?\n${lista.map(e => `- ${e}`).join("\n")}` : "¿A quién quieres evaluar? Dime el nombre de la persona.");
+        setSugerencias(lista);
+      } catch { botSay("¿A quién quieres evaluar? Dime el nombre de la persona."); }
+      finally { setLoading(false); }
+      setStep("pedir_persona");
+    } else {
+      botSay("Escribe el nombre de uno de los proyectos en los que estás trabajando. Más adelante podrás evaluar el resto");
+      setStep("pedir_proyecto");
+    }
+  }
+
+  function handleProyecto() {
+    const val = inputVal.trim();
+    if (!val) return;
+    userSay(val);
+    setProyecto(val);
+    setRespuestas({ proyecto: val });
+    setInputVal("");
+    setSugerencias([]);
+    botSay(`Perfecto 😊, vamos con el proyecto *${val}*. Dime el nombre de uno de los miembros de tu equipo, podrás evaluar al resto después.`);
+    setStep("pedir_persona");
+  }
+
+  async function handlePersonaSubmit(nombreStr) {
+    const nombre = (nombreStr || "").trim();
+    if (!nombre) return;
+    setSugerencias([]);
+    setInputVal("");
+    userSay(nombre);
+    setLoading(true);
+    try {
+      const areaActual = area || "negocio";
+      const d = await apiRequest(`/api/buscar-empleado-slack?nombre=${encodeURIComponent(nombre)}&area=${areaActual}`, { token });
+      if (d.empleado) {
+        const clave = `${(respuestas.proyecto || "").toLowerCase()}|${d.empleado.toLowerCase()}`;
+        if (evaluadosEnSesion.includes(clave)) {
+          botSay(`Ya has evaluado a *${d.empleado}* en *${respuestas.proyecto || "?"}* en esta sesión. Dime el nombre de otro miembro.`);
+          return;
+        }
+        setEvaluadoNombre(d.empleado);
+        setRelacion(d.relacion || "igual");
+        const finalPregs = d.preguntas?.length ? d.preguntas : preguntas;
+        setPreguntas(finalPregs);
+        setPreguntaIdx(0);
+        setRespuestas(r => ({ ...r, evaluado: d.empleado }));
+        if (finalPregs.length) { botSay(finalPregs[0].texto); setStep("preguntas"); }
+        else botSay("⚠️ No hay preguntas configuradas.");
+      } else if (d.sugerencias?.length) {
+        setSugerencias(d.sugerencias);
+        botSay(`*${nombre}* no aparece en la lista de empleados.\n¿Querías decir alguno de estos?\n${d.sugerencias.map((s, i) => `${i + 1}. ${s}`).join("\n")}`);
+      } else {
+        botSay(`*${nombre}* no aparece en la lista de empleados. Escribe nombre y apellido como aparece en la lista.`);
+      }
+    } catch { botSay("⚠️ Error temporal consultando datos. Vuelve a intentarlo."); }
+    finally { setLoading(false); }
+  }
+
+  function avanzarPregunta(newResp, newPregs, nextIdx) {
+    if (nextIdx < newPregs.length) {
+      setPreguntaIdx(nextIdx);
+      botSay(newPregs[nextIdx].texto);
+    } else {
+      setPreguntaIdx(0);
+      botSay(getResumen(newResp, newPregs));
+      setStep("confirmacion");
+    }
+  }
+
+  function handleValoracion(val) {
+    const q = preguntas[preguntaIdx];
+    if (!q) return;
+    userSay(val);
+    const newResp = { ...respuestas, [q.clave]: val };
+    setRespuestas(newResp);
+    avanzarPregunta(newResp, preguntas, preguntaIdx + 1);
+  }
+
+  function handleRespuestaPregunta() {
+    const val = inputVal.trim();
+    if (!val) return;
+    const q = preguntas[preguntaIdx];
+    if (!q) return;
+    userSay(val);
+    setInputVal("");
+    const newResp = { ...respuestas, [q.clave]: val };
+    setRespuestas(newResp);
+    avanzarPregunta(newResp, preguntas, preguntaIdx + 1);
+  }
+
+  async function handleConfirmar() {
+    userSay("✅ Sí, guardar");
+    setLoading(true);
+    try {
+      const respsClave = Object.fromEntries(Object.entries(respuestas).filter(([k, v]) => k !== "evaluado" && k !== "proyecto" && v));
+      await apiRequest("/api/guardar-evaluacion-slack", {
+        token, method: "POST",
+        body: { evaluado: respuestas.evaluado, proyecto: respuestas.proyecto || "", area: area || "negocio", respuestas: respsClave },
+      });
+      const clave = `${(respuestas.proyecto || "").toLowerCase()}|${(respuestas.evaluado || "").toLowerCase()}`;
+      setEvaluadosEnSesion(prev => [...prev, clave]);
+      botSay("✅ *Evaluación guardada en Notion*.\n\n¿Hay más miembros en el equipo que quieras evaluar?");
+      setStep("mas_personas");
+      onComplete?.();
+    } catch { botSay("⚠️ No se pudo guardar en Notion. Revisa permisos/logs."); }
+    finally { setLoading(false); }
+  }
+
+  function handleModificar() {
+    userSay("✏️ Modificar");
+    const items = ["1. Persona evaluada"];
+    if (respuestas.proyecto) items.push("2. Proyecto");
+    const base = respuestas.proyecto ? 3 : 2;
+    preguntas.forEach((q, i) => items.push(`${base + i}. ${q.texto.split("\n")[0].replace(/\*/g, "").slice(0, 55)}`));
+    botSay(`¿Qué respuesta quieres modificar?\n${items.join("\n")}\n\nResponde con el número.`);
+    setStep("modificar_menu");
+  }
+
+  function handleModificarMenu() {
+    const num = parseInt(inputVal.trim());
+    if (isNaN(num)) { botSay("Por favor, responde con un número 🔢"); return; }
+    userSay(inputVal.trim());
+    setInputVal("");
+    let campo = null;
+    if (num === 1) campo = "evaluado";
+    else if (num === 2 && respuestas.proyecto) campo = "proyecto";
+    else {
+      const base = respuestas.proyecto ? 3 : 2;
+      const idx = num - base;
+      if (idx >= 0 && idx < preguntas.length) campo = preguntas[idx].clave;
+    }
+    if (!campo) { botSay(`Por favor, responde con un número del 1 al ${2 + (respuestas.proyecto ? 1 : 0) + preguntas.length - (respuestas.proyecto ? 0 : 1)} 🔢`); return; }
+    setModificandoCampo(campo);
+    if (campo === "evaluado") botSay("Indica el nombre de la persona a evaluar.");
+    else if (campo === "proyecto") botSay("Escribe el nuevo nombre del proyecto.");
+    else botSay(preguntas.find(q => q.clave === campo)?.texto || "Escribe la nueva respuesta.");
+    setStep("modificar_valor");
+  }
+
+  async function handleModificarValor(val) {
+    const v = (val ?? inputVal).trim();
+    if (!v) return;
+    const campo = modificandoCampo;
+    if (campo === "evaluado") {
+      setSugerencias([]);
+      setInputVal("");
+      userSay(v);
+      setLoading(true);
+      try {
+        const d = await apiRequest(`/api/buscar-empleado-slack?nombre=${encodeURIComponent(v)}&area=${area || "negocio"}`, { token });
+        if (d.empleado) {
+          setEvaluadoNombre(d.empleado);
+          setRelacion(d.relacion || "igual");
+          const finalPregs = d.preguntas?.length ? d.preguntas : preguntas;
+          setPreguntas(finalPregs);
+          const newResp = { ...respuestas, evaluado: d.empleado };
+          setRespuestas(newResp);
+          setModificandoCampo(null);
+          botSay(getResumen(newResp, finalPregs));
+          setStep("confirmacion");
+        } else if (d.sugerencias?.length) {
+          setSugerencias(d.sugerencias);
+          botSay(`*${v}* no aparece en la lista.\n¿Querías decir alguno de estos?\n${d.sugerencias.map((s, i) => `${i + 1}. ${s}`).join("\n")}`);
+        } else {
+          botSay(`*${v}* no aparece en la lista. Escribe nombre y apellido.`);
+        }
+      } catch { botSay("⚠️ Error temporal. Vuelve a intentarlo."); }
+      finally { setLoading(false); }
+    } else {
+      const esVal = campo === "q1" || campo === "mo_contribucion";
+      if (esVal && !["1","2","3","4","5"].includes(v)) { botSay("Por favor, responde con un número del 1 al 5 🔢"); return; }
+      userSay(v);
+      setInputVal("");
+      const newResp = { ...respuestas, [campo]: v };
+      if (campo === "proyecto") setProyecto(v);
+      setRespuestas(newResp);
+      setModificandoCampo(null);
+      botSay(getResumen(newResp, preguntas));
+      setStep("confirmacion");
+    }
+  }
+
+  function handleMasPersonas(si) {
+    userSay(si ? "✅ Sí" : "❌ No");
+    if (si) {
+      setEvaluadoNombre("");
+      setRespuestas(r => ({ proyecto: r.proyecto }));
+      setPreguntaIdx(0);
+      setSugerencias([]);
+      if (area === "middleoffice") {
+        botSay(moEvaluables.length ? `¿A quién quieres evaluar?\n${moEvaluables.map(e => `- ${e}`).join("\n")}` : "¿A quién quieres evaluar? Dime el nombre.");
+        setSugerencias(moEvaluables);
+      } else {
+        botSay(`Perfecto. ¿Qué otro miembro${proyecto ? ` del proyecto *${proyecto}*` : ""} quieres evaluar?`);
+      }
+      setStep("pedir_persona");
+    } else if (area === "middleoffice") {
+      botSay("Perfecto, muchas gracias por tu tiempo ❤️. Ya puedes cerrar esta sección 👋");
+      setStep("terminado");
+    } else {
+      botSay("¿Estás trabajando en algún otro proyecto?");
+      setStep("mas_proyectos");
+    }
+  }
+
+  function handleMasProyectos(si) {
+    userSay(si ? "✅ Sí" : "❌ No");
+    if (si) {
+      setProyecto(""); setEvaluadoNombre(""); setRespuestas({}); setPreguntaIdx(0); setSugerencias([]);
+      botSay("Escribe el nombre de uno de los proyectos en los que estás trabajando. Más adelante podrás evaluar el resto");
+      setStep("pedir_proyecto");
+    } else {
+      botSay("Perfecto, muchas gracias por tu tiempo ❤️. Ya puedes cerrar esta sección 👋");
+      setStep("terminado");
+    }
+  }
+
+  const pregActual = preguntas[preguntaIdx];
+  const esValoracion = pregActual?.clave === "q1" || pregActual?.clave === "mo_contribucion";
+  const esModValoracion = modificandoCampo === "q1" || modificandoCampo === "mo_contribucion";
+
+  function renderInput() {
+    if (loading) return <div className="chat-input-area"><div className="chat-input-row"><span className="fine" style={{ color: "var(--muted)" }}>...</span></div></div>;
+    if (step === "intro") return (
+      <div className="chat-input-area"><div className="chat-btns"><button className="chat-btn primary" onClick={handleComenzar}>Comenzar</button></div></div>
+    );
+    if (step === "pedir_area") return (
+      <div className="chat-input-area"><div className="chat-btns">
+        <button className="chat-btn" onClick={() => handleArea("negocio")}>Negocio</button>
+        <button className="chat-btn" onClick={() => handleArea("middleoffice")}>MiddleOffice</button>
+        <button className="chat-btn" onClick={() => handleArea("palantir")}>Palantir</button>
+      </div></div>
+    );
+    if (step === "pedir_proyecto") return (
+      <div className="chat-input-area"><div className="chat-input-row">
+        <input className="chat-input" placeholder="Nombre del proyecto..." value={inputVal} onChange={e => setInputVal(e.target.value)} onKeyDown={e => e.key === "Enter" && handleProyecto()} autoFocus />
+        <button className="chat-send-btn" onClick={handleProyecto}>→</button>
+      </div></div>
+    );
+    if (step === "pedir_persona") return (
+      <div className="chat-input-area">
+        {sugerencias.length > 0 && <div className="chat-sugerencias">{sugerencias.map(s => <button key={s} className="chat-btn" onClick={() => { setSugerencias([]); handlePersonaSubmit(s); }}>{s}</button>)}</div>}
+        <div className="chat-input-row">
+          <input className="chat-input" placeholder="Nombre del compañero..." value={inputVal} onChange={e => { setInputVal(e.target.value); buscarSugerencias(e.target.value); }} onKeyDown={e => e.key === "Enter" && handlePersonaSubmit(inputVal)} autoFocus />
+          <button className="chat-send-btn" onClick={() => handlePersonaSubmit(inputVal)}>→</button>
+        </div>
+      </div>
+    );
+    if (step === "preguntas") {
+      if (esValoracion) return (
+        <div className="chat-input-area"><div className="chat-btns">{[1,2,3,4,5].map(n => <button key={n} className="chat-btn" onClick={() => handleValoracion(String(n))}>{n}</button>)}</div></div>
+      );
+      return (
+        <div className="chat-input-area"><div className="chat-input-row">
+          <textarea className="chat-input chat-textarea" placeholder="Escribe tu respuesta..." value={inputVal} onChange={e => setInputVal(e.target.value)} onKeyDown={e => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); handleRespuestaPregunta(); } }} rows={2} autoFocus />
+          <button className="chat-send-btn" onClick={handleRespuestaPregunta}>→</button>
+        </div></div>
+      );
+    }
+    if (step === "confirmacion") return (
+      <div className="chat-input-area"><div className="chat-btns">
+        <button className="chat-btn primary" onClick={handleConfirmar}>✅ Sí, guardar</button>
+        <button className="chat-btn" onClick={handleModificar}>✏️ Modificar</button>
+      </div></div>
+    );
+    if (step === "modificar_menu") return (
+      <div className="chat-input-area"><div className="chat-input-row">
+        <input className="chat-input" placeholder="Número del campo..." value={inputVal} onChange={e => setInputVal(e.target.value)} onKeyDown={e => e.key === "Enter" && handleModificarMenu()} autoFocus />
+        <button className="chat-send-btn" onClick={handleModificarMenu}>→</button>
+      </div></div>
+    );
+    if (step === "modificar_valor") {
+      if (sugerencias.length > 0) return (
+        <div className="chat-input-area">
+          <div className="chat-sugerencias">{sugerencias.map(s => <button key={s} className="chat-btn" onClick={() => { setSugerencias([]); handleModificarValor(s); }}>{s}</button>)}</div>
+          <div className="chat-input-row">
+            <input className="chat-input" placeholder="O escribe el nombre..." value={inputVal} onChange={e => setInputVal(e.target.value)} onKeyDown={e => e.key === "Enter" && handleModificarValor(inputVal)} autoFocus />
+            <button className="chat-send-btn" onClick={() => handleModificarValor(inputVal)}>→</button>
+          </div>
+        </div>
+      );
+      if (esModValoracion) return (
+        <div className="chat-input-area"><div className="chat-btns">{[1,2,3,4,5].map(n => <button key={n} className="chat-btn" onClick={() => handleModificarValor(String(n))}>{n}</button>)}</div></div>
+      );
+      return (
+        <div className="chat-input-area"><div className="chat-input-row">
+          <input className="chat-input" placeholder="Nueva respuesta..." value={inputVal} onChange={e => setInputVal(e.target.value)} onKeyDown={e => e.key === "Enter" && handleModificarValor(inputVal)} autoFocus />
+          <button className="chat-send-btn" onClick={() => handleModificarValor(inputVal)}>→</button>
+        </div></div>
+      );
+    }
+    if (step === "mas_personas") return (
+      <div className="chat-input-area"><div className="chat-btns">
+        <button className="chat-btn primary" onClick={() => handleMasPersonas(true)}>✅ Sí</button>
+        <button className="chat-btn" onClick={() => handleMasPersonas(false)}>❌ No</button>
+      </div></div>
+    );
+    if (step === "mas_proyectos") return (
+      <div className="chat-input-area"><div className="chat-btns">
+        <button className="chat-btn primary" onClick={() => handleMasProyectos(true)}>✅ Sí</button>
+        <button className="chat-btn" onClick={() => handleMasProyectos(false)}>❌ No</button>
+      </div></div>
+    );
+    if (step === "terminado") return (
+      <div className="chat-input-area"><span className="fine" style={{ color: "var(--muted)" }}>Evaluación completada ✅</span></div>
+    );
+    return null;
+  }
+
+  const mostrarHistBar = evaluadoNombre && ["preguntas","confirmacion","modificar_menu","modificar_valor","mas_personas"].includes(step);
+
+  return (
+    <div className="eval-chat-area">
+      {mostrarHistBar && (
+        <div className="chat-hist-bar">
+          <span className="chat-hist-info">
+            {evaluadoNombre}{proyecto ? ` · ${proyecto}` : ""}
+          </span>
+          {onNavigate && (
+            <button className="chat-hist-btn" onClick={() => onNavigate({ type: "historial-evaluaciones", evaluado: evaluadoNombre, evaluador: persona, proyecto })}>
+              📊 Ver evaluaciones anteriores
+            </button>
+          )}
+        </div>
+      )}
+      <div className="chat-msgs">
+        {msgs.map((msg, i) => (
+          <div key={i} className={`chat-msg-${msg.role}`}>
+            {msg.role === "bot"
+              ? <><span className="chat-avatar">🤖</span><div className="chat-bubble-bot">{renderMd(msg.text)}</div></>
+              : <div className="chat-bubble-user">{msg.text}</div>
+            }
+          </div>
+        ))}
+        <div ref={bottomRef} />
+      </div>
+      {renderInput()}
+    </div>
+  );
+}
+
+function HistorialEvaluacionesPage({ token, evaluado, evaluador, proyecto, onBack }) {
+  const [historial, setHistorial] = React.useState(null);
+  const [error, setError] = React.useState(null);
+
+  React.useEffect(() => {
+    apiRequest(
+      `/api/historial-evaluaciones?evaluado=${encodeURIComponent(evaluado)}&evaluador=${encodeURIComponent(evaluador)}&proyecto=${encodeURIComponent(proyecto || "")}`,
+      { token }
+    )
+      .then(d => setHistorial(d.historial || []))
+      .catch(() => setError("No se pudieron cargar las evaluaciones."));
+  }, [token, evaluado, evaluador, proyecto]);
+
+  function formatFecha(iso) {
+    if (!iso) return "—";
+    try {
+      return new Date(iso).toLocaleDateString("es-ES", { day: "2-digit", month: "short", year: "numeric" });
+    } catch { return iso.slice(0, 10); }
+  }
+
+  const RELACION_LABELS = { superior: "Superior", igual: "Igual", inferior: "Inferior" };
+
+  return (
+    <main className="page">
+      <nav className="nav">
+        <a className="brand" href="/"><img src="/src/logo.png" alt="igeneris" className="brand-logo" /></a>
+        <button className="link-button" onClick={onBack}>← Volver</button>
+      </nav>
+      <div className="historial-page">
+        <p className="kicker">Historial de evaluaciones</p>
+        <h1 className="historial-title">{evaluado}</h1>
+        <p className="fine historial-subtitle">Proyecto: <strong>{proyecto || "—"}</strong></p>
+        {error && <p className="historial-empty">{error}</p>}
+        {historial === null && !error && <p className="fine" style={{ opacity: 0.5 }}>Cargando...</p>}
+        {historial?.length === 0 && (
+          <p className="historial-empty">No hay evaluaciones registradas tuyas para este proyecto aún.</p>
+        )}
+        {historial?.length > 0 && (
+          <div className="historial-tabla-wrap">
+            <table className="historial-tabla">
+              <thead>
+                <tr>
+                  <th>Fecha</th>
+                  <th>Valoración</th>
+                  <th>Justificación</th>
+                  <th>Relación</th>
+                </tr>
+              </thead>
+              <tbody>
+                {historial.map((ev, i) => (
+                  <tr key={i}>
+                    <td className="hist-fecha">{formatFecha(ev.fecha)}</td>
+                    <td className="hist-valo">
+                      {ev.q1
+                        ? <span className={`hist-valo-badge valo-${ev.q1}`}>{ev.q1}</span>
+                        : <span className="hist-valo-badge valo-x">—</span>
+                      }
+                    </td>
+                    <td className="hist-texto">{ev.q2 || <span style={{ opacity: 0.35 }}>—</span>}</td>
+                    <td className="hist-relacion">
+                      {ev.relacion
+                        ? <span className={`hist-rel-badge rel-${ev.relacion}`}>{RELACION_LABELS[ev.relacion] || ev.relacion}</span>
+                        : <span style={{ opacity: 0.35 }}>—</span>
+                      }
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
+      <Footer />
+    </main>
+  );
+}
+
+function EvaluacionesSlackSection({ token, user, advisees, onNavigate }) {
+  const [estadoCiclo, setEstadoCiclo] = React.useState(null);
+  const [tipoActivo, setTipoActivo] = React.useState(null);
+  const [completadas, setCompletadas] = React.useState({});
+
+  React.useEffect(() => {
+    apiRequest("/api/estado-ciclo-slack", { token })
+      .then(d => { setEstadoCiclo(d); setCompletadas(d.completadas || {}); })
+      .catch(() => setEstadoCiclo({ cicloActivo: true, completadas: {}, esCA: false }));
+  }, [token]);
+
+  const esCA = estadoCiclo?.esCA || advisees.length > 0;
+  const tipos = [
+    { key: "proyecto", label: "Evaluación mensual", disponible: true },
+    { key: "personal", label: "Evaluación personal", disponible: false },
+    ...(esCA ? [{ key: "ca", label: "Opiniones CA", disponible: false }] : []),
+  ];
+
+  return (
+    <div>
+      <p className="fine" style={{ marginBottom: "24px" }}>
+        Contestar aquí es exactamente igual que contestar en Slack. Tus respuestas se guardan en el mismo sitio y en el mismo formato.
+      </p>
+      <div className="eval-slack-layout">
+        <nav className="eval-tipos">
+          {tipos.map(tipo => (
+            <button
+              key={tipo.key}
+              className={`eval-tipo-btn${tipoActivo === tipo.key ? " active" : ""}${completadas[tipo.key] ? " completada" : ""}`}
+              onClick={() => { if (tipo.disponible && !completadas[tipo.key]) setTipoActivo(tipo.key); }}
+              disabled={!tipo.disponible || completadas[tipo.key]}
+              title={completadas[tipo.key] ? "Ya has completado esta evaluación en el ciclo actual" : !tipo.disponible ? "Próximamente" : ""}
+            >
+              <span>{tipo.label}</span>
+              {completadas[tipo.key]
+                ? <span className="eval-tick">✅</span>
+                : !tipo.disponible
+                  ? <span className="eval-tick" style={{ fontSize: "11px", opacity: 0.4 }}>Próx.</span>
+                  : null
+              }
+            </button>
+          ))}
+        </nav>
+        <div style={{ minHeight: "500px", display: "flex", flexDirection: "column" }}>
+          {tipoActivo === "proyecto"
+            ? <ChatEvalProyecto key="proyecto" token={token} user={user} onComplete={() => setCompletadas(c => ({ ...c, proyecto: true }))} onNavigate={onNavigate} />
+            : <div className="eval-chat-area"><div className="eval-placeholder"><p className="fine">{tipoActivo ? "Esta evaluación estará disponible próximamente." : "Selecciona un tipo de evaluación."}</p></div></div>
+          }
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function Dashboard({ token, user, onLogout, onNavigate, onBackToRoleSelect = null }) {
   const [evaluados, setEvaluados] = useState([]);
   const [evaluado, setEvaluado] = useState("");
@@ -1036,6 +1592,12 @@ function Dashboard({ token, user, onLogout, onNavigate, onBackToRoleSelect = nul
               disabled={!ownEvaluado || status === "Preparando trayectoria visual..."}
             >
               {status === "Preparando trayectoria visual..." ? "Generando..." : "Mi wrapped"}
+            </button>
+            <button
+              className="menu-item"
+              onClick={() => onNavigate({ type: "evaluaciones-slack" })}
+            >
+              Evaluaciones en Slack
             </button>
             {advisees.length > 0 && (
               <button
@@ -2158,6 +2720,22 @@ function FormularioEvaluacionProyecto({ token, user, proyecto, tipo, manager, ev
   );
 }
 
+function EvaluacionesSlackPage({ token, user, advisees, onBack, onNavigate }) {
+  return (
+    <main className="page">
+      <nav className="nav">
+        <a className="brand" href="/"><img src="/src/logo.png" alt="igeneris" className="brand-logo" /></a>
+        <button className="link-button" onClick={onBack}>← Volver</button>
+      </nav>
+      <div style={{ paddingTop: "40px" }}>
+        <p className="kicker">Evaluaciones en Slack</p>
+        <EvaluacionesSlackSection token={token} user={user} advisees={advisees || []} onNavigate={onNavigate} />
+      </div>
+      <Footer />
+    </main>
+  );
+}
+
 function App() {
   const resetToken = getResetToken();
   const [token, setToken] = useState(localStorage.getItem("evaluabot_token") || sessionStorage.getItem("evaluabot_token") || "");
@@ -2255,6 +2833,28 @@ function App() {
         onNavigate={navigate}
         completedEvals={completedEvals}
         initialProyecto={page.initialProyecto}
+      />
+    );
+  }
+  if (page?.type === "evaluaciones-slack") {
+    return (
+      <EvaluacionesSlackPage
+        token={token}
+        user={user}
+        advisees={[]}
+        onBack={() => navigate(null)}
+        onNavigate={navigate}
+      />
+    );
+  }
+  if (page?.type === "historial-evaluaciones") {
+    return (
+      <HistorialEvaluacionesPage
+        token={token}
+        evaluado={page.evaluado}
+        evaluador={page.evaluador}
+        proyecto={page.proyecto}
+        onBack={() => navigate({ type: "evaluaciones-slack" })}
       />
     );
   }

@@ -566,6 +566,17 @@ def handle_message_events(event, logger):
             reply("⚠️ Error temporal consultando datos. Vuelve a intentarlo.")
             return
 
+    # Comprobar si ya completó la evaluación en este ciclo (solo para conversaciones nuevas)
+    _ya_respondio = False
+    if _modo_peek == "pre_inicial":
+        try:
+            _nombre_ya = _nombre_real(user_id, logger)
+            _hora_env = evaluacion_hora.get(user_id, 0)
+            if _hora_env:
+                _ya_respondio = evaluacion_proyecto_guardada_desde(_nombre_ya, _hora_env)
+        except Exception:
+            logger.exception("Error comprobando si ya respondió en este ciclo")
+
     # Máquina de estados en un único bloque con lock
     with lock:
         estado = conversaciones.get(user_id)
@@ -583,14 +594,19 @@ def handle_message_events(event, logger):
         pregunta = None
 
         if modo == "pre_inicial":
-            estado["modo"] = "esperando_area"
-            accion = "pedir_area"
-            pregunta = (
-                "¿A qué área perteneces?\n"
-                "*1.* Negocio\n"
-                "*2.* MiddleOffice\n"
-                "*3.* Palantir"
-            )
+            if _ya_respondio:
+                evaluaciones_dm_activas.discard(user_id)
+                conversaciones.pop(user_id, None)
+                accion = "ya_respondido"
+            else:
+                estado["modo"] = "esperando_area"
+                accion = "pedir_area"
+                pregunta = (
+                    "¿A qué área perteneces?\n"
+                    "*1.* Negocio\n"
+                    "*2.* MiddleOffice\n"
+                    "*3.* Palantir"
+                )
 
         elif modo == "esperando_area":
             _AREA_MAP = {
@@ -949,6 +965,9 @@ def handle_message_events(event, logger):
             reply(f"¿A quién quieres evaluar?\n{lista}")
         else:
             reply("¿A quién quieres evaluar? Dime el nombre de la persona.")
+        return
+    if accion == "ya_respondido":
+        reply("Ya has completado tu evaluación mensual 👏 ¡Muchas gracias por tu tiempo! 👋")
         return
     if accion == "terminar":
         reply("Perfecto, muchas gracias por tu tiempo ❤️. Ya puedes salir del hilo 👋")

@@ -1263,6 +1263,101 @@ def obtener_perfil_empleado(nombre: str) -> dict:
     return {"cargo": "", "foto": ""}
 
 
+# ---------------------------------------------------------------------------
+# Criterios de evaluación por grupo (Negocio / Palantir / MiddleOffice)
+# ---------------------------------------------------------------------------
+
+_NOMBRE_PAGINA_CRITERIOS = "Criterios de evaluaciones"
+_cache_criterios: dict[str, tuple[dict, float]] = {}
+_lock_criterios = threading.Lock()
+_CRITERIOS_CACHE_TTL = 300  # 5 minutos
+
+# IDs de las BDs de criterios (se descubren dinámicamente la primera vez)
+_criterios_db_ids: dict[str, str] = {}
+_criterios_db_ids_ts: float = 0.0
+
+
+def _obtener_db_criterios(grupo: str) -> str | None:
+    """Devuelve el data_source_id de la BD de criterios para el grupo dado."""
+    global _criterios_db_ids, _criterios_db_ids_ts
+    ahora = time.time()
+    with _lock_criterios:
+        if _criterios_db_ids and (ahora - _criterios_db_ids_ts) < _CRITERIOS_CACHE_TTL:
+            return _criterios_db_ids.get(grupo)
+
+    try:
+        criterios_page_id = _buscar_objeto_notion_por_nombre(_NOMBRE_PAGINA_CRITERIOS)
+        if not criterios_page_id:
+            return None
+        ids: dict[str, str] = {}
+        for bloque in _iter_blocks(criterios_page_id):
+            if bloque.get("type") == "child_database":
+                titulo = _titulo_child_database(bloque)
+                try:
+                    db = notion.databases.retrieve(database_id=bloque["id"])
+                    db_id = _data_source_id(db)
+                except Exception:
+                    db_id = bloque["id"]
+                ids.setdefault(titulo, db_id)  # usa la primera (original), ignora duplicados
+        with _lock_criterios:
+            _criterios_db_ids = ids
+            _criterios_db_ids_ts = time.time()
+        return ids.get(grupo)
+    except Exception:
+        logging.exception("Error buscando BD de criterios para grupo '%s'", grupo)
+        return None
+
+
+def obtener_criterios_evaluacion(grupo: str) -> dict:
+    """
+    Devuelve {dimension_label: {nivel: [textos]}} para el grupo indicado.
+    Lee de 'Criterios de evaluaciones/{grupo}' en Notion. Cachea 5 min.
+    """
+    ahora = time.time()
+    with _lock_criterios:
+        cached = _cache_criterios.get(grupo)
+        if cached and (ahora - cached[1]) < _CRITERIOS_CACHE_TTL:
+            return cached[0]
+
+    db_id = _obtener_db_criterios(grupo)
+    if not db_id:
+        return {}
+
+    resultado: dict = {}
+    try:
+        cursor = None
+        while True:
+            kwargs: dict = {"page_size": 100}
+            if cursor:
+                kwargs["start_cursor"] = cursor
+            resp = _query_bbdd(db_id, **kwargs)
+            for row in resp.get("results", []):
+                props = row.get("properties", {})
+                texto = "".join(t.get("plain_text", "") for t in (props.get("Criterio") or {}).get("title", []))
+                dimension = (props.get("Dimension") or {}).get("select", {}) or {}
+                dimension = dimension.get("name", "")
+                nivel = (props.get("Nivel") or {}).get("select", {}) or {}
+                nivel = nivel.get("name", "")
+                orden = (props.get("Orden") or {}).get("number") or 999
+                if texto and dimension and nivel:
+                    resultado.setdefault(dimension, {}).setdefault(nivel, [])
+                    resultado[dimension][nivel].append((orden, texto))
+            if not resp.get("has_more"):
+                break
+            cursor = resp.get("next_cursor")
+        # Ordenar por 'orden' y dejar solo textos
+        for dim in resultado:
+            for niv in resultado[dim]:
+                resultado[dim][niv] = [t for _, t in sorted(resultado[dim][niv])]
+    except Exception:
+        logging.exception("Error leyendo criterios para grupo '%s'", grupo)
+        return {}
+
+    with _lock_criterios:
+        _cache_criterios[grupo] = (resultado, time.time())
+    return resultado
+
+
 def _tokens_nombre(nombre):
     return {token for token in _normalizar_para_match(nombre).split() if len(token) > 1}
 
@@ -1519,6 +1614,47 @@ def obtener_evaluaciones_por_evaluado(evaluado):
         if bbdd["evaluado"] == evaluado:
             return obtener_evaluaciones_de_bbdd(bbdd["id"], bbdd["evaluado"])
     raise RuntimeError(f"No se encontró una tabla de evaluaciones para {evaluado}.")
+
+
+def obtener_historial_mis_evaluaciones(evaluado: str, evaluador: str, proyecto_web: str) -> list:
+    """Devuelve las evaluaciones que `evaluador` registró sobre `evaluado` en un proyecto similar a `proyecto_web`."""
+    import re as _re
+    from difflib import SequenceMatcher
+
+    def _tokenize(s):
+        s = s.lower().replace("_", " ").replace("-", " ")
+        return [w for w in s.split() if not _re.match(r"^\d{4}$", w) and len(w) >= 3]
+
+    def _proyecto_coincide(pw, pn):
+        tokens = _tokenize(pw)
+        notion_low = pn.lower()
+        tokens_n = _tokenize(pn)
+        if not tokens or not pn.strip():
+            return False
+        for tok in tokens:
+            if tok in notion_low:
+                return True
+            for ntok in tokens_n:
+                if SequenceMatcher(None, tok, ntok).ratio() >= 0.78:
+                    return True
+        return False
+
+    evaluador_norm = normalizar_nombre(evaluador)
+    try:
+        todas = obtener_evaluaciones_por_evaluado(evaluado)
+    except Exception:
+        return []
+
+    resultado = []
+    for ev in todas:
+        if normalizar_nombre(ev.get("nombre", "")) != evaluador_norm:
+            continue
+        if proyecto_web and not _proyecto_coincide(proyecto_web, ev.get("proyecto", "")):
+            continue
+        resultado.append(ev)
+
+    resultado.sort(key=lambda x: x.get("fecha", ""))
+    return resultado
 
 
 # ---------------------------------------------------------------------------

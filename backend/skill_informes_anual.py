@@ -21,6 +21,7 @@ from .notion_service import (
     obtener_evaluaciones_por_evaluado,
     obtener_opiniones_ca_por_advisee,
     obtener_objetivos_persona,
+    obtener_criterios_evaluacion,
 )
 from .utils import slug_archivo
 
@@ -230,14 +231,44 @@ def _nivel_cargo(cargo: str) -> str | None:
     return None
 
 
+def _grupo_por_cargo(cargo: str) -> str:
+    c = cargo.lower()
+    if "palantir" in c:
+        return "Palantir"
+    if "head" in c:
+        return "MiddleOffice"
+    return "Negocio"
+
+
 def _criterios_para_prompt(cargo: str) -> str:
     nivel = _nivel_cargo(cargo)
+    grupo = _grupo_por_cargo(cargo)
+
+    # Intentar leer desde Notion
+    try:
+        criterios_notion = obtener_criterios_evaluacion(grupo)
+    except Exception:
+        criterios_notion = {}
+
+    if criterios_notion:
+        idx = _ORDEN_CARGO.index(nivel) if nivel and nivel in _ORDEN_CARGO else -1
+        bloques = [f"Lo que se espera de un {cargo} en {grupo} y niveles superiores como referencia:"]
+        for dim_label, niveles_dict in criterios_notion.items():
+            lineas = []
+            niveles_orden = [lvl for lvl in _ORDEN_CARGO if lvl in niveles_dict]
+            for lvl in (niveles_orden[max(0, idx - 1):] if idx >= 0 else niveles_orden):
+                criterios = niveles_dict.get(lvl, [])
+                if criterios:
+                    lineas.append(f"  [{lvl.title()}]: " + " / ".join(criterios))
+            if lineas:
+                bloques.append(f"\n{dim_label}:\n" + "\n".join(lineas))
+        return "\n".join(bloques)
+
+    # Fallback al diccionario hardcodeado (solo Negocio)
     if not nivel:
         return ""
     idx = _ORDEN_CARGO.index(nivel)
-    bloques = [
-        f"Lo que se espera de un {cargo} (nivel {nivel}) y niveles superiores como referencia:"
-    ]
+    bloques = [f"Lo que se espera de un {cargo} (nivel {nivel}) y niveles superiores como referencia:"]
     for dim_key, dim_label in _ETIQUETAS_DIM.items():
         dim_criterios = _CRITERIOS_DTI.get(dim_key, {})
         lineas = []

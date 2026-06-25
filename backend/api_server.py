@@ -13,6 +13,8 @@ try:
 except ImportError:
     mammoth = None
 
+from datetime import timedelta
+
 from . import config
 from .notion_service import (
     listar_bbdd_evaluados,
@@ -32,7 +34,20 @@ from .notion_service import (
     toggle_acceso_advisee_individual,
     obtener_perfil_empleado,
     obtener_registros_empleados,
+    evaluacion_proyecto_guardada_desde,
+    evaluacion_personal_guardada_desde,
+    obtener_config_calendario,
+    siguiente_envio_calendario,
+    guardar_en_notion,
+    buscar_empleado_y_cargo,
+    obtener_preguntas_desde_notion,
+    obtener_preguntas_mo,
+    obtener_preguntas_palantir,
+    obtener_evaluados_middleoffice,
+    sugerir_empleados_parecidos,
+    obtener_historial_mis_evaluaciones,
 )
+from .hierarchy import comparar_jerarquia, tipo_relacion
 from .project_evals import (
     obtener_proyectos_activos_empleado,
     obtener_equipo_proyecto,
@@ -353,6 +368,108 @@ class ApiHandler(BaseHTTPRequestHandler):
             if ruta.startswith("/api/files/"):
                 self.servir_archivo_protegido(ruta.removeprefix("/api/files/"), parsed.query)
                 return
+            if ruta == "/api/estado-ciclo-slack":
+                sesion = self.sesion_actual()
+                if not sesion:
+                    raise PermissionError("Inicia sesión para acceder.")
+                persona = sesion.get("persona", "")
+                completadas = {"proyecto": False, "personal": False}
+                try:
+                    cal = obtener_config_calendario()
+                    fecha_proyecto = cal.get("proyecto_ca")
+                    if fecha_proyecto:
+                        siguiente = siguiente_envio_calendario(fecha_proyecto, 4)
+                        ultimo = siguiente - timedelta(weeks=4)
+                        completadas["proyecto"] = evaluacion_proyecto_guardada_desde(persona, ultimo.timestamp())
+                    fecha_personal = cal.get("personal")
+                    if fecha_personal:
+                        siguiente_p = siguiente_envio_calendario(fecha_personal, 4)
+                        ultimo_p = siguiente_p - timedelta(weeks=4)
+                        completadas["personal"] = evaluacion_personal_guardada_desde(persona, ultimo_p.timestamp())
+                except Exception:
+                    logging.exception("Error comprobando estado ciclo slack")
+                _ca_aliases = [sesion.get("username", ""), sesion.get("email", "")]
+                advisees_ca = list({
+                    *obtener_advisees(persona, ca_aliases=_ca_aliases),
+                    *listar_advisees_con_opiniones_ca(persona, ca_aliases=_ca_aliases),
+                })
+                self.responder_json({
+                    "cicloActivo": True,
+                    "completadas": completadas,
+                    "esCA": len(advisees_ca) > 0,
+                })
+                return
+            if ruta == "/api/buscar-empleado-slack":
+                sesion = self.sesion_actual()
+                if not sesion:
+                    raise PermissionError("Inicia sesión para acceder.")
+                query_params = urllib.parse.parse_qs(parsed.query)
+                nombre_busqueda = query_params.get("nombre", [""])[0]
+                area = query_params.get("area", ["negocio"])[0].lower()
+                persona = sesion.get("persona", "")
+                # MiddleOffice sin nombre → devuelve evaluables + preguntas
+                if area == "middleoffice" and not nombre_busqueda:
+                    mo_evaluables = obtener_evaluados_middleoffice(persona)
+                    self.responder_json({
+                        "moEvaluables": mo_evaluables,
+                        "preguntas": obtener_preguntas_mo(),
+                    })
+                    return
+                if not nombre_busqueda:
+                    self.responder_json({"error": "Falta el nombre."}, 400)
+                    return
+                empleado, cargo_evaluado = buscar_empleado_y_cargo(nombre_busqueda)
+                if area == "middleoffice" and not empleado:
+                    # Para MO, el nombre puede no estar en la lista general pero sí en MO
+                    mo_evaluables = obtener_evaluados_middleoffice(persona)
+                    for mo_e in mo_evaluables:
+                        if normalizar_nombre(mo_e) == normalizar_nombre(nombre_busqueda):
+                            empleado = mo_e
+                            break
+                if not empleado:
+                    self.responder_json({"empleado": None, "sugerencias": sugerir_empleados_parecidos(nombre_busqueda)})
+                    return
+                evaluador_perfil = obtener_perfil_empleado(persona)
+                cargo_evaluador = evaluador_perfil.get("cargo", "")
+                relacion = comparar_jerarquia(cargo_evaluador, cargo_evaluado or "")
+                tipo = tipo_relacion(relacion)
+                if area == "middleoffice":
+                    preguntas = obtener_preguntas_mo()
+                elif area == "palantir":
+                    preguntas = obtener_preguntas_palantir(tipo)
+                else:
+                    pn = obtener_preguntas_desde_notion(tipo)
+                    nocion_q1 = pn.get("q1", "")
+                    def _es_default(t):
+                        return not t or t.startswith("Este mes") or "Puedes considerar claridad" in t
+                    if _es_default(nocion_q1):
+                        sujeto = "del Project Leader" if relacion == "inferior" else f"de {empleado}"
+                        texto_q1 = f"¿Cómo valorarías del 1 al 5 la contribución {sujeto} al buen avance del proyecto?"
+                    elif "{nombre}" in nocion_q1:
+                        nombre_resuelto = empleado if relacion != "inferior" else "el Project Leader"
+                        texto_q1 = nocion_q1.replace("{nombre}", nombre_resuelto)
+                    else:
+                        texto_q1 = nocion_q1
+                    preguntas = [
+                        {"clave": "q1", "texto": texto_q1},
+                        {"clave": "q2", "texto": pn.get("q2") or "Indica un ejemplo concreto que justifique tu valoración"},
+                    ]
+                self.responder_json({"empleado": empleado, "relacion": relacion, "preguntas": preguntas})
+                return
+            if ruta == "/api/historial-evaluaciones":
+                sesion = self.sesion_actual()
+                if not sesion:
+                    raise PermissionError("Inicia sesión para acceder.")
+                query_params = urllib.parse.parse_qs(parsed.query)
+                evaluado = query_params.get("evaluado", [""])[0]
+                evaluador = query_params.get("evaluador", [""])[0]
+                proyecto = query_params.get("proyecto", [""])[0]
+                if not evaluado or not evaluador:
+                    self.responder_json({"error": "Faltan parámetros."}, 400)
+                    return
+                historial = obtener_historial_mis_evaluaciones(evaluado, evaluador, proyecto)
+                self.responder_json({"historial": historial})
+                return
             self.responder_json({"error": "No encontrado"}, 404)
         except PermissionError as error:
             self.responder_json({"error": str(error)}, 403)
@@ -576,6 +693,28 @@ class ApiHandler(BaseHTTPRequestHandler):
                     self.responder_json({"ok": True})
                 else:
                     self.responder_json({"error": "No se pudo guardar la evaluación en Notion."}, 500)
+                return
+            if ruta == "/api/guardar-evaluacion-slack":
+                persona = sesion.get("persona", "")
+                evaluado_nombre = datos.get("evaluado", "").strip()
+                proyecto_nombre = datos.get("proyecto", "").strip()
+                area = datos.get("area", "negocio").strip().lower()
+                respuestas_usuario = datos.get("respuestas", {})
+                if not evaluado_nombre or not persona:
+                    self.responder_json({"error": "Faltan campos obligatorios."}, 400)
+                    return
+                respuestas_completas = {"evaluado": evaluado_nombre, "proyecto": proyecto_nombre}
+                respuestas_completas.update({k: v for k, v in respuestas_usuario.items() if v})
+                _, cargo_evaluado = buscar_empleado_y_cargo(evaluado_nombre)
+                evaluador_perfil = obtener_perfil_empleado(persona)
+                cargo_evaluador = evaluador_perfil.get("cargo", "")
+                relacion = comparar_jerarquia(cargo_evaluador, cargo_evaluado or "")
+                _AREA_DISPLAY = {"negocio": "Negocio", "middleoffice": "MiddleOffice", "palantir": "Palantir"}
+                ok = guardar_en_notion(persona, respuestas_completas, relacion=relacion, area=_AREA_DISPLAY.get(area, "Negocio"))
+                if ok:
+                    self.responder_json({"ok": True})
+                else:
+                    self.responder_json({"error": "No se pudo guardar en Notion."}, 500)
                 return
             self.responder_json({"error": "No encontrado"}, 404)
         except PermissionError as error:

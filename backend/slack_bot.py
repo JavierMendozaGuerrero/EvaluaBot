@@ -472,7 +472,7 @@ def handle_message_events(event, logger):
                 slack_app.client.chat_postMessage(
                     channel=channel,
                     thread_ts=thread_ts,
-                    text="Evaluación caducada, por favor conteste en la última notificación.",
+                    text="Este hilo no es una evaluación. Por favor, ve al mensaje de la evaluación y contesta ahí.",
                 )
         return
 
@@ -488,6 +488,11 @@ def handle_message_events(event, logger):
         slack_app.client.chat_postMessage(channel=dm_channel, thread_ts=thread_ts, text=text)
 
     if normalizar_nombre(texto) == "sos":
+        with lock:
+            _modo_sos = (conversaciones.get(user_id) or {}).get("modo")
+        if _modo_sos == "terminado":
+            reply("Esta evaluación ya ha concluido, por favor salga del hilo. 👋")
+            return
         with lock:
             conversaciones.pop(user_id, None)
         reply("Evaluación *cancelada* voluntariamente. Si quieres volver a empezar, escribe cualquier mensaje en este hilo.")

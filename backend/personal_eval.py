@@ -76,9 +76,9 @@ def enviar_pregunta_inicial_personal() -> None:
                     objetivos = obtener_objetivos(nombre) if nombre else []
                     if objetivos:
                         texto_obj = objetivos[0]["objetivos"]
-                        msg_obj = f"📌 Como recordatorio, tus objetivos son:\n\n{texto_obj}"
+                        msg_obj = f"📌 Como recordatorio, tus objetivos son:\n\n{texto_obj}\n\n*Envía cualquier mensaje en el hilo* para comenzar la evaluación"
                     else:
-                        msg_obj = "📌 Como recordatorio: no tienes objetivos registrados."
+                        msg_obj = "📌 Como recordatorio: no tienes objetivos registrados.\n\n*Envía cualquier mensaje en el hilo* para comenzar la evaluación"
                     slack_app.client.chat_postMessage(
                         channel=dm_channel,
                         thread_ts=msg_ts,
@@ -149,7 +149,7 @@ def manejar_mensaje_personal(event, logger) -> None:
     if normalizar_nombre(texto) == "sos":
         with _lock:
             conversaciones_personal.pop(user_id, None)
-        reply("Evaluación cancelada. Si quieres volver a empezar, escribe en este hilo.")
+        reply("Evaluación *cancelada* voluntariamente. Si quieres volver a empezar, escribe cualquier mensaje en este hilo.")
         return
 
     texto_norm = normalizar_nombre(texto)

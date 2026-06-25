@@ -530,7 +530,7 @@ def manejar_mensaje_ca(event, logger) -> None:
     if normalizar_nombre(texto) == "sos":
         with _lock:
             conversaciones_ca.pop(conv_key, None)
-        reply("Evaluación cancelada. Si quieres volver a empezar, escribe en este hilo.")
+        reply("Evaluación *cancelada* voluntariamente. Si quieres volver a empezar, escribe cualquier mensaje en este hilo.")
         return
 
     accion = None

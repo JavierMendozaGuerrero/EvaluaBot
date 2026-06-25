@@ -2400,7 +2400,6 @@ PREGUNTAS_PERSONALES_DEFAULT = {
         "📝 *Tienes opción de seguimiento personal pendiente*\n\n"
         "_Esta evaluación es totalmente privada, solo podrá verla tu CA._\n"
         "_Si en algún momento quieres cancelar, escribe SOS en el hilo._\n\n"
-        "*Envía cualquier mensaje en el hilo* para comenzar la evaluación. "
         "Inmediatamente se te mandarán tus objetivos actuales para que puedas reflexionar "
         "si te estás dirigiendo hacia conseguirlos. 🏆"
     ),

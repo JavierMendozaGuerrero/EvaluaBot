@@ -30,6 +30,15 @@ from .notion_service import (
     advisee_tiene_acceso_individual,
     toggle_acceso_advisee_individual,
     obtener_perfil_empleado,
+    obtener_registros_empleados,
+)
+from .project_evals import (
+    obtener_proyectos_activos_empleado,
+    obtener_equipo_proyecto,
+    obtener_preguntas_tipo,
+    activar_evaluaciones_empleados,
+    guardar_evaluacion_proyecto,
+    LABELS_TIPOS,
 )
 from .reports import generar_archivo_trayectoria, generar_archivos_informe
 from .skill_informes_anual import generar_informe_anual, obtener_empleados_evaluacion_anual
@@ -259,6 +268,49 @@ class ApiHandler(BaseHTTPRequestHandler):
                     "htmlUrl": self.url_archivo(informe["html"], evaluado) if informe.get("html") else None,
                 })
                 return
+            if ruta == "/api/evaluaciones-proyecto-activas":
+                sesion = self.sesion_actual()
+                if not sesion:
+                    raise PermissionError("Inicia sesión para acceder.")
+                persona = sesion.get("persona", "")
+                proyectos = obtener_proyectos_activos_empleado(persona)
+                self.responder_json({"proyectos": proyectos})
+                return
+            if ruta == "/api/todos-empleados":
+                sesion = self.sesion_actual()
+                if not sesion:
+                    raise PermissionError("Inicia sesión para acceder.")
+                try:
+                    registros = obtener_registros_empleados()
+                    empleados = sorted(
+                        [r["nombre"] for r in registros if r.get("nombre")],
+                        key=lambda n: n.lower(),
+                    )
+                except Exception:
+                    empleados = []
+                self.responder_json({"empleados": empleados})
+                return
+            if ruta == "/api/preguntas-evaluacion-proyecto":
+                sesion = self.sesion_actual()
+                if not sesion:
+                    raise PermissionError("Inicia sesión para acceder.")
+                query_params = urllib.parse.parse_qs(parsed.query)
+                tipo = query_params.get("tipo", [""])[0]
+                if tipo not in LABELS_TIPOS:
+                    self.responder_json({"error": "Tipo no válido."}, 400)
+                    return
+                preguntas = obtener_preguntas_tipo(tipo)
+                self.responder_json({"preguntas": preguntas})
+                return
+            if ruta == "/api/equipo-proyecto":
+                sesion = self.sesion_actual()
+                if not sesion:
+                    raise PermissionError("Inicia sesión para acceder.")
+                query_params = urllib.parse.parse_qs(parsed.query)
+                proyecto = query_params.get("proyecto", [""])[0]
+                empleados = obtener_equipo_proyecto(proyecto) if proyecto else []
+                self.responder_json({"empleados": empleados})
+                return
             if ruta.startswith("/api/files/"):
                 self.servir_archivo_protegido(ruta.removeprefix("/api/files/"), parsed.query)
                 return
@@ -421,6 +473,38 @@ class ApiHandler(BaseHTTPRequestHandler):
                     "ok": True,
                     "pdfUrl": self.url_archivo(pdf_filename, evaluado_subida),
                 })
+                return
+            if ruta == "/api/activar-evaluaciones-proyecto":
+                manager = sesion.get("persona", "")
+                proyecto = datos.get("proyecto", "").strip()
+                empleados = datos.get("empleados", [])
+                if not proyecto:
+                    self.responder_json({"error": "Falta el nombre del proyecto."}, 400)
+                    return
+                if not empleados or not isinstance(empleados, list):
+                    self.responder_json({"error": "Debes seleccionar al menos un empleado."}, 400)
+                    return
+                resultado = activar_evaluaciones_empleados(manager, proyecto, empleados)
+                self.responder_json(resultado)
+                return
+            if ruta == "/api/guardar-evaluacion-proyecto":
+                evaluador = sesion.get("persona", "")
+                proyecto = datos.get("proyecto", "").strip()
+                tipo = datos.get("tipo", "").strip()
+                evaluado = datos.get("evaluado", "").strip()
+                respuestas = datos.get("respuestas", {})
+                if not proyecto or not tipo or not evaluado:
+                    self.responder_json({"error": "Faltan campos obligatorios."}, 400)
+                    return
+                if tipo not in LABELS_TIPOS:
+                    self.responder_json({"error": "Tipo de evaluación no válido."}, 400)
+                    return
+                preguntas = obtener_preguntas_tipo(tipo)
+                ok = guardar_evaluacion_proyecto(evaluador, evaluado, proyecto, tipo, respuestas, preguntas)
+                if ok:
+                    self.responder_json({"ok": True})
+                else:
+                    self.responder_json({"error": "No se pudo guardar la evaluación en Notion."}, 500)
                 return
             self.responder_json({"error": "No encontrado"}, 404)
         except PermissionError as error:

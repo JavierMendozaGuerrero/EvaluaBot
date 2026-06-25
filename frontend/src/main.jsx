@@ -712,6 +712,7 @@ function Dashboard({ token, user, onLogout, onNavigate, onBackToRoleSelect = nul
   const [misObjetivos, setMisObjetivos] = useState([]);
   const [informesOpen, setInformesOpen] = useState(false);
   const [seccionActiva, setSeccionActiva] = useState(null);
+  const [proyectosActivos, setProyectosActivos] = useState([]);
 
   useEffect(() => {
     const apply = (data) => { setEvaluados(data.evaluados || []); setEvaluado(data.evaluados?.[0]?.value || ""); };
@@ -777,6 +778,13 @@ function Dashboard({ token, user, onLogout, onNavigate, onBackToRoleSelect = nul
       .then(apply)
       .catch(() => {});
   }, [token, user?.persona]);
+
+  useEffect(() => {
+    if (isAdmin) return;
+    apiRequestCached("/api/evaluaciones-proyecto-activas", { token }, (d) => setProyectosActivos(d.proyectos || []))
+      .then((d) => setProyectosActivos(d.proyectos || []))
+      .catch(() => {});
+  }, [token, isAdmin]);
 
   const role = isAdmin ? "Admin" : "";
   const ownEvaluado = user?.persona || user?.username || "";
@@ -906,6 +914,22 @@ function Dashboard({ token, user, onLogout, onNavigate, onBackToRoleSelect = nul
         <div className="profile-grid">
 
           <nav className="profile-menu">
+            {!isAdmin && (
+              <button
+                className="menu-item"
+                onClick={() => onNavigate({ type: "activar-evaluaciones-proyecto" })}
+              >
+                Responsables de proyecto
+              </button>
+            )}
+            {!isAdmin && proyectosActivos.length > 0 && (
+              <button
+                className="menu-item"
+                onClick={() => onNavigate({ type: "evaluaciones-proyecto", proyectos: proyectosActivos })}
+              >
+                Evaluaciones por proyectos
+              </button>
+            )}
             <button className={`menu-item${informesOpen ? " active" : ""}`} onClick={() => setInformesOpen((v) => !v)}>
               Mis informes
             </button>
@@ -1374,6 +1398,408 @@ function AdviseeDetail({ token, advisee, advisees, onBack, onNavigate }) {
   );
 }
 
+// ---------------------------------------------------------------------------
+// Activar evaluaciones de proyecto (responsable de proyecto)
+// ---------------------------------------------------------------------------
+
+function ActivarEvaluacionesProyectoPage({ token, user, onBack }) {
+  const [proyecto, setProyecto] = useState("");
+  const [todosEmpleados, setTodosEmpleados] = useState([]);
+  const [seleccionados, setSeleccionados] = useState([]);
+  const [loading, setLoading] = useState(false);
+  const [loadingEmpleados, setLoadingEmpleados] = useState(true);
+  const [status, setStatus] = useState("");
+  const [enviado, setEnviado] = useState(false);
+
+  const persona = user?.persona || user?.username || "";
+
+  useEffect(() => {
+    apiRequest("/api/todos-empleados", { token })
+      .then((d) => setTodosEmpleados(d.empleados || []))
+      .catch(() => setTodosEmpleados([]))
+      .finally(() => setLoadingEmpleados(false));
+  }, [token]);
+
+  function toggleEmpleado(nombre) {
+    setSeleccionados((prev) =>
+      prev.includes(nombre) ? prev.filter((n) => n !== nombre) : [...prev, nombre]
+    );
+  }
+
+  async function activar(e) {
+    e.preventDefault();
+    if (!proyecto.trim()) { setStatus("Escribe el nombre del proyecto."); return; }
+    if (seleccionados.length === 0) { setStatus("Selecciona al menos un empleado."); return; }
+    setLoading(true);
+    setStatus("");
+    try {
+      const data = await apiRequest("/api/activar-evaluaciones-proyecto", {
+        token,
+        method: "POST",
+        body: { proyecto: proyecto.trim(), empleados: seleccionados },
+      });
+      if (data.ok) {
+        setStatus(`Evaluaciones activadas para ${data.activados?.length || seleccionados.length} persona(s). Se les ha enviado una notificación por Slack.`);
+        setEnviado(true);
+      } else {
+        setStatus(data.error || "No se pudo activar.");
+      }
+    } catch (err) {
+      setStatus(err.message);
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  return (
+    <main className="page">
+      <nav className="nav">
+        <a className="brand" href="/"><img src="/src/logo.png" alt="igeneris" className="brand-logo" /></a>
+        <button className="link-button" onClick={onBack}>← Volver</button>
+      </nav>
+      <section className="hero">
+        <div>
+          <p className="kicker">Gestión de proyecto</p>
+          <h1 style={{ fontSize: "clamp(32px,6vw,72px)" }}>Activar evaluaciones</h1>
+        </div>
+      </section>
+      <section className="panel" style={{ marginTop: "32px" }}>
+        {enviado ? (
+          <>
+            <p className="fine" style={{ color: "#166534" }}>{status}</p>
+            <div className="actions">
+              <button onClick={() => { setEnviado(false); setProyecto(""); setSeleccionados([]); setStatus(""); }}>
+                Activar otro proyecto
+              </button>
+              <button className="secondary" onClick={onBack}>Volver al inicio</button>
+            </div>
+          </>
+        ) : (
+          <form onSubmit={activar}>
+            <p className="fine">Como responsable de proyecto, introduce el nombre del proyecto y selecciona los miembros de tu equipo. Se les notificará por Slack y podrán acceder a los formularios de evaluación.</p>
+            <label>Nombre del proyecto</label>
+            <p className="fine">Formato: AÑO_EMPRESA_NOMBRE (sin espacios ni tildes, p.ej. <em>2024_Acme_Innovacion</em>)</p>
+            <input
+              type="text"
+              value={proyecto}
+              onChange={(e) => setProyecto(e.target.value)}
+              placeholder="2024_Empresa_NombreProyecto"
+              required
+            />
+            <label style={{ marginTop: "24px" }}>Miembros del equipo</label>
+            {loadingEmpleados ? (
+              <p className="fine">Cargando empleados...</p>
+            ) : (
+              <div style={{ display: "flex", flexDirection: "column", gap: "8px", marginTop: "8px", maxHeight: "340px", overflowY: "auto", padding: "4px 0" }}>
+                {todosEmpleados.map((nombre) => (
+                  <label key={nombre} className="check-label" style={{ cursor: "pointer", userSelect: "none" }}>
+                    <input
+                      type="checkbox"
+                      className="check-input"
+                      checked={seleccionados.includes(nombre)}
+                      onChange={() => toggleEmpleado(nombre)}
+                    />
+                    {nombre}
+                  </label>
+                ))}
+              </div>
+            )}
+            {status && <p className={status.includes("Error") || status.includes("pudo") ? "error" : "fine"} style={{ marginTop: "12px" }}>{status}</p>}
+            <div className="actions">
+              <button type="submit" disabled={loading}>
+                {loading ? "Activando..." : `Activar evaluaciones (${seleccionados.length} seleccionados)`}
+              </button>
+            </div>
+          </form>
+        )}
+      </section>
+      <Footer />
+    </main>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Página de selección de tipo de evaluación de proyecto
+// ---------------------------------------------------------------------------
+
+const TIPOS_EVAL_INFO = [
+  { tipo: "autoevaluacion", label: "Autoevaluación", desc: "Evalúa tu propio desempeño en el proyecto." },
+  { tipo: "mismos_miembros", label: "Evaluación a tus miembros del equipo del mismo nivel", desc: "Evalúa a un compañero de equipo del mismo nivel." },
+  { tipo: "miembros_a_manager", label: "Evaluación de miembros del equipo a managers", desc: "Evalúa al responsable del proyecto (NPS)." },
+  { tipo: "manager_a_miembros", label: "Evaluación de managers a miembros del equipo", desc: "Evalúa el desempeño de un miembro de tu equipo." },
+];
+
+function EvaluacionesProyectoPage({ token, user, proyectos, onBack, onNavigate }) {
+  const [proyectoSeleccionado, setProyectoSeleccionado] = useState(proyectos[0]?.nombre_proyecto || "");
+  const managerDelProyecto = proyectos.find((p) => p.nombre_proyecto === proyectoSeleccionado)?.activado_por || "";
+
+  return (
+    <main className="page">
+      <nav className="nav">
+        <a className="brand" href="/"><img src="/src/logo.png" alt="igeneris" className="brand-logo" /></a>
+        <button className="link-button" onClick={onBack}>← Volver</button>
+      </nav>
+      <section className="hero">
+        <div>
+          <p className="kicker">Evaluaciones</p>
+          <h1 style={{ fontSize: "clamp(32px,6vw,72px)" }}>Evaluaciones por proyectos</h1>
+        </div>
+      </section>
+
+      {proyectos.length > 1 && (
+        <section className="panel" style={{ marginTop: "32px" }}>
+          <label>Proyecto</label>
+          <select value={proyectoSeleccionado} onChange={(e) => setProyectoSeleccionado(e.target.value)}>
+            {proyectos.map((p) => (
+              <option key={p.nombre_proyecto} value={p.nombre_proyecto}>{p.nombre_proyecto}</option>
+            ))}
+          </select>
+        </section>
+      )}
+
+      {proyectoSeleccionado && (
+        <section className="panel" style={{ marginTop: "32px" }}>
+          <p className="kicker">{proyectoSeleccionado}</p>
+          <h2>Selecciona el tipo de evaluación</h2>
+          <div style={{ display: "flex", flexDirection: "column", gap: "16px", marginTop: "16px" }}>
+            {TIPOS_EVAL_INFO.map(({ tipo, label, desc }) => (
+              <button
+                key={tipo}
+                className="secondary"
+                style={{ textAlign: "left", flexDirection: "column", alignItems: "flex-start", gap: "4px", padding: "16px 18px" }}
+                onClick={() =>
+                  onNavigate({
+                    type: "formulario-evaluacion-proyecto",
+                    proyecto: proyectoSeleccionado,
+                    tipo,
+                    manager: managerDelProyecto,
+                    proyectos,
+                  })
+                }
+              >
+                <span style={{ fontWeight: 800, fontSize: "14px" }}>{label}</span>
+                <span style={{ fontWeight: 400, fontSize: "12px", color: "#5e5e5e" }}>{desc}</span>
+              </button>
+            ))}
+          </div>
+        </section>
+      )}
+      <Footer />
+    </main>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Formulario de evaluación de proyecto
+// ---------------------------------------------------------------------------
+
+function FormularioEvaluacionProyecto({ token, user, proyecto, tipo, manager, onBack }) {
+  const [preguntas, setPreguntas] = useState(null);
+  const [todosEmpleados, setTodosEmpleados] = useState([]);
+  const [evaluado, setEvaluado] = useState("");
+  const [respuestas, setRespuestas] = useState({});
+  const [enviando, setEnviando] = useState(false);
+  const [status, setStatus] = useState("");
+  const [enviado, setEnviado] = useState(false);
+
+  const persona = user?.persona || user?.username || "";
+
+  const LABELS_TIPOS = {
+    autoevaluacion: "Autoevaluación",
+    mismos_miembros: "Evaluación a tus miembros del equipo del mismo nivel",
+    miembros_a_manager: "Evaluación de miembros del equipo a managers",
+    manager_a_miembros: "Evaluación de managers a miembros del equipo",
+  };
+  const tipoLabel = LABELS_TIPOS[tipo] || tipo;
+
+  const necesitaSelector = tipo === "mismos_miembros" || tipo === "manager_a_miembros";
+  const evaluadoFijo = tipo === "autoevaluacion" ? persona : tipo === "miembros_a_manager" ? manager : "";
+
+  useEffect(() => {
+    apiRequest(`/api/preguntas-evaluacion-proyecto?tipo=${encodeURIComponent(tipo)}`, { token })
+      .then((d) => setPreguntas(d.preguntas || []))
+      .catch(() => setPreguntas([]));
+  }, [token, tipo]);
+
+  useEffect(() => {
+    if (!necesitaSelector) return;
+    apiRequest("/api/todos-empleados", { token })
+      .then((d) => setTodosEmpleados(d.empleados || []))
+      .catch(() => {});
+  }, [token, necesitaSelector]);
+
+  function setRespuesta(id, valor) {
+    setRespuestas((prev) => ({ ...prev, [id]: valor }));
+  }
+
+  const evaluadoFinal = necesitaSelector ? evaluado : evaluadoFijo;
+
+  async function enviar(e) {
+    e.preventDefault();
+    if (!evaluadoFinal) { setStatus("Selecciona la persona a evaluar."); return; }
+    if (preguntas && preguntas.some((p) => p.tipo !== "abierta" && !respuestas[p.id])) {
+      setStatus("Por favor responde todas las preguntas obligatorias.");
+      return;
+    }
+    setEnviando(true);
+    setStatus("");
+    try {
+      const data = await apiRequest("/api/guardar-evaluacion-proyecto", {
+        token,
+        method: "POST",
+        body: { proyecto, tipo, evaluado: evaluadoFinal, respuestas },
+      });
+      if (data.ok) {
+        setEnviado(true);
+        setStatus("Evaluación guardada correctamente en Notion.");
+      } else {
+        setStatus(data.error || "No se pudo guardar.");
+      }
+    } catch (err) {
+      setStatus(err.message);
+    } finally {
+      setEnviando(false);
+    }
+  }
+
+  if (preguntas === null) {
+    return (
+      <main className="page">
+        <nav className="nav">
+          <a className="brand" href="/"><img src="/src/logo.png" alt="igeneris" className="brand-logo" /></a>
+          <button className="link-button" onClick={onBack}>← Volver</button>
+        </nav>
+        <p className="fine" style={{ padding: "40px" }}>Cargando preguntas...</p>
+      </main>
+    );
+  }
+
+  return (
+    <main className="page">
+      <nav className="nav">
+        <a className="brand" href="/"><img src="/src/logo.png" alt="igeneris" className="brand-logo" /></a>
+        <button className="link-button" onClick={onBack}>← Volver</button>
+      </nav>
+      <section className="hero">
+        <div>
+          <p className="kicker">{proyecto}</p>
+          <h1 style={{ fontSize: "clamp(24px,4vw,52px)", lineHeight: 1.1 }}>{tipoLabel}</h1>
+        </div>
+      </section>
+
+      {enviado ? (
+        <section className="panel" style={{ marginTop: "32px" }}>
+          <p className="fine" style={{ color: "#166534" }}>Evaluación guardada correctamente.</p>
+          <div className="actions">
+            <button onClick={() => { setEnviado(false); setRespuestas({}); setEvaluado(""); setStatus(""); }}>
+              Nueva evaluación
+            </button>
+            <button className="secondary" onClick={onBack}>Volver</button>
+          </div>
+        </section>
+      ) : (
+        <form className="panel" style={{ marginTop: "32px" }} onSubmit={enviar}>
+          {necesitaSelector && (
+            <>
+              <label>Persona a evaluar</label>
+              <select value={evaluado} onChange={(e) => setEvaluado(e.target.value)} required>
+                <option value="">— Selecciona —</option>
+                {todosEmpleados.filter((n) => n !== persona).map((nombre) => (
+                  <option key={nombre} value={nombre}>{nombre}</option>
+                ))}
+              </select>
+            </>
+          )}
+          {!necesitaSelector && evaluadoFijo && (
+            <p className="fine" style={{ marginBottom: "16px" }}>
+              {tipo === "autoevaluacion" ? `Evaluándote a ti mismo: ${evaluadoFijo}` : `Evaluando a: ${evaluadoFijo}`}
+            </p>
+          )}
+
+          {preguntas.length === 0 && (
+            <p className="fine">No hay preguntas configuradas para este tipo de evaluación.</p>
+          )}
+
+          {(() => {
+            let categoriaActual = null;
+            return preguntas.map((p) => {
+              const cambioCat = p.categoria && p.categoria !== categoriaActual;
+              if (cambioCat) categoriaActual = p.categoria;
+              return (
+                <React.Fragment key={p.id}>
+                  {cambioCat && (
+                    <p style={{ fontWeight: 800, fontSize: "13px", marginTop: "28px", marginBottom: "4px", textTransform: "uppercase", letterSpacing: "0.05em" }}>
+                      {p.categoria}
+                    </p>
+                  )}
+                  <div style={{ marginTop: "18px" }}>
+                    <label style={{ fontWeight: 600, fontSize: "14px", marginBottom: "10px", display: "block" }}>
+                      {p.texto}
+                    </label>
+                    {p.tipo === "escala_1_5" && (
+                      <div style={{ display: "flex", gap: "12px", flexWrap: "wrap", alignItems: "center" }}>
+                        <span className="fine" style={{ fontSize: "12px" }}>1 — Carece de cumplimiento</span>
+                        {[1, 2, 3, 4, 5].map((val) => (
+                          <label key={val} style={{ display: "flex", alignItems: "center", gap: "4px", cursor: "pointer", fontSize: "14px", fontWeight: respuestas[p.id] === String(val) ? 800 : 400 }}>
+                            <input
+                              type="radio"
+                              name={p.id}
+                              value={String(val)}
+                              checked={respuestas[p.id] === String(val)}
+                              onChange={() => setRespuesta(p.id, String(val))}
+                              style={{ width: "auto" }}
+                            />
+                            {val}
+                          </label>
+                        ))}
+                        <span className="fine" style={{ fontSize: "12px" }}>5 — Cumple totalmente</span>
+                      </div>
+                    )}
+                    {p.tipo === "radio_3" && (
+                      <div style={{ display: "flex", gap: "16px", flexWrap: "wrap" }}>
+                        {(p.opciones.length ? p.opciones : ["Exceeds", "Achieves", "Expects more"]).map((op) => (
+                          <label key={op} style={{ display: "flex", alignItems: "center", gap: "6px", cursor: "pointer", fontSize: "14px", fontWeight: respuestas[p.id] === op ? 800 : 400 }}>
+                            <input
+                              type="radio"
+                              name={p.id}
+                              value={op}
+                              checked={respuestas[p.id] === op}
+                              onChange={() => setRespuesta(p.id, op)}
+                              style={{ width: "auto" }}
+                            />
+                            {op}
+                          </label>
+                        ))}
+                      </div>
+                    )}
+                    {p.tipo === "abierta" && (
+                      <textarea
+                        value={respuestas[p.id] || ""}
+                        onChange={(e) => setRespuesta(p.id, e.target.value)}
+                        rows={4}
+                        style={{ width: "100%", border: "1px solid #d8d8d8", padding: "10px", fontSize: "14px", resize: "vertical", background: "transparent", color: "#101010", outline: "none", fontFamily: "inherit" }}
+                        placeholder="Escribe tu respuesta..."
+                      />
+                    )}
+                  </div>
+                </React.Fragment>
+              );
+            });
+          })()}
+
+          {status && <p className={status.includes("Error") || status.includes("pudo") ? "error" : "fine"} style={{ marginTop: "16px" }}>{status}</p>}
+          <div className="actions">
+            <button type="submit" disabled={enviando || preguntas.length === 0}>
+              {enviando ? "Guardando..." : "Enviar evaluación"}
+            </button>
+          </div>
+        </form>
+      )}
+      <Footer />
+    </main>
+  );
+}
+
 function App() {
   const resetToken = getResetToken();
   const [token, setToken] = useState(localStorage.getItem("evaluabot_token") || sessionStorage.getItem("evaluabot_token") || "");
@@ -1452,6 +1878,32 @@ function App() {
   }
   if (page?.type === "subir-informe") {
     return <SubirInformePage token={token} advisee={page.advisee} onBack={backTo(page)} />;
+  }
+  if (page?.type === "activar-evaluaciones-proyecto") {
+    return <ActivarEvaluacionesProyectoPage token={token} user={user} onBack={() => navigate(null)} />;
+  }
+  if (page?.type === "evaluaciones-proyecto") {
+    return (
+      <EvaluacionesProyectoPage
+        token={token}
+        user={user}
+        proyectos={page.proyectos || []}
+        onBack={() => navigate(null)}
+        onNavigate={navigate}
+      />
+    );
+  }
+  if (page?.type === "formulario-evaluacion-proyecto") {
+    return (
+      <FormularioEvaluacionProyecto
+        token={token}
+        user={user}
+        proyecto={page.proyecto}
+        tipo={page.tipo}
+        manager={page.manager}
+        onBack={() => navigate({ type: "evaluaciones-proyecto", proyectos: page.proyectos || [] })}
+      />
+    );
   }
   return (
     <Dashboard

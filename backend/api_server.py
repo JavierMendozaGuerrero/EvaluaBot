@@ -20,8 +20,9 @@ from .notion_service import (
     obtener_datos_empleados_por_nombres,
     obtener_opiniones_ca_por_advisee,
     listar_advisees_con_opiniones_ca,
-    guardar_objetivos,
-    obtener_objetivos,
+    guardar_objetivo_persona,
+    obtener_objetivos_persona,
+    eliminar_objetivo_persona,
     guardar_informe_final,
     obtener_informe_final_reciente,
     obtener_ca_de_empleado,
@@ -38,6 +39,11 @@ from .project_evals import (
     obtener_preguntas_tipo,
     activar_evaluaciones_empleados,
     guardar_evaluacion_proyecto,
+    obtener_proyectos_manager,
+    obtener_estado_evaluaciones_proyecto,
+    añadir_miembro_proyecto,
+    eliminar_miembro_proyecto,
+    obtener_evals_completadas_proyecto,
     LABELS_TIPOS,
 )
 from .reports import generar_archivo_trayectoria, generar_archivos_informe
@@ -72,7 +78,7 @@ class ApiHandler(BaseHTTPRequestHandler):
         self.send_header("Access-Control-Allow-Origin", origen if origen in origenes_permitidos else config.FRONTEND_ORIGIN)
         self.send_header("Access-Control-Allow-Credentials", "true")
         self.send_header("Access-Control-Allow-Headers", "Content-Type, Authorization")
-        self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+        self.send_header("Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS")
         super().end_headers()
 
     def do_OPTIONS(self):
@@ -191,7 +197,7 @@ class ApiHandler(BaseHTTPRequestHandler):
                     raise PermissionError("Inicia sesión para acceder.")
                 query_params = urllib.parse.parse_qs(parsed.query)
                 nombre = query_params.get("nombre", [""])[0]
-                objetivos = obtener_objetivos(nombre)
+                objetivos = obtener_objetivos_persona(nombre)
                 self.responder_json({"objetivos": objetivos})
                 return
             if ruta == "/api/evaluados-anual":
@@ -248,7 +254,7 @@ class ApiHandler(BaseHTTPRequestHandler):
                         self.responder_json({
                             "disponible": True,
                             "accesoActivo": True,
-                            "pdfUrl": self.url_archivo(informe["pdf"], evaluado),
+                            "docxUrl": self.url_archivo(informe["docx"], evaluado),
                             "htmlUrl": self.url_archivo(informe["html"], evaluado) if informe.get("html") else None,
                         })
                     elif acceso:
@@ -264,7 +270,7 @@ class ApiHandler(BaseHTTPRequestHandler):
                     return
                 self.responder_json({
                     "disponible": True,
-                    "pdfUrl": self.url_archivo(informe["pdf"], evaluado),
+                    "docxUrl": self.url_archivo(informe["docx"], evaluado),
                     "htmlUrl": self.url_archivo(informe["html"], evaluado) if informe.get("html") else None,
                 })
                 return
@@ -275,6 +281,19 @@ class ApiHandler(BaseHTTPRequestHandler):
                 persona = sesion.get("persona", "")
                 proyectos = obtener_proyectos_activos_empleado(persona)
                 self.responder_json({"proyectos": proyectos})
+                return
+            if ruta == "/api/evaluaciones-proyecto-completadas":
+                sesion = self.sesion_actual()
+                if not sesion:
+                    raise PermissionError("Inicia sesión para acceder.")
+                query_params = urllib.parse.parse_qs(parsed.query)
+                proyecto = query_params.get("proyecto", [""])[0]
+                if not proyecto:
+                    self.responder_json({"error": "Falta el parámetro proyecto."}, 400)
+                    return
+                persona = sesion.get("persona", "")
+                completadas = obtener_evals_completadas_proyecto(persona, proyecto)
+                self.responder_json({"completadas": completadas})
                 return
             if ruta == "/api/todos-empleados":
                 sesion = self.sesion_actual()
@@ -310,6 +329,26 @@ class ApiHandler(BaseHTTPRequestHandler):
                 proyecto = query_params.get("proyecto", [""])[0]
                 empleados = obtener_equipo_proyecto(proyecto) if proyecto else []
                 self.responder_json({"empleados": empleados})
+                return
+            if ruta == "/api/proyectos-manager":
+                sesion = self.sesion_actual()
+                if not sesion:
+                    raise PermissionError("Inicia sesión para acceder.")
+                persona = sesion.get("persona", "")
+                proyectos = obtener_proyectos_manager(persona)
+                self.responder_json({"proyectos": proyectos})
+                return
+            if ruta == "/api/estado-proyecto":
+                sesion = self.sesion_actual()
+                if not sesion:
+                    raise PermissionError("Inicia sesión para acceder.")
+                query_params = urllib.parse.parse_qs(parsed.query)
+                proyecto = query_params.get("proyecto", [""])[0]
+                if not proyecto:
+                    self.responder_json({"error": "Falta el proyecto."}, 400)
+                    return
+                estado = obtener_estado_evaluaciones_proyecto(proyecto)
+                self.responder_json({"estado": estado})
                 return
             if ruta.startswith("/api/files/"):
                 self.servir_archivo_protegido(ruta.removeprefix("/api/files/"), parsed.query)
@@ -399,11 +438,14 @@ class ApiHandler(BaseHTTPRequestHandler):
             if ruta == "/api/objetivos":
                 ca_nombre = sesion.get("persona", "")
                 nombre = datos.get("nombre", "")
-                texto = datos.get("objetivos", "").strip()
-                if not nombre or not texto:
-                    self.responder_json({"error": "Faltan campos obligatorios."}, 400)
+                titulo = datos.get("titulo", "").strip()
+                kpis = datos.get("kpis", "").strip()
+                descripcion = datos.get("descripcion", "").strip()
+                tipo = datos.get("tipo", "").strip()
+                if not nombre or not titulo:
+                    self.responder_json({"error": "Faltan campos obligatorios (nombre y título)."}, 400)
                     return
-                guardar_objetivos(ca_nombre, nombre, texto)
+                guardar_objetivo_persona(ca_nombre, nombre, titulo, kpis, descripcion, tipo)
                 self.responder_json({"ok": True})
                 return
             if ruta == "/api/generar-anual":
@@ -456,23 +498,38 @@ class ApiHandler(BaseHTTPRequestHandler):
                     raise PermissionError("Solo puedes subir informes para tus advisees.")
                 slug_ev = slug_archivo(evaluado_subida)
                 ts = int(time.time())
-                pdf_filename = f"informe_final_{slug_ev}_{ts}.pdf"
-                pdf_path = os.path.join(config.CARPETA_WEB, pdf_filename)
-                with open(pdf_path, "wb") as f:
+                docx_filename = f"informe_final_{slug_ev}_{ts}.docx"
+                docx_path = os.path.join(config.CARPETA_WEB, docx_filename)
+                with open(docx_path, "wb") as f:
                     f.write(archivo_field.file.read())
-                url_notion = f"{config.APP_PUBLIC_URL}/api/files/{urllib.parse.quote(pdf_filename)}?evaluado={urllib.parse.quote(evaluado_subida)}"
+                html_filename = ""
+                if mammoth:
+                    try:
+                        html_filename = f"informe_final_{slug_ev}_{ts}.html"
+                        html_path = os.path.join(config.CARPETA_WEB, html_filename)
+                        with open(docx_path, "rb") as df:
+                            resultado_html = mammoth.convert_to_html(df)
+                        with open(html_path, "w", encoding="utf-8") as hf:
+                            hf.write(resultado_html.value)
+                    except Exception:
+                        logging.exception("Error convirtiendo docx a HTML")
+                        html_filename = ""
+                url_notion = f"{config.APP_PUBLIC_URL}/api/files/{urllib.parse.quote(docx_filename)}?evaluado={urllib.parse.quote(evaluado_subida)}"
                 ca_subida = sesion.get("persona", "") if not sesion.get("is_admin") else ""
                 guardar_informe_final(
                     ca_nombre=ca_subida,
                     advisee=evaluado_subida,
-                    pdf_filename=pdf_filename,
-                    html_filename="",
+                    docx_filename=docx_filename,
+                    html_filename=html_filename,
                     url=url_notion,
                 )
-                self.responder_json({
+                resp_data: dict = {
                     "ok": True,
-                    "pdfUrl": self.url_archivo(pdf_filename, evaluado_subida),
-                })
+                    "docxUrl": self.url_archivo(docx_filename, evaluado_subida),
+                }
+                if html_filename:
+                    resp_data["htmlUrl"] = self.url_archivo(html_filename, evaluado_subida)
+                self.responder_json(resp_data)
                 return
             if ruta == "/api/activar-evaluaciones-proyecto":
                 manager = sesion.get("persona", "")
@@ -485,6 +542,20 @@ class ApiHandler(BaseHTTPRequestHandler):
                     self.responder_json({"error": "Debes seleccionar al menos un empleado."}, 400)
                     return
                 resultado = activar_evaluaciones_empleados(manager, proyecto, empleados)
+                self.responder_json(resultado)
+                return
+            if ruta == "/api/modificar-equipo-proyecto":
+                manager = sesion.get("persona", "")
+                accion = datos.get("accion", "").strip()
+                proyecto = datos.get("proyecto", "").strip()
+                empleado = datos.get("empleado", "").strip()
+                if accion not in ("añadir", "eliminar") or not proyecto or not empleado:
+                    self.responder_json({"error": "Faltan campos obligatorios."}, 400)
+                    return
+                if accion == "añadir":
+                    resultado = añadir_miembro_proyecto(manager, proyecto, empleado)
+                else:
+                    resultado = eliminar_miembro_proyecto(proyecto, empleado)
                 self.responder_json(resultado)
                 return
             if ruta == "/api/guardar-evaluacion-proyecto":
@@ -511,6 +582,30 @@ class ApiHandler(BaseHTTPRequestHandler):
             self.responder_json({"error": str(error)}, 403)
         except Exception as error:
             logging.exception("Error en API POST")
+            self.responder_json({"error": str(error)}, 500)
+
+    def do_DELETE(self):
+        parsed = urllib.parse.urlparse(self.path)
+        ruta = parsed.path
+        try:
+            sesion = self.sesion_actual()
+            if not sesion:
+                raise PermissionError("Inicia sesión para acceder.")
+            length = int(self.headers.get("Content-Length", 0))
+            datos = json.loads(self.rfile.read(length)) if length else {}
+            if ruta == "/api/objetivos":
+                page_id = datos.get("page_id", "")
+                if not page_id:
+                    self.responder_json({"error": "Falta page_id."}, 400)
+                    return
+                ok = eliminar_objetivo_persona(page_id)
+                self.responder_json({"ok": ok})
+                return
+            self.responder_json({"error": "No encontrado"}, 404)
+        except PermissionError as error:
+            self.responder_json({"error": str(error)}, 403)
+        except Exception as error:
+            logging.exception("Error en API DELETE")
             self.responder_json({"error": str(error)}, 500)
 
     def url_archivo(self, nombre_archivo, evaluado):

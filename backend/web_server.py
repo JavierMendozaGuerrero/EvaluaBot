@@ -1,4 +1,4 @@
-﻿import html
+import html
 import logging
 import os
 import socketserver
@@ -197,4 +197,3 @@ def iniciar_servidor_web():
             config.PUERTO_WEB,
         )
         logging.debug("Detalle del error al iniciar la web", exc_info=True)
-

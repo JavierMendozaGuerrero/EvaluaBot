@@ -246,9 +246,9 @@ function AdminPanel({ token, onBack }) {
                       Ver informe final
                     </button>
                   )}
-                  {informeFinal.pdfUrl && (
-                    <button className="secondary" onClick={() => openFile(informeFinal.pdfUrl, "informe_final.pdf")}>
-                      Descargar PDF
+                  {informeFinal.docxUrl && (
+                    <button className="secondary" onClick={() => openFile(informeFinal.docxUrl, "informe_final.docx")}>
+                      Descargar Word
                     </button>
                   )}
                 </>
@@ -421,8 +421,14 @@ function MisObjetivosPage({ token, persona, onBack }) {
           <div className="objetivos-list">
             {objetivos.map((obj, i) => (
               <article key={i} className="objetivo-item">
-                <p className="opinion-fecha fine">{obj.fecha ? obj.fecha.slice(0, 10) : "Sin fecha"}{obj.ca ? ` — ${obj.ca}` : ""}</p>
-                <p className="objetivo-texto">{obj.objetivos}</p>
+                <p className="opinion-fecha fine">
+                  {obj.fecha ? obj.fecha.slice(0, 10) : "Sin fecha"}
+                  {obj.ca ? ` — ${obj.ca}` : ""}
+                  {obj.tipo ? ` · ${obj.tipo}` : ""}
+                </p>
+                <p className="objetivo-titulo"><strong>{obj.titulo}</strong></p>
+                {obj.kpis && <p className="objetivo-texto fine"><em>KPIs:</em> {obj.kpis}</p>}
+                {obj.descripcion && <p className="objetivo-texto">{obj.descripcion}</p>}
               </article>
             ))}
           </div>
@@ -437,35 +443,54 @@ function MisObjetivosPage({ token, persona, onBack }) {
 
 function ObjetivosPage({ token, advisee, caName, onBack }) {
   const [objetivos, setObjetivos] = useState([]);
-  const [texto, setTexto] = useState("");
+  const [form, setForm] = useState({ titulo: "", kpis: "", descripcion: "", tipo: "" });
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
+  const [deleting, setDeleting] = useState(null);
   const [error, setError] = useState("");
   const [success, setSuccess] = useState("");
 
+  function recargar() {
+    return apiRequest(`/api/objetivos?nombre=${encodeURIComponent(advisee.nombre)}`, { token })
+      .then((data) => setObjetivos(data.objetivos || []));
+  }
+
   useEffect(() => {
-    apiRequest(`/api/objetivos?nombre=${encodeURIComponent(advisee.nombre)}`, { token })
-      .then((data) => setObjetivos(data.objetivos || []))
-      .catch((err) => setError(err.message))
-      .finally(() => setLoading(false));
+    recargar().catch((err) => setError(err.message)).finally(() => setLoading(false));
   }, [token, advisee.nombre]);
 
   async function guardar(e) {
     e.preventDefault();
-    if (!texto.trim()) return;
+    if (!form.titulo.trim()) return;
     setError("");
     setSuccess("");
     setSaving(true);
     try {
-      await apiRequest("/api/objetivos", { token, method: "POST", body: { nombre: advisee.nombre, objetivos: texto.trim() } });
-      const data = await apiRequest(`/api/objetivos?nombre=${encodeURIComponent(advisee.nombre)}`, { token });
-      setObjetivos(data.objetivos || []);
-      setTexto("");
-      setSuccess("Objetivos guardados correctamente.");
+      await apiRequest("/api/objetivos", {
+        token,
+        method: "POST",
+        body: { nombre: advisee.nombre, titulo: form.titulo.trim(), kpis: form.kpis.trim(), descripcion: form.descripcion.trim(), tipo: form.tipo.trim() },
+      });
+      await recargar();
+      setForm({ titulo: "", kpis: "", descripcion: "", tipo: "" });
+      setSuccess("Objetivo guardado correctamente.");
     } catch (err) {
       setError(err.message);
     } finally {
       setSaving(false);
+    }
+  }
+
+  async function eliminar(page_id) {
+    if (!window.confirm("¿Eliminar este objetivo?")) return;
+    setDeleting(page_id);
+    try {
+      await apiRequest("/api/objetivos", { token, method: "DELETE", body: { page_id } });
+      await recargar();
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setDeleting(null);
     }
   }
 
@@ -485,20 +510,42 @@ function ObjetivosPage({ token, advisee, caName, onBack }) {
           <h1>{advisee.nombre}</h1>
         </div>
         <form className="panel" onSubmit={guardar}>
-          <h2>Nuevos objetivos</h2>
+          <h2>Nuevo objetivo</h2>
           {error && <p className="error">{error}</p>}
           {success && <p className="fine">{success}</p>}
-          <label>Redacta los objetivos</label>
+          <label>Título *</label>
+          <input
+            type="text"
+            value={form.titulo}
+            onChange={(e) => setForm((f) => ({ ...f, titulo: e.target.value }))}
+            placeholder="Ej: Mejorar habilidades de presentación"
+            required
+          />
+          <label style={{ marginTop: "12px" }}>Tipo</label>
+          <input
+            type="text"
+            value={form.tipo}
+            onChange={(e) => setForm((f) => ({ ...f, tipo: e.target.value }))}
+            placeholder="Ej: Desarrollo personal, Técnico, Liderazgo..."
+          />
+          <label style={{ marginTop: "12px" }}>KPIs para su cumplimiento</label>
+          <input
+            type="text"
+            value={form.kpis}
+            onChange={(e) => setForm((f) => ({ ...f, kpis: e.target.value }))}
+            placeholder="Ej: Presentar en 2 reuniones de cliente al trimestre"
+          />
+          <label style={{ marginTop: "12px" }}>Descripción</label>
           <textarea
             className="objetivos-textarea"
-            value={texto}
-            onChange={(e) => setTexto(e.target.value)}
-            rows={8}
-            placeholder="Escribe aqui los objetivos para este periodo..."
+            value={form.descripcion}
+            onChange={(e) => setForm((f) => ({ ...f, descripcion: e.target.value }))}
+            rows={5}
+            placeholder="Detalla cómo trabajar este objetivo..."
           />
           <div className="actions">
-            <button type="submit" disabled={saving || !texto.trim()}>
-              {saving ? "Guardando..." : "Guardar objetivos"}
+            <button type="submit" disabled={saving || !form.titulo.trim()}>
+              {saving ? "Guardando..." : "Guardar objetivo"}
             </button>
           </div>
         </form>
@@ -506,20 +553,35 @@ function ObjetivosPage({ token, advisee, caName, onBack }) {
 
       <section className="objetivos-historial panel">
         <p className="kicker">Historial</p>
-        <h2>Objetivos anteriores</h2>
+        <h2>Objetivos de {advisee.nombre}</h2>
         {loading ? (
           <p>Cargando...</p>
         ) : objetivos.length ? (
           <div className="objetivos-list">
-            {objetivos.map((obj, i) => (
-              <article key={i} className="objetivo-item">
-                <p className="opinion-fecha fine">{obj.fecha ? obj.fecha.slice(0, 10) : "Sin fecha"}</p>
-                <p className="objetivo-texto">{obj.objetivos}</p>
+            {objetivos.map((obj) => (
+              <article key={obj.page_id} className="objetivo-item">
+                <p className="opinion-fecha fine">
+                  {obj.fecha ? obj.fecha.slice(0, 10) : "Sin fecha"}
+                  {obj.tipo ? ` · ${obj.tipo}` : ""}
+                </p>
+                <p className="objetivo-titulo"><strong>{obj.titulo}</strong></p>
+                {obj.kpis && <p className="objetivo-texto fine"><em>KPIs:</em> {obj.kpis}</p>}
+                {obj.descripcion && <p className="objetivo-texto">{obj.descripcion}</p>}
+                <div style={{ marginTop: "8px" }}>
+                  <button
+                    className="link-button"
+                    style={{ color: "var(--muted, #999)", fontSize: "12px" }}
+                    disabled={deleting === obj.page_id}
+                    onClick={() => eliminar(obj.page_id)}
+                  >
+                    {deleting === obj.page_id ? "Eliminando..." : "Eliminar"}
+                  </button>
+                </div>
               </article>
             ))}
           </div>
         ) : (
-          <p>No hay objetivos anteriores para {advisee.nombre}.</p>
+          <p>No hay objetivos para {advisee.nombre}.</p>
         )}
       </section>
       <Footer />
@@ -713,6 +775,8 @@ function Dashboard({ token, user, onLogout, onNavigate, onBackToRoleSelect = nul
   const [informesOpen, setInformesOpen] = useState(false);
   const [seccionActiva, setSeccionActiva] = useState(null);
   const [proyectosActivos, setProyectosActivos] = useState([]);
+  const [proyectosManager, setProyectosManager] = useState(null);
+  const [proyectosVersion, setProyectosVersion] = useState(0);
 
   useEffect(() => {
     const apply = (data) => { setEvaluados(data.evaluados || []); setEvaluado(data.evaluados?.[0]?.value || ""); };
@@ -781,10 +845,13 @@ function Dashboard({ token, user, onLogout, onNavigate, onBackToRoleSelect = nul
 
   useEffect(() => {
     if (isAdmin) return;
-    apiRequestCached("/api/evaluaciones-proyecto-activas", { token }, (d) => setProyectosActivos(d.proyectos || []))
+    apiRequest("/api/evaluaciones-proyecto-activas", { token })
       .then((d) => setProyectosActivos(d.proyectos || []))
       .catch(() => {});
-  }, [token, isAdmin]);
+    apiRequest("/api/proyectos-manager", { token })
+      .then((d) => setProyectosManager(d.proyectos || []))
+      .catch(() => setProyectosManager([]));
+  }, [token, isAdmin, proyectosVersion]);
 
   const role = isAdmin ? "Admin" : "";
   const ownEvaluado = user?.persona || user?.username || "";
@@ -922,6 +989,14 @@ function Dashboard({ token, user, onLogout, onNavigate, onBackToRoleSelect = nul
                 Responsables de proyecto
               </button>
             )}
+            {!isAdmin && proyectosManager?.length > 0 && (
+              <button
+                className="menu-item"
+                onClick={() => onNavigate({ type: "mis-proyectos-activos" })}
+              >
+                Mis proyectos en activo
+              </button>
+            )}
             {!isAdmin && proyectosActivos.length > 0 && (
               <button
                 className="menu-item"
@@ -944,9 +1019,9 @@ function Dashboard({ token, user, onLogout, onNavigate, onBackToRoleSelect = nul
                         Abrir en web
                       </button>
                     )}
-                    {informeFinalEmpleado.pdfUrl && (
-                      <button className="secondary" onClick={() => openFile(informeFinalEmpleado.pdfUrl, "informe_final.pdf")}>
-                        Descargar PDF
+                    {informeFinalEmpleado.docxUrl && (
+                      <button className="secondary" onClick={() => openFile(informeFinalEmpleado.docxUrl, "informe_final.docx")}>
+                        Descargar Word
                       </button>
                     )}
                   </>
@@ -992,7 +1067,11 @@ function Dashboard({ token, user, onLogout, onNavigate, onBackToRoleSelect = nul
             <p className="profile-info-value">{perfil.cargo || "—"}</p>
             <p className="profile-info-label" style={{ marginTop: "28px" }}>Mis objetivos</p>
             {misObjetivos.length ? (
-              <p className="profile-obj-text">{misObjetivos[0].objetivos}</p>
+              <ul className="profile-obj-list" style={{ margin: 0, paddingLeft: "16px" }}>
+                {misObjetivos.map((obj, i) => (
+                  <li key={i} className="profile-obj-text">{obj.titulo}</li>
+                ))}
+              </ul>
             ) : (
               <p className="fine">Sin objetivos definidos.</p>
             )}
@@ -1055,7 +1134,7 @@ function Dashboard({ token, user, onLogout, onNavigate, onBackToRoleSelect = nul
               ) : informeFinalAdmin?.disponible ? (
                 <div className="actions">
                   {informeFinalAdmin.htmlUrl && <button onClick={() => openFile(informeFinalAdmin.htmlUrl, "informe_final.html")}>Abrir versión web</button>}
-                  {informeFinalAdmin.pdfUrl && <button className="secondary" onClick={() => openFile(informeFinalAdmin.pdfUrl, "informe_final.pdf")}>Descargar PDF</button>}
+                  {informeFinalAdmin.docxUrl && <button className="secondary" onClick={() => openFile(informeFinalAdmin.docxUrl, "informe_final.docx")}>Descargar Word</button>}
                 </div>
               ) : (
                 <p className="fine">{informeFinalAdmin?.mensaje || "No hay informe final disponible."}</p>
@@ -1181,17 +1260,17 @@ function SubirInformePage({ token, advisee, onBack }) {
             <p className="fine">Ya hay un informe final subido. Puedes descargarlo o subir uno nuevo para reemplazarlo.</p>
             <div className="actions">
               {informeActual.htmlUrl && <button onClick={() => openFile(informeActual.htmlUrl, "informe_final.html")}>Abrir versión web</button>}
-              {informeActual.pdfUrl && <button className="secondary" onClick={() => openFile(informeActual.pdfUrl, "informe_final.pdf")}>Descargar PDF</button>}
+              {informeActual.docxUrl && <button className="secondary" onClick={() => openFile(informeActual.docxUrl, "informe_final.docx")}>Descargar Word</button>}
             </div>
           </div>
         )}
         <form className="panel" onSubmit={subir}>
           <h2>Subir versión final</h2>
-          <p>Sube el PDF con tu versión final. Se guarda en Notion y el advisee podrá descargarlo. Se mantienen las 2 versiones más recientes.</p>
-          <label>Archivo PDF (.pdf)</label>
+          <p>Sube el Word con tu versión final. Se guarda en Notion y el advisee podrá descargarlo. Se mantienen las 2 versiones más recientes.</p>
+          <label>Archivo Word (.docx)</label>
           <input
             type="file"
-            accept=".pdf,application/pdf"
+            accept=".doc,.docx,application/vnd.openxmlformats-officedocument.wordprocessingml.document"
             onChange={(e) => setFile(e.target.files?.[0] || null)}
             required
           />
@@ -1208,7 +1287,7 @@ function SubirInformePage({ token, advisee, onBack }) {
           <h2>Informe subido</h2>
           <div className="actions">
             {links.htmlUrl && <button onClick={() => openFile(links.htmlUrl, "informe_final.html")}>Abrir versión web</button>}
-            {links.pdfUrl && <button className="secondary" onClick={() => openFile(links.pdfUrl, "informe_final.pdf")}>Descargar PDF</button>}
+            {links.docxUrl && <button className="secondary" onClick={() => openFile(links.docxUrl, "informe_final.docx")}>Descargar Word</button>}
           </div>
         </section>
       )}
@@ -1399,10 +1478,221 @@ function AdviseeDetail({ token, advisee, advisees, onBack, onNavigate }) {
 }
 
 // ---------------------------------------------------------------------------
+// Mis proyectos en activo (responsable de proyecto)
+// ---------------------------------------------------------------------------
+
+function MisProyectosActivosPage({ token, user, onBack }) {
+  const [proyectos, setProyectos] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [expanded, setExpanded] = useState(null);
+  const [estadoMap, setEstadoMap] = useState({});
+  const [loadingEstado, setLoadingEstado] = useState({});
+  const [todosEmpleados, setTodosEmpleados] = useState([]);
+  const [añadirMap, setAñadirMap] = useState({});
+  const [añadirValor, setAñadirValor] = useState({});
+  const [accionMsg, setAccionMsg] = useState({});
+
+  const persona = user?.persona || user?.username || "";
+
+  function cargarProyectos() {
+    apiRequest("/api/proyectos-manager", { token })
+      .then((d) => setProyectos(d.proyectos || []))
+      .catch(() => {})
+      .finally(() => setLoading(false));
+  }
+
+  useEffect(() => {
+    cargarProyectos();
+    apiRequest("/api/todos-empleados", { token })
+      .then((d) => setTodosEmpleados(d.empleados || []))
+      .catch(() => {});
+  }, [token]);
+
+  function cargarEstado(nombre) {
+    setLoadingEstado((prev) => ({ ...prev, [nombre]: true }));
+    apiRequest(`/api/estado-proyecto?proyecto=${encodeURIComponent(nombre)}`, { token })
+      .then((d) => setEstadoMap((prev) => ({ ...prev, [nombre]: d.estado || [] })))
+      .catch(() => setEstadoMap((prev) => ({ ...prev, [nombre]: [] })))
+      .finally(() => setLoadingEstado((prev) => ({ ...prev, [nombre]: false })));
+  }
+
+  function toggleProyecto(nombre) {
+    if (expanded === nombre) { setExpanded(null); return; }
+    setExpanded(nombre);
+    cargarEstado(nombre);
+  }
+
+  async function modificarMiembro(accion, proyecto, empleado) {
+    setAccionMsg((prev) => ({ ...prev, [proyecto]: "" }));
+    try {
+      const data = await apiRequest("/api/modificar-equipo-proyecto", {
+        token,
+        method: "POST",
+        body: { accion, proyecto, empleado },
+      });
+      if (data.ok) {
+        setAccionMsg((prev) => ({ ...prev, [proyecto]: accion === "añadir" ? `${empleado} añadido.` : `${empleado} eliminado.` }));
+        setAñadirValor((prev) => ({ ...prev, [proyecto]: "" }));
+        setAñadirMap((prev) => ({ ...prev, [proyecto]: false }));
+        cargarProyectos();
+        cargarEstado(proyecto);
+      } else {
+        setAccionMsg((prev) => ({ ...prev, [proyecto]: data.error || "Error al modificar." }));
+      }
+    } catch (err) {
+      setAccionMsg((prev) => ({ ...prev, [proyecto]: err.message }));
+    }
+  }
+
+  return (
+    <main className="page">
+      <nav className="nav">
+        <a className="brand" href="/"><img src="/src/logo.png" alt="igeneris" className="brand-logo" /></a>
+        <button className="link-button" onClick={onBack}>← Volver</button>
+      </nav>
+      <section className="hero">
+        <div>
+          <p className="kicker">Gestión de proyecto</p>
+          <h1 style={{ fontSize: "clamp(32px,6vw,72px)" }}>Mis proyectos en activo</h1>
+        </div>
+      </section>
+      <section className="panel" style={{ marginTop: "32px" }}>
+        {loading ? (
+          <p>Cargando...</p>
+        ) : proyectos.length === 0 ? (
+          <p className="fine">No tienes proyectos con evaluaciones activas.</p>
+        ) : (
+          <div style={{ display: "flex", flexDirection: "column", gap: "16px" }}>
+            {proyectos.map((p) => {
+              const isOpen = expanded === p.nombre_proyecto;
+              const estado = estadoMap[p.nombre_proyecto] || [];
+              const cargando = loadingEstado[p.nombre_proyecto];
+              const mostrarAnadir = añadirMap[p.nombre_proyecto];
+              const valorAnadir = añadirValor[p.nombre_proyecto] || "";
+              const msg = accionMsg[p.nombre_proyecto] || "";
+              const equipoActual = p.equipo || [];
+              const disponibles = todosEmpleados.filter((e) => !equipoActual.includes(e));
+              return (
+                <div key={p.nombre_proyecto} style={{ border: "1px solid var(--border,#e5e7eb)", borderRadius: "8px", overflow: "hidden" }}>
+                  <button
+                    className="link-button"
+                    style={{ width: "100%", textAlign: "left", padding: "16px 20px", display: "flex", justifyContent: "space-between", alignItems: "center", fontWeight: 600, background: "none", border: "none", cursor: "pointer" }}
+                    onClick={() => toggleProyecto(p.nombre_proyecto)}
+                  >
+                    <span>{p.nombre_proyecto}</span>
+                    <span className="fine" style={{ fontWeight: 400 }}>{p.equipo.length} miembros &nbsp;{isOpen ? "▲" : "▼"}</span>
+                  </button>
+                  {isOpen && (
+                    <div style={{ padding: "0 20px 20px" }}>
+                      <div style={{ marginBottom: "12px", display: "flex", flexWrap: "wrap", gap: "8px", alignItems: "center" }}>
+                        <span style={{ fontSize: "13px", color: "#6b7280" }}>Equipo:</span>
+                        {equipoActual.map((miembro) => (
+                          <span key={miembro} style={{ display: "inline-flex", alignItems: "center", gap: "4px", background: "#f3f4f6", borderRadius: "99px", padding: "2px 10px", fontSize: "13px" }}>
+                            {miembro}
+                            <button
+                              onClick={() => modificarMiembro("eliminar", p.nombre_proyecto, miembro)}
+                              title={`Eliminar ${miembro}`}
+                              style={{ background: "none", border: "none", cursor: "pointer", color: "#ef4444", fontWeight: 700, padding: "0 2px", lineHeight: 1 }}
+                            >×</button>
+                          </span>
+                        ))}
+                        <button
+                          className="link-button"
+                          style={{ fontSize: "13px", padding: "2px 10px", border: "1px dashed var(--border,#e5e7eb)", borderRadius: "99px" }}
+                          onClick={() => setAñadirMap((prev) => ({ ...prev, [p.nombre_proyecto]: !mostrarAnadir }))}
+                        >
+                          {mostrarAnadir ? "Cancelar" : "+ Añadir"}
+                        </button>
+                      </div>
+                      {mostrarAnadir && (
+                        <div style={{ display: "flex", gap: "8px", marginBottom: "12px", alignItems: "center" }}>
+                          <select
+                            value={valorAnadir}
+                            onChange={(e) => setAñadirValor((prev) => ({ ...prev, [p.nombre_proyecto]: e.target.value }))}
+                            style={{ flex: 1, padding: "6px 10px", borderRadius: "6px", border: "1px solid var(--border,#e5e7eb)", fontSize: "14px" }}
+                          >
+                            <option value="">Selecciona una persona...</option>
+                            {disponibles.map((e) => <option key={e} value={e}>{e}</option>)}
+                          </select>
+                          <button
+                            className="cta-button"
+                            style={{ padding: "6px 16px", fontSize: "14px" }}
+                            disabled={!valorAnadir}
+                            onClick={() => modificarMiembro("añadir", p.nombre_proyecto, valorAnadir)}
+                          >Añadir</button>
+                        </div>
+                      )}
+                      {msg && <p style={{ fontSize: "13px", color: msg.includes("Error") || msg.includes("error") ? "#ef4444" : "#16a34a", marginBottom: "8px" }}>{msg}</p>}
+                      {cargando ? (
+                        <p className="fine">Cargando estado de evaluaciones...</p>
+                      ) : estado.length === 0 ? (
+                        <p className="fine">Sin datos de evaluación todavía.</p>
+                      ) : (
+                        <div style={{ overflowX: "auto" }}>
+                          <table style={{ width: "100%", borderCollapse: "collapse", fontSize: "14px" }}>
+                            <thead>
+                              <tr style={{ borderBottom: "2px solid var(--border,#e5e7eb)" }}>
+                                <th style={{ textAlign: "left", padding: "8px 4px" }}>Miembro</th>
+                                <th style={{ textAlign: "center", padding: "8px 12px" }}>Recibidas</th>
+                                <th style={{ textAlign: "center", padding: "8px 12px" }}>Autoevaluación</th>
+                                <th style={{ textAlign: "left", padding: "8px 4px" }}>Evaluado por</th>
+                                <th style={{ textAlign: "left", padding: "8px 4px" }}>Pendiente de</th>
+                              </tr>
+                            </thead>
+                            <tbody>
+                              {estado.map((m) => {
+                                const total = m.n_evaluaciones + m.pendientes.length;
+                                const completo = m.pendientes.length === 0;
+                                const ninguna = m.n_evaluaciones === 0;
+                                const badge = completo
+                                  ? { bg: "#dcfce7", color: "#166534" }
+                                  : ninguna ? { bg: "#fee2e2", color: "#991b1b" }
+                                  : { bg: "#fef9c3", color: "#713f12" };
+                                return (
+                                  <tr key={m.nombre} style={{ borderBottom: "1px solid var(--border,#f0f0f0)" }}>
+                                    <td style={{ padding: "10px 4px", fontWeight: 500 }}>{m.nombre}</td>
+                                    <td style={{ padding: "10px 12px", textAlign: "center" }}>
+                                      <span style={{ background: badge.bg, color: badge.color, padding: "2px 10px", borderRadius: "99px", fontWeight: 600, fontSize: "13px" }}>
+                                        {m.n_evaluaciones}/{total}
+                                      </span>
+                                    </td>
+                                    <td style={{ padding: "10px 12px", textAlign: "center" }}>
+                                      {m.autoevaluacion_hecha
+                                        ? <span style={{ color: "#16a34a", fontWeight: 600 }}>✓</span>
+                                        : <span style={{ color: "#ef4444", fontWeight: 600 }}>✗</span>}
+                                    </td>
+                                    <td style={{ padding: "10px 4px", color: "#4b5563" }}>
+                                      {m.evaluadores.length ? m.evaluadores.join(", ") : <span className="fine">—</span>}
+                                    </td>
+                                    <td style={{ padding: "10px 4px" }}>
+                                      {completo
+                                        ? <span style={{ color: "#16a34a" }}>✓ Completo</span>
+                                        : <span style={{ color: "#ef4444" }}>{m.pendientes.join(", ")}</span>}
+                                    </td>
+                                  </tr>
+                                );
+                              })}
+                            </tbody>
+                          </table>
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </section>
+      <Footer />
+    </main>
+  );
+}
+
 // Activar evaluaciones de proyecto (responsable de proyecto)
 // ---------------------------------------------------------------------------
 
-function ActivarEvaluacionesProyectoPage({ token, user, onBack }) {
+function ActivarEvaluacionesProyectoPage({ token, user, onBack, onActivado }) {
   const [proyecto, setProyecto] = useState("");
   const [todosEmpleados, setTodosEmpleados] = useState([]);
   const [seleccionados, setSeleccionados] = useState([]);
@@ -1410,6 +1700,7 @@ function ActivarEvaluacionesProyectoPage({ token, user, onBack }) {
   const [loadingEmpleados, setLoadingEmpleados] = useState(true);
   const [status, setStatus] = useState("");
   const [enviado, setEnviado] = useState(false);
+  const [busqueda, setBusqueda] = useState("");
 
   const persona = user?.persona || user?.username || "";
 
@@ -1441,6 +1732,7 @@ function ActivarEvaluacionesProyectoPage({ token, user, onBack }) {
       if (data.ok) {
         setStatus(`Evaluaciones activadas para ${data.activados?.length || seleccionados.length} persona(s). Se les ha enviado una notificación por Slack.`);
         setEnviado(true);
+        if (onActivado) onActivado();
       } else {
         setStatus(data.error || "No se pudo activar.");
       }
@@ -1490,21 +1782,35 @@ function ActivarEvaluacionesProyectoPage({ token, user, onBack }) {
             {loadingEmpleados ? (
               <p className="fine">Cargando empleados...</p>
             ) : (
-              <div style={{ display: "flex", flexDirection: "column", gap: "8px", marginTop: "8px", maxHeight: "340px", overflowY: "auto", padding: "4px 0" }}>
-                {todosEmpleados.map((nombre) => (
-                  <label key={nombre} className="check-label" style={{ cursor: "pointer", userSelect: "none" }}>
-                    <input
-                      type="checkbox"
-                      className="check-input"
-                      checked={seleccionados.includes(nombre)}
-                      onChange={() => toggleEmpleado(nombre)}
-                    />
-                    {nombre}
-                  </label>
-                ))}
-              </div>
+              <>
+                <input
+                  type="text"
+                  value={busqueda}
+                  onChange={(e) => setBusqueda(e.target.value)}
+                  placeholder="Buscar por nombre..."
+                  style={{ marginTop: "8px", marginBottom: "8px" }}
+                />
+                <div style={{ display: "flex", flexDirection: "column", gap: "8px", maxHeight: "340px", overflowY: "auto", padding: "4px 0" }}>
+                  {todosEmpleados
+                    .filter((nombre) => nombre.toLowerCase().includes(busqueda.toLowerCase().trim()))
+                    .map((nombre) => (
+                      <label key={nombre} className="check-label" style={{ cursor: "pointer", userSelect: "none" }}>
+                        <input
+                          type="checkbox"
+                          className="check-input"
+                          checked={seleccionados.includes(nombre)}
+                          onChange={() => toggleEmpleado(nombre)}
+                        />
+                        {nombre}
+                      </label>
+                    ))}
+                  {todosEmpleados.filter((n) => n.toLowerCase().includes(busqueda.toLowerCase().trim())).length === 0 && (
+                    <p className="fine" style={{ margin: 0 }}>No hay resultados para "{busqueda}".</p>
+                  )}
+                </div>
+              </>
             )}
-            {status && <p className={status.includes("Error") || status.includes("pudo") ? "error" : "fine"} style={{ marginTop: "12px" }}>{status}</p>}
+            {status && <p className={status.includes("Error") || status.includes("pudo") || status.includes("existe") ? "error" : "fine"} style={{ marginTop: "12px" }}>{status}</p>}
             <div className="actions">
               <button type="submit" disabled={loading}>
                 {loading ? "Activando..." : `Activar evaluaciones (${seleccionados.length} seleccionados)`}
@@ -1529,9 +1835,46 @@ const TIPOS_EVAL_INFO = [
   { tipo: "manager_a_miembros", label: "Evaluación de managers a miembros del equipo", desc: "Evalúa el desempeño de un miembro de tu equipo." },
 ];
 
-function EvaluacionesProyectoPage({ token, user, proyectos, onBack, onNavigate }) {
-  const [proyectoSeleccionado, setProyectoSeleccionado] = useState(proyectos[0]?.nombre_proyecto || "");
+function EvaluacionesProyectoPage({ token, user, proyectos, onBack, onNavigate, completedEvals = {}, initialProyecto }) {
+  const [proyectoSeleccionado, setProyectoSeleccionado] = useState(initialProyecto || proyectos[0]?.nombre_proyecto || "");
+  const [equipo, setEquipo] = useState([]);
+  const [loadingEquipo, setLoadingEquipo] = useState(false);
+  const [completadasNotion, setCompletadasNotion] = useState([]);
   const managerDelProyecto = proyectos.find((p) => p.nombre_proyecto === proyectoSeleccionado)?.activado_por || "";
+  const persona = user?.persona || user?.username || "";
+
+  useEffect(() => {
+    if (!proyectoSeleccionado) return;
+    setLoadingEquipo(true);
+    setCompletadasNotion([]);
+    Promise.all([
+      apiRequest(`/api/equipo-proyecto?proyecto=${encodeURIComponent(proyectoSeleccionado)}`, { token }),
+      apiRequest(`/api/evaluaciones-proyecto-completadas?proyecto=${encodeURIComponent(proyectoSeleccionado)}`, { token }),
+    ])
+      .then(([equipoData, completadasData]) => {
+        setEquipo(equipoData.empleados || []);
+        setCompletadasNotion((completadasData.completadas || []).map((c) => `${c.tipo}:${c.evaluado}`));
+      })
+      .catch(() => {})
+      .finally(() => setLoadingEquipo(false));
+  }, [token, proyectoSeleccionado]);
+
+  const evaluacionesAHacer = useMemo(() => {
+    if (!equipo.length) return [];
+    const personaNorm = persona.toLowerCase().trim();
+    const managerNorm = managerDelProyecto.toLowerCase().trim();
+    const esManager = personaNorm === managerNorm;
+    const lista = [{ tipo: "autoevaluacion", evaluado: persona, label: "Autoevaluación" }];
+    if (esManager) {
+      equipo.filter((m) => m.toLowerCase().trim() !== managerNorm)
+        .forEach((m) => lista.push({ tipo: "manager_a_miembros", evaluado: m, label: `Evaluación a miembro — ${m}` }));
+    } else {
+      lista.push({ tipo: "miembros_a_manager", evaluado: managerDelProyecto, label: `Evaluación al responsable — ${managerDelProyecto}` });
+      equipo.filter((m) => m.toLowerCase().trim() !== personaNorm && m.toLowerCase().trim() !== managerNorm)
+        .forEach((m) => lista.push({ tipo: "mismos_miembros", evaluado: m, label: `Evaluación a compañero — ${m}` }));
+    }
+    return lista;
+  }, [equipo, persona, managerDelProyecto]);
 
   return (
     <main className="page">
@@ -1560,28 +1903,40 @@ function EvaluacionesProyectoPage({ token, user, proyectos, onBack, onNavigate }
       {proyectoSeleccionado && (
         <section className="panel" style={{ marginTop: "32px" }}>
           <p className="kicker">{proyectoSeleccionado}</p>
-          <h2>Selecciona el tipo de evaluación</h2>
-          <div style={{ display: "flex", flexDirection: "column", gap: "16px", marginTop: "16px" }}>
-            {TIPOS_EVAL_INFO.map(({ tipo, label, desc }) => (
-              <button
-                key={tipo}
-                className="secondary"
-                style={{ textAlign: "left", flexDirection: "column", alignItems: "flex-start", gap: "4px", padding: "16px 18px" }}
-                onClick={() =>
-                  onNavigate({
-                    type: "formulario-evaluacion-proyecto",
-                    proyecto: proyectoSeleccionado,
-                    tipo,
-                    manager: managerDelProyecto,
-                    proyectos,
-                  })
-                }
-              >
-                <span style={{ fontWeight: 800, fontSize: "14px" }}>{label}</span>
-                <span style={{ fontWeight: 400, fontSize: "12px", color: "#5e5e5e" }}>{desc}</span>
-              </button>
-            ))}
-          </div>
+          <h2>Tus evaluaciones</h2>
+          {loadingEquipo ? (
+            <p className="fine">Cargando...</p>
+          ) : (
+            <div style={{ display: "flex", flexDirection: "column", gap: "12px", marginTop: "16px" }}>
+              {evaluacionesAHacer.map(({ tipo, evaluado, label }) => {
+                const evalKey = `${tipo}:${evaluado}`;
+                const completado =
+                  (completedEvals[proyectoSeleccionado] || []).includes(evalKey) ||
+                  completadasNotion.includes(evalKey);
+                return (
+                  <button
+                    key={evalKey}
+                    className="secondary"
+                    style={{ textAlign: "left", padding: "14px 18px", opacity: completado ? 0.55 : 1 }}
+                    disabled={completado}
+                    onClick={() =>
+                      onNavigate({
+                        type: "formulario-evaluacion-proyecto",
+                        proyecto: proyectoSeleccionado,
+                        tipo,
+                        evaluado,
+                        manager: managerDelProyecto,
+                        proyectos,
+                      })
+                    }
+                  >
+                    {completado && <span style={{ marginRight: "8px", color: "#166534" }}>✓</span>}
+                    {label}
+                  </button>
+                );
+              })}
+            </div>
+          )}
         </section>
       )}
       <Footer />
@@ -1593,7 +1948,7 @@ function EvaluacionesProyectoPage({ token, user, proyectos, onBack, onNavigate }
 // Formulario de evaluación de proyecto
 // ---------------------------------------------------------------------------
 
-function FormularioEvaluacionProyecto({ token, user, proyecto, tipo, manager, onBack }) {
+function FormularioEvaluacionProyecto({ token, user, proyecto, tipo, manager, evaluadoProp, onBack, onEnviado }) {
   const [preguntas, setPreguntas] = useState(null);
   const [todosEmpleados, setTodosEmpleados] = useState([]);
   const [evaluado, setEvaluado] = useState("");
@@ -1606,14 +1961,16 @@ function FormularioEvaluacionProyecto({ token, user, proyecto, tipo, manager, on
 
   const LABELS_TIPOS = {
     autoevaluacion: "Autoevaluación",
-    mismos_miembros: "Evaluación a tus miembros del equipo del mismo nivel",
-    miembros_a_manager: "Evaluación de miembros del equipo a managers",
-    manager_a_miembros: "Evaluación de managers a miembros del equipo",
+    mismos_miembros: "Evaluación a compañero",
+    miembros_a_manager: "Evaluación al responsable",
+    manager_a_miembros: "Evaluación a miembro",
   };
-  const tipoLabel = LABELS_TIPOS[tipo] || tipo;
+  const tipoLabel = evaluadoProp && tipo !== "autoevaluacion"
+    ? `${LABELS_TIPOS[tipo] || tipo} — ${evaluadoProp}`
+    : LABELS_TIPOS[tipo] || tipo;
 
-  const necesitaSelector = tipo === "mismos_miembros" || tipo === "manager_a_miembros";
-  const evaluadoFijo = tipo === "autoevaluacion" ? persona : tipo === "miembros_a_manager" ? manager : "";
+  const necesitaSelector = !evaluadoProp && (tipo === "mismos_miembros" || tipo === "manager_a_miembros");
+  const evaluadoFijo = evaluadoProp || (tipo === "autoevaluacion" ? persona : tipo === "miembros_a_manager" ? manager : "");
 
   useEffect(() => {
     apiRequest(`/api/preguntas-evaluacion-proyecto?tipo=${encodeURIComponent(tipo)}`, { token })
@@ -1652,6 +2009,7 @@ function FormularioEvaluacionProyecto({ token, user, proyecto, tipo, manager, on
       if (data.ok) {
         setEnviado(true);
         setStatus("Evaluación guardada correctamente en Notion.");
+        if (onEnviado) onEnviado();
       } else {
         setStatus(data.error || "No se pudo guardar.");
       }
@@ -1806,6 +2164,7 @@ function App() {
   const [user, setUser] = useState(null);
   const [page, setPage] = useState(null);
   const [adminMode, setAdminMode] = useState(null); // null | "personal" | "admin"
+  const [completedEvals, setCompletedEvals] = useState({});
 
   function navigate(newPage, newAdminModeOverride) {
     setPage(newPage);
@@ -1831,6 +2190,7 @@ function App() {
     setUser(null);
     setPage(null);
     setAdminMode(null);
+    setCompletedEvals({});
   }
 
   function backTo(p) {
@@ -1880,7 +2240,10 @@ function App() {
     return <SubirInformePage token={token} advisee={page.advisee} onBack={backTo(page)} />;
   }
   if (page?.type === "activar-evaluaciones-proyecto") {
-    return <ActivarEvaluacionesProyectoPage token={token} user={user} onBack={() => navigate(null)} />;
+    return <ActivarEvaluacionesProyectoPage token={token} user={user} onBack={() => navigate(null)} onActivado={() => setProyectosVersion((v) => v + 1)} />;
+  }
+  if (page?.type === "mis-proyectos-activos") {
+    return <MisProyectosActivosPage token={token} user={user} onBack={() => navigate(null)} />;
   }
   if (page?.type === "evaluaciones-proyecto") {
     return (
@@ -1890,6 +2253,8 @@ function App() {
         proyectos={page.proyectos || []}
         onBack={() => navigate(null)}
         onNavigate={navigate}
+        completedEvals={completedEvals}
+        initialProyecto={page.initialProyecto}
       />
     );
   }
@@ -1900,8 +2265,15 @@ function App() {
         user={user}
         proyecto={page.proyecto}
         tipo={page.tipo}
+        evaluadoProp={page.evaluado}
         manager={page.manager}
-        onBack={() => navigate({ type: "evaluaciones-proyecto", proyectos: page.proyectos || [] })}
+        onBack={() => navigate({ type: "evaluaciones-proyecto", proyectos: page.proyectos || [], initialProyecto: page.proyecto })}
+        onEnviado={() => setCompletedEvals((prev) => {
+          const key = `${page.tipo}:${page.evaluado}`;
+          const list = prev[page.proyecto] || [];
+          if (list.includes(key)) return prev;
+          return { ...prev, [page.proyecto]: [...list, key] };
+        })}
       />
     );
   }

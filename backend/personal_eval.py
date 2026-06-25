@@ -10,7 +10,7 @@ from .notion_service import (
     guardar_evaluacion_personal,
     obtener_config_calendario,
     obtener_nombre_por_id_usuario,
-    obtener_objetivos,
+    obtener_objetivos_persona,
     obtener_preguntas_personales,
     obtener_slack_ids_empleados,
     siguiente_envio_calendario,
@@ -73,9 +73,16 @@ def enviar_pregunta_inicial_personal() -> None:
                         u = resp_u.get("user", {})
                         p = u.get("profile", {})
                         nombre = u.get("real_name") or p.get("real_name") or p.get("display_name") or u.get("name") or ""
-                    objetivos = obtener_objetivos(nombre) if nombre else []
+                    objetivos = obtener_objetivos_persona(nombre) if nombre else []
                     if objetivos:
-                        texto_obj = objetivos[0]["objetivos"]
+                        lineas_obj = []
+                        for obj in objetivos:
+                            linea = f"• *{obj.get('titulo', '')}*"
+                            kpis_o = obj.get("kpis", "")
+                            if kpis_o:
+                                linea += f"\n  _KPIs: {kpis_o}_"
+                            lineas_obj.append(linea)
+                        texto_obj = "\n".join(lineas_obj)
                         msg_obj = f"📌 Como recordatorio, tus objetivos son:\n\n{texto_obj}\n\n*Envía cualquier mensaje en el hilo* para comenzar la evaluación"
                     else:
                         msg_obj = "📌 Como recordatorio: no tienes objetivos registrados.\n\n*Envía cualquier mensaje en el hilo* para comenzar la evaluación"

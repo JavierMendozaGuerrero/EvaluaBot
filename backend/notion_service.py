@@ -1219,7 +1219,8 @@ def _obtener_registros_empleados() -> list[dict]:
                         if foto:
                             break
 
-                registros.append({"nombre": nombre, "email": email.strip(), "aliases": aliases, "cargo": cargo, "id_usuario": id_usuario, "foto": foto})
+                baja = bool((props.get("Baja") or {}).get("checkbox", False))
+                registros.append({"nombre": nombre, "email": email.strip(), "aliases": aliases, "cargo": cargo, "id_usuario": id_usuario, "foto": foto, "baja": baja})
             if not resp.get("has_more"):
                 break
             cursor = resp.get("next_cursor")
@@ -1944,6 +1945,141 @@ def obtener_objetivos(advisee_nombre: str) -> list[dict]:
 
 
 # ---------------------------------------------------------------------------
+# Objetivos por persona (base de datos "Objetivos - {nombre}")
+# ---------------------------------------------------------------------------
+
+_PROPS_OBJETIVO_PERSONA = {
+    "Name":        {"title": {}},
+    "Fecha":       {"date": {}},
+    "CA":          {"rich_text": {}},
+    "KPIs":        {"rich_text": {}},
+    "Descripcion": {"rich_text": {}},
+    "Tipo":        {"rich_text": {}},
+}
+
+_cache_objetivos_persona: dict = {}  # cache_key -> db_id
+
+
+def _obtener_o_crear_bbdd_objetivos_persona(nombre: str) -> str:
+    nombre_strip = nombre.strip()
+    titulo = f"Objetivos - {nombre_strip}"
+    cache_key = normalizar_nombre(titulo)
+    with lock:
+        if cache_key in _cache_objetivos_persona:
+            return _cache_objetivos_persona[cache_key]
+
+    # Busca o crea la página contenedora "Objetivos empleados"
+    parent = _parent_bbdd_en_pagina("Objetivos empleados", crear=True)
+
+    resultado = notion.search(
+        query=titulo,
+        filter={"value": _tipo_objeto_busqueda_bbdd(), "property": "object"},
+        page_size=20,
+    )
+    for bbdd in resultado.get("results", []):
+        if normalizar_nombre(_extraer_titulo_bbdd(bbdd)) == cache_key:
+            db_id = _data_source_id(bbdd)
+            with lock:
+                _cache_objetivos_persona[cache_key] = db_id
+            return db_id
+
+    if _usa_data_sources():
+        nueva = notion.databases.create(
+            parent=parent,
+            title=[{"type": "text", "text": {"content": titulo}}],
+            initial_data_source={
+                "title": [{"type": "text", "text": {"content": titulo}}],
+                "properties": _PROPS_OBJETIVO_PERSONA,
+            },
+        )
+        nueva = notion.databases.retrieve(database_id=nueva["id"])
+    else:
+        nueva = notion.databases.create(
+            parent=parent,
+            title=[{"type": "text", "text": {"content": titulo}}],
+            properties=_PROPS_OBJETIVO_PERSONA,
+        )
+
+    db_id = _data_source_id(nueva)
+    with lock:
+        _cache_objetivos_persona[cache_key] = db_id
+    logging.info("Base de datos objetivos persona creada: %s", titulo)
+    return db_id
+
+
+def guardar_objetivo_persona(ca_nombre: str, advisee_nombre: str, titulo: str, kpis: str, descripcion: str, tipo: str) -> None:
+    db_id = _obtener_o_crear_bbdd_objetivos_persona(advisee_nombre)
+    fecha_iso = datetime.now(timezone.utc).isoformat()
+    _crear_pagina_en_bbdd(
+        db_id,
+        {
+            "Name":        {"title":     [{"text": {"content": titulo[:2000]}}]},
+            "Fecha":       {"date":      {"start": fecha_iso}},
+            "CA":          {"rich_text": [{"text": {"content": ca_nombre[:2000]}}]},
+            "KPIs":        {"rich_text": [{"text": {"content": kpis[:2000]}}]},
+            "Descripcion": {"rich_text": [{"text": {"content": descripcion[:2000]}}]},
+            "Tipo":        {"rich_text": [{"text": {"content": tipo[:2000]}}]},
+        },
+    )
+
+
+def obtener_objetivos_persona(advisee_nombre: str) -> list[dict]:
+    try:
+        db_id = _obtener_o_crear_bbdd_objetivos_persona(advisee_nombre)
+        resultados = []
+        cursor = None
+        while True:
+            kwargs: dict = {"page_size": 100}
+            if cursor:
+                kwargs["start_cursor"] = cursor
+            resp = _query_bbdd(db_id, **kwargs)
+            for pagina in resp.get("results", []):
+                props = pagina.get("properties", {})
+                titulo_val = "".join(
+                    p.get("plain_text", "") for p in (props.get("Name", {}).get("title") or [])
+                ).strip()
+                ca_val = "".join(
+                    p.get("plain_text", "") for p in (props.get("CA", {}).get("rich_text") or [])
+                ).strip()
+                kpis_val = "".join(
+                    p.get("plain_text", "") for p in (props.get("KPIs", {}).get("rich_text") or [])
+                ).strip()
+                desc_val = "".join(
+                    p.get("plain_text", "") for p in (props.get("Descripcion", {}).get("rich_text") or [])
+                ).strip()
+                tipo_val = "".join(
+                    p.get("plain_text", "") for p in (props.get("Tipo", {}).get("rich_text") or [])
+                ).strip()
+                fecha_prop = props.get("Fecha", {}).get("date") or {}
+                resultados.append({
+                    "page_id": pagina["id"],
+                    "titulo": titulo_val,
+                    "ca": ca_val,
+                    "kpis": kpis_val,
+                    "descripcion": desc_val,
+                    "tipo": tipo_val,
+                    "fecha": fecha_prop.get("start", ""),
+                })
+            if not resp.get("has_more"):
+                break
+            cursor = resp.get("next_cursor")
+        resultados.sort(key=lambda x: x["fecha"] or "", reverse=True)
+        return resultados
+    except Exception:
+        logging.exception("Error obteniendo objetivos persona de '%s'", advisee_nombre)
+        return []
+
+
+def eliminar_objetivo_persona(page_id: str) -> bool:
+    try:
+        notion.pages.update(page_id=page_id, archived=True)
+        return True
+    except Exception:
+        logging.exception("Error eliminando objetivo %s", page_id)
+        return False
+
+
+# ---------------------------------------------------------------------------
 # Lista CA: helpers para acceso y búsqueda de CA por empleado
 # ---------------------------------------------------------------------------
 
@@ -2240,7 +2376,7 @@ _PROPS_INFORMES_FINALES = {
     "Name": {"title": {}},
     "CA": {"rich_text": {}},
     "Fecha": {"date": {}},
-    "Archivo_pdf": {"rich_text": {}},
+    "Archivo_docx": {"rich_text": {}},
     "Archivo_html": {"rich_text": {}},
     "URL": {"url": {}},
 }
@@ -2286,7 +2422,7 @@ def _obtener_o_crear_bbdd_informes_finales() -> str:
     return db_id
 
 
-def guardar_informe_final(ca_nombre: str, advisee: str, pdf_filename: str, html_filename: str, url: str) -> None:
+def guardar_informe_final(ca_nombre: str, advisee: str, docx_filename: str, html_filename: str, url: str) -> None:
     db_id = _obtener_o_crear_bbdd_informes_finales()
     advisee_norm = normalizar_nombre(advisee)
 
@@ -2305,7 +2441,6 @@ def guardar_informe_final(ca_nombre: str, advisee: str, pdf_filename: str, html_
             existentes.append({
                 "page_id": fila["id"],
                 "fecha": (props.get("Fecha", {}).get("date") or {}).get("start", ""),
-                "pdf": _texto_rich_text(props, "Archivo_pdf"),
                 "docx": _texto_rich_text(props, "Archivo_docx"),
                 "html": _texto_rich_text(props, "Archivo_html"),
             })
@@ -2320,7 +2455,7 @@ def guardar_informe_final(ca_nombre: str, advisee: str, pdf_filename: str, html_
             notion.pages.update(page_id=oldest["page_id"], archived=True)
         except Exception:
             logging.exception("No se pudo archivar informe final antiguo %s", oldest["page_id"])
-        for fname in (oldest.get("pdf", ""), oldest.get("docx", ""), oldest.get("html", "")):
+        for fname in (oldest.get("docx", ""), oldest.get("html", "")):
             if fname:
                 try:
                     ruta = os.path.join(config.CARPETA_WEB, os.path.basename(fname))
@@ -2334,7 +2469,7 @@ def guardar_informe_final(ca_nombre: str, advisee: str, pdf_filename: str, html_
         "Name": {"title": [{"text": {"content": advisee}}]},
         "CA": {"rich_text": [{"text": {"content": ca_nombre}}]},
         "Fecha": {"date": {"start": fecha.isoformat()}},
-        "Archivo_pdf": {"rich_text": [{"text": {"content": pdf_filename}}]},
+        "Archivo_docx": {"rich_text": [{"text": {"content": docx_filename}}]},
         "Archivo_html": {"rich_text": [{"text": {"content": html_filename}}]},
         "URL": {"url": url},
     })
@@ -2359,7 +2494,7 @@ def obtener_informe_final_reciente(advisee: str) -> dict | None:
                     continue
                 registros.append({
                     "fecha": (props.get("Fecha", {}).get("date") or {}).get("start", ""),
-                    "pdf": _texto_rich_text(props, "Archivo_pdf") or _texto_rich_text(props, "Archivo_docx"),
+                    "docx": _texto_rich_text(props, "Archivo_docx"),
                     "html": _texto_rich_text(props, "Archivo_html"),
                 })
             if not resp.get("has_more"):

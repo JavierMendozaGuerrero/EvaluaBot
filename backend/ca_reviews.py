@@ -32,6 +32,7 @@ from .notion_service import (
     obtener_config_calendario,
     obtener_evaluaciones_por_evaluado,
     obtener_nombre_por_id_usuario,
+    obtener_objetivos_persona,
     obtener_slack_ids_empleados,
     siguiente_envio_calendario,
     sugerir_empleados_parecidos,
@@ -292,6 +293,22 @@ def _resumen_advisee(advisee: str, desde_fecha: str | None) -> str:
     except Exception:
         logging.exception("Error leyendo comentarios personales de '%s'", advisee)
 
+    # Añadir objetivos (solo títulos y KPIs como recordatorio)
+    try:
+        objetivos = obtener_objetivos_persona(advisee)
+        if objetivos:
+            lineas_obj = []
+            for obj in objetivos:
+                titulo_o = obj.get("titulo", "")
+                kpis_o = obj.get("kpis", "")
+                linea = f"• *{titulo_o}*"
+                if kpis_o:
+                    linea += f"\n  _KPIs: {kpis_o}_"
+                lineas_obj.append(linea)
+            resumen += f"\n\n📌 *Objetivos de {advisee}:*\n" + "\n".join(lineas_obj)
+    except Exception:
+        logging.exception("Error leyendo objetivos de '%s'", advisee)
+
     return resumen
 
 
@@ -549,9 +566,13 @@ def manejar_mensaje_ca(event, logger) -> None:
             accion = "pedir_advisee"
 
         elif modo == "esperando_advisee":
-            payload["advisee"] = _resolver_numero_advisee(texto, estado)
-            payload["ca_nombre"] = estado.get("ca_nombre")
-            accion = "validar_y_mostrar"
+            if _es_no(texto):
+                estado["modo"] = "terminado"
+                accion = "terminar"
+            else:
+                payload["advisee"] = _resolver_numero_advisee(texto, estado)
+                payload["ca_nombre"] = estado.get("ca_nombre")
+                accion = "validar_y_mostrar"
 
         elif modo == "esperando_permiso_claude":
             if _es_si(texto):
@@ -669,7 +690,7 @@ def manejar_mensaje_ca(event, logger) -> None:
         if advisee_encontrado:
             permitido, _ = _advisee_permitido_para_ca(ca_nombre, ca_aliases, advisee_encontrado)
         if not advisee_encontrado or not permitido:
-            _reply_lista_advisees(f"*{advisee}* no aparece en tu lista de advisees.\n\n")
+            reply(f"*{advisee}* no aparece en tu lista de advisees.\n\nPor favor, escribe el nombre o número correspondiente del advisee a evaluar. Si quieres terminar la evaluación escribe *no*")
             return
         else:
             advisee = advisee_encontrado

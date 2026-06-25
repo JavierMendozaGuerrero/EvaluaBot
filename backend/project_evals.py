@@ -146,6 +146,18 @@ _lock_preguntas_proyecto: dict = {}
 _cache_preguntas_proyecto: dict = {}
 _CACHE_TTL = 300
 
+_lock_bbdd_evaluacion = threading.Lock()
+_cache_bbdd_evaluacion: dict = {}  # persona_page_id -> db_id
+
+_NOMBRE_BBDD_EVALUACION = "Evaluaciones"
+_PROPS_EVALUACION_PROYECTO = {
+    "Name": {"title": {}},
+    "Fecha": {"date": {}},
+    "Tipo": {"select": {}},
+    "Evaluador": {"rich_text": {}},
+    "Respuestas": {"rich_text": {}},
+}
+
 
 # ---------------------------------------------------------------------------
 # Helpers internos de Notion
@@ -191,6 +203,32 @@ def _buscar_child_page_id(parent_id: str, nombre: str) -> str | None:
             if normalizar_nombre(_titulo_child_page(bloque)) == objetivo:
                 return bloque["id"]
     return None
+
+
+def _obtener_o_crear_bbdd_evaluacion_proyecto(persona_page_id: str) -> str | None:
+    with _lock_bbdd_evaluacion:
+        if persona_page_id in _cache_bbdd_evaluacion:
+            return _cache_bbdd_evaluacion[persona_page_id]
+    db_id = _buscar_bbdd_en_pagina_id(persona_page_id, _NOMBRE_BBDD_EVALUACION)
+    if not db_id:
+        try:
+            db_id = _crear_bbdd(persona_page_id, _NOMBRE_BBDD_EVALUACION, _PROPS_EVALUACION_PROYECTO)
+        except Exception:
+            logging.exception("Error creando BD evaluación en página '%s'", persona_page_id)
+            return None
+    with _lock_bbdd_evaluacion:
+        _cache_bbdd_evaluacion[persona_page_id] = db_id
+    return db_id
+
+
+def _formatear_respuestas(preguntas: list, respuestas: dict) -> str:
+    lineas = []
+    for p in preguntas:
+        pid = p.get("id", "")
+        texto = p.get("texto", "")
+        respuesta = respuestas.get(pid, "—")
+        lineas.append(f"{texto}: {respuesta}")
+    return "\n".join(lineas)
 
 
 # ---------------------------------------------------------------------------
@@ -455,6 +493,19 @@ def activar_evaluaciones_empleados(manager: str, proyecto: str, empleados: list)
 
     _obtener_o_crear_pagina_raiz_resultados()
 
+    # Bloquear si ya existe un proyecto activo con el mismo nombre
+    try:
+        resp_check = _query_bbdd(db_id, filter={
+            "and": [
+                {"property": "Activo", "checkbox": {"equals": True}},
+                {"property": "Proyecto", "rich_text": {"equals": proyecto}},
+            ]
+        }, page_size=1)
+        if resp_check.get("results"):
+            return {"ok": False, "error": f"Ya existe un proyecto activo con el nombre «{proyecto}». Elige un nombre diferente."}
+    except Exception:
+        logging.exception("Error comprobando duplicado para proyecto '%s'", proyecto)
+
     empleados_notion = {}
     try:
         for r in obtener_registros_empleados():
@@ -487,6 +538,323 @@ def activar_evaluaciones_empleados(manager: str, proyecto: str, empleados: list)
             errores.append(nombre_empleado)
 
     return {"ok": True, "activados": activados, "errores": errores}
+
+
+def añadir_miembro_proyecto(manager: str, proyecto: str, empleado: str) -> dict:
+    """Añade (o reactiva) un empleado a un proyecto activo."""
+    db_id = _obtener_o_crear_bbdd_activaciones()
+    if not db_id:
+        return {"ok": False, "error": "No se pudo acceder a la BD de activaciones."}
+    try:
+        resp = _query_bbdd(db_id, filter={
+            "and": [
+                {"property": "Proyecto", "rich_text": {"equals": proyecto}},
+                {"property": "Empleado", "title": {"equals": empleado}},
+            ]
+        }, page_size=1)
+        existing = resp.get("results", [])
+        if existing:
+            notion.pages.update(page_id=existing[0]["id"], properties={"Activo": {"checkbox": True}})
+        else:
+            _crear_pagina_en_bbdd(db_id, {
+                "Empleado": {"title": [{"type": "text", "text": {"content": empleado}}]},
+                "Proyecto": {"rich_text": [{"type": "text", "text": {"content": proyecto}}]},
+                "Activado_por": {"rich_text": [{"type": "text", "text": {"content": manager}}]},
+                "Activo": {"checkbox": True},
+            })
+        slack_id = None
+        for r in obtener_registros_empleados():
+            if normalizar_nombre(r.get("nombre", "")) == normalizar_nombre(empleado):
+                slack_id = r.get("id_usuario")
+                break
+        if slack_id:
+            _notificar_evaluacion_activada(empleado, proyecto, slack_id)
+        return {"ok": True}
+    except Exception:
+        logging.exception("Error añadiendo miembro '%s' al proyecto '%s'", empleado, proyecto)
+        return {"ok": False, "error": "Error interno al añadir miembro."}
+
+
+def _listar_child_pages_proyecto(proyecto_page_id: str) -> list:
+    """Devuelve [{id, title}] de las subpáginas (evaluados) de un proyecto."""
+    resultado = []
+    for bloque in _iter_blocks(proyecto_page_id):
+        if bloque.get("type") == "child_page":
+            titulo = _titulo_child_page(bloque)
+            if titulo:
+                resultado.append({"id": bloque["id"], "title": titulo})
+    return resultado
+
+
+def _archivar_filas_evaluador_en_pagina(evaluado_page_id: str, evaluador: str) -> None:
+    """Archiva en Notion las filas de la BD de evaluación donde Evaluador = evaluador."""
+    db_id = _buscar_bbdd_en_pagina_id(evaluado_page_id, _NOMBRE_BBDD_EVALUACION)
+    if not db_id:
+        return
+    try:
+        resp = _query_bbdd(db_id, filter={
+            "property": "Evaluador",
+            "rich_text": {"equals": evaluador},
+        })
+        for row in resp.get("results", []):
+            try:
+                notion.pages.update(page_id=row["id"], archived=True)
+            except Exception:
+                logging.exception("Error archivando fila de eval (id=%s)", row["id"])
+    except Exception:
+        logging.exception("Error buscando filas de evaluador '%s'", evaluador)
+
+
+def _limpiar_registros_evaluacion_miembro(proyecto: str, empleado: str) -> None:
+    """
+    Limpia en Notion los registros de evaluación de un miembro eliminado:
+    - Archiva su página de resultados completa (evaluaciones recibidas + su autoevaluación).
+    - Archiva las filas que él/ella envió en las páginas de los demás miembros.
+    """
+    raiz_id = _obtener_o_crear_pagina_raiz_resultados()
+    if not raiz_id:
+        return
+    proyecto_page_id = _buscar_child_page_id(raiz_id, proyecto)
+    if not proyecto_page_id:
+        return
+
+    child_pages = _listar_child_pages_proyecto(proyecto_page_id)
+    obj_empleado = normalizar_nombre(empleado)
+
+    for page in child_pages:
+        if normalizar_nombre(page["title"]) == obj_empleado:
+            # Archivar la página entera del miembro eliminado
+            try:
+                notion.pages.update(page_id=page["id"], archived=True)
+            except Exception:
+                logging.exception("Error archivando página de '%s' en proyecto '%s'", empleado, proyecto)
+        else:
+            # Archivar las filas que el miembro eliminado envió a otros
+            _archivar_filas_evaluador_en_pagina(page["id"], empleado)
+
+
+def eliminar_miembro_proyecto(proyecto: str, empleado: str) -> dict:
+    """Desactiva a un empleado de un proyecto (Activo=False) y limpia sus registros."""
+    db_id = _obtener_o_crear_bbdd_activaciones()
+    if not db_id:
+        return {"ok": False, "error": "No se pudo acceder a la BD de activaciones."}
+    try:
+        resp = _query_bbdd(db_id, filter={
+            "and": [
+                {"property": "Activo", "checkbox": {"equals": True}},
+                {"property": "Proyecto", "rich_text": {"equals": proyecto}},
+                {"property": "Empleado", "title": {"equals": empleado}},
+            ]
+        }, page_size=1)
+        existing = resp.get("results", [])
+        if not existing:
+            return {"ok": False, "error": "No se encontró ese miembro en el proyecto."}
+        notion.pages.update(page_id=existing[0]["id"], properties={"Activo": {"checkbox": False}})
+        threading.Thread(target=_limpiar_registros_evaluacion_miembro, args=(proyecto, empleado), daemon=True).start()
+        return {"ok": True}
+    except Exception:
+        logging.exception("Error eliminando miembro '%s' del proyecto '%s'", empleado, proyecto)
+        return {"ok": False, "error": "Error interno al eliminar miembro."}
+
+
+def obtener_evals_completadas_proyecto(evaluador: str, proyecto: str) -> list:
+    """
+    Devuelve [{tipo, evaluado}] de evaluaciones ya enviadas por evaluador en este proyecto.
+    Consulta las páginas de resultados en Notion.
+    """
+    raiz_id = _obtener_o_crear_pagina_raiz_resultados()
+    if not raiz_id:
+        return []
+    proyecto_page_id = _buscar_child_page_id(raiz_id, proyecto)
+    if not proyecto_page_id:
+        return []
+
+    label_to_tipo = {v: k for k, v in LABELS_TIPOS.items()}
+    completadas = []
+
+    for page in _listar_child_pages_proyecto(proyecto_page_id):
+        evaluado = page["title"]
+        db_id = _buscar_bbdd_en_pagina_id(page["id"], _NOMBRE_BBDD_EVALUACION)
+        if not db_id:
+            continue
+        try:
+            resp = _query_bbdd(db_id, filter={
+                "property": "Evaluador",
+                "rich_text": {"equals": evaluador},
+            })
+            for row in resp.get("results", []):
+                props = row.get("properties", {})
+                tipo_label = (props.get("Tipo") or {}).get("select", {}).get("name", "")
+                tipo_key = label_to_tipo.get(tipo_label)
+                if tipo_key:
+                    completadas.append({"tipo": tipo_key, "evaluado": evaluado})
+        except Exception:
+            logging.exception("Error consultando completadas de '%s' en '%s'", evaluado, proyecto)
+
+    return completadas
+
+
+def obtener_proyectos_manager(manager_nombre: str) -> list:
+    """Proyectos activos activados por este manager, con su equipo."""
+    db_id = _obtener_o_crear_bbdd_activaciones()
+    if not db_id:
+        return []
+    objetivo = normalizar_nombre(manager_nombre)
+    try:
+        resp = _query_bbdd(db_id, filter={"property": "Activo", "checkbox": {"equals": True}})
+        proyectos_map: dict = {}
+        for pag in resp.get("results", []):
+            props = pag.get("properties", {})
+            activado_por = "".join(t.get("plain_text", "") for t in (props.get("Activado_por") or {}).get("rich_text", []))
+            if normalizar_nombre(activado_por) != objetivo:
+                continue
+            proy = "".join(t.get("plain_text", "") for t in (props.get("Proyecto") or {}).get("rich_text", []))
+            empleado = "".join(t.get("plain_text", "") for t in (props.get("Empleado") or {}).get("title", []))
+            if proy:
+                if proy not in proyectos_map:
+                    proyectos_map[proy] = []
+                if empleado and empleado not in proyectos_map[proy]:
+                    proyectos_map[proy].append(empleado)
+        return [{"nombre_proyecto": p, "equipo": e} for p, e in proyectos_map.items()]
+    except Exception:
+        logging.exception("Error obteniendo proyectos del manager '%s'", manager_nombre)
+        return []
+
+
+def obtener_estado_evaluaciones_proyecto(proyecto: str) -> list:
+    """Para cada miembro del proyecto, devuelve evaluaciones recibidas y pendientes."""
+    equipo = obtener_equipo_proyecto(proyecto)
+    if not equipo:
+        return []
+
+    raiz_id = _obtener_o_crear_pagina_raiz_resultados()
+    proyecto_page_id = _buscar_child_page_id(raiz_id, proyecto) if raiz_id else None
+
+    resultado = []
+    for miembro in equipo:
+        if not proyecto_page_id:
+            resultado.append({"nombre": miembro, "n_evaluaciones": 0, "evaluadores": [], "pendientes": [m for m in equipo if m != miembro], "autoevaluacion_hecha": False})
+            continue
+        persona_page_id = _buscar_child_page_id(proyecto_page_id, miembro)
+        if not persona_page_id:
+            resultado.append({"nombre": miembro, "n_evaluaciones": 0, "evaluadores": [], "pendientes": [m for m in equipo if m != miembro], "autoevaluacion_hecha": False})
+            continue
+        evaluadores: list = []
+        autoevaluacion_hecha = False
+        try:
+            db_id = _buscar_bbdd_en_pagina_id(persona_page_id, _NOMBRE_BBDD_EVALUACION)
+            if db_id:
+                resp = _query_bbdd(db_id, page_size=100)
+                for fila in resp.get("results", []):
+                    props = fila.get("properties", {})
+                    ev = "".join(p.get("plain_text", "") for p in props.get("Evaluador", {}).get("rich_text", [])).strip()
+                    tipo = "".join(p.get("plain_text", "") for p in (props.get("Tipo") or {}).get("select", {}).get("name", "")).strip() if isinstance((props.get("Tipo") or {}).get("select"), dict) else ""
+                    tipo = ((props.get("Tipo") or {}).get("select") or {}).get("name", "")
+                    if normalizar_nombre(ev) == normalizar_nombre(miembro):
+                        autoevaluacion_hecha = True
+                    elif ev and ev not in evaluadores:
+                        evaluadores.append(ev)
+            else:
+                for bloque in _iter_blocks(persona_page_id):
+                    if bloque.get("type") == "paragraph":
+                        texto = "".join(t.get("plain_text", "") for t in bloque.get("paragraph", {}).get("rich_text", []))
+                        if texto.startswith("Evaluado por: "):
+                            ev = texto.replace("Evaluado por: ", "").strip()
+                            if ev:
+                                if normalizar_nombre(ev) == normalizar_nombre(miembro):
+                                    autoevaluacion_hecha = True
+                                elif ev not in evaluadores:
+                                    evaluadores.append(ev)
+        except Exception:
+            logging.exception("Error leyendo evaluaciones de '%s' en proyecto '%s'", miembro, proyecto)
+        evaluadores_norm = {normalizar_nombre(e) for e in evaluadores}
+        pendientes = [m for m in equipo if m != miembro and normalizar_nombre(m) not in evaluadores_norm]
+        resultado.append({"nombre": miembro, "n_evaluaciones": len(evaluadores), "evaluadores": evaluadores, "pendientes": pendientes, "autoevaluacion_hecha": autoevaluacion_hecha})
+
+    return resultado
+
+
+def _desactivar_proyecto(proyecto: str) -> bool:
+    """Marca todas las filas activas del proyecto como inactivas. Devuelve True si desactivó algo."""
+    db_id = _obtener_o_crear_bbdd_activaciones()
+    if not db_id:
+        return False
+    desactivados = 0
+    try:
+        cursor = None
+        while True:
+            kwargs: dict = {
+                "filter": {"and": [
+                    {"property": "Activo", "checkbox": {"equals": True}},
+                    {"property": "Proyecto", "rich_text": {"equals": proyecto}},
+                ]},
+                "page_size": 100,
+            }
+            if cursor:
+                kwargs["start_cursor"] = cursor
+            resp = _query_bbdd(db_id, **kwargs)
+            for pag in resp.get("results", []):
+                notion.pages.update(page_id=pag["id"], properties={"Activo": {"checkbox": False}})
+                desactivados += 1
+            if not resp.get("has_more"):
+                break
+            cursor = resp.get("next_cursor")
+    except Exception:
+        logging.exception("Error desactivando proyecto '%s'", proyecto)
+    return desactivados > 0
+
+
+def _notificar_proyecto_completado(manager_nombre: str, proyecto: str) -> None:
+    try:
+        slack_id = None
+        for r in obtener_registros_empleados():
+            if normalizar_nombre(r.get("nombre", "")) == normalizar_nombre(manager_nombre):
+                slack_id = r.get("id_usuario")
+                break
+        if not slack_id:
+            logging.warning("No se encontró Slack ID para el manager '%s'", manager_nombre)
+            return
+        dm = slack_app.client.conversations_open(users=[slack_id])
+        channel = dm["channel"]["id"]
+        slack_app.client.chat_postMessage(
+            channel=channel,
+            text=(
+                f"✅ Todos los miembros de tu equipo han terminado las evaluaciones del proyecto *{proyecto}*. "
+                "Se cerrará el apartado en la web relacionado con este proyecto."
+            ),
+        )
+        logging.info("Notificación de cierre enviada al manager '%s' para proyecto '%s'", manager_nombre, proyecto)
+    except Exception:
+        logging.exception("Error notificando cierre del proyecto '%s'", proyecto)
+
+
+def _verificar_y_cerrar_proyecto(proyecto: str) -> None:
+    """Si todas las evaluaciones del proyecto están completas, cierra el proyecto y notifica al manager."""
+    try:
+        estado = obtener_estado_evaluaciones_proyecto(proyecto)
+        if not estado or any(m["pendientes"] for m in estado):
+            return
+
+        # Buscar el manager antes de desactivar (necesitamos Activo=True todavía)
+        db_id = _obtener_o_crear_bbdd_activaciones()
+        manager_nombre = None
+        if db_id:
+            resp = _query_bbdd(db_id, filter={"and": [
+                {"property": "Activo", "checkbox": {"equals": True}},
+                {"property": "Proyecto", "rich_text": {"equals": proyecto}},
+            ]})
+            for pag in resp.get("results", []):
+                props = pag.get("properties", {})
+                activado_por = "".join(t.get("plain_text", "") for t in (props.get("Activado_por") or {}).get("rich_text", []))
+                if activado_por:
+                    manager_nombre = activado_por
+                    break
+
+        # _desactivar_proyecto devuelve False si ya estaba cerrado (evita doble notificación)
+        if _desactivar_proyecto(proyecto) and manager_nombre:
+            _notificar_proyecto_completado(manager_nombre, proyecto)
+    except Exception:
+        logging.exception("Error verificando cierre del proyecto '%s'", proyecto)
 
 
 def _notificar_evaluacion_activada(nombre_empleado: str, proyecto: str, slack_id: str):
@@ -541,15 +909,26 @@ def guardar_evaluacion_proyecto(
             logging.exception("Error creando página de persona '%s' en proyecto '%s'", evaluado, proyecto)
             return False
 
+    db_id = _obtener_o_crear_bbdd_evaluacion_proyecto(persona_page_id)
+    if not db_id:
+        return False
+
     tipo_label = LABELS_TIPOS.get(tipo_clave, tipo_clave)
-    fecha_str = datetime.now(timezone.utc).strftime("%d/%m/%Y %H:%M")
-    bloques = _construir_bloques_evaluacion(evaluador, tipo_label, fecha_str, preguntas, respuestas)
+    fecha = datetime.now(timezone.utc)
+    respuestas_texto = _formatear_respuestas(preguntas, respuestas)
 
     try:
-        notion.blocks.children.append(block_id=persona_page_id, children=bloques)
+        _crear_pagina_en_bbdd(db_id, {
+            "Name": {"title": [{"type": "text", "text": {"content": evaluador}}]},
+            "Fecha": {"date": {"start": fecha.isoformat()}},
+            "Tipo": {"select": {"name": tipo_label}},
+            "Evaluador": {"rich_text": [{"type": "text", "text": {"content": evaluador}}]},
+            "Respuestas": {"rich_text": [{"type": "text", "text": {"content": respuestas_texto[:2000]}}]},
+        })
+        threading.Thread(target=_verificar_y_cerrar_proyecto, args=(proyecto,), daemon=True).start()
         return True
     except Exception:
-        logging.exception("Error guardando evaluación en Notion para '%s'", evaluado)
+        logging.exception("Error guardando evaluación en BD Notion para '%s'", evaluado)
         return False
 
 

@@ -2737,9 +2737,9 @@ function App() {
     apiRequest("/api/me", { token })
       .then((data) => {
         if (data.user) setUser(data.user);
-        else localStorage.removeItem("evaluabot_token");
+        else { clearApiCache(); localStorage.removeItem("evaluabot_token"); setToken(""); }
       })
-      .catch(() => localStorage.removeItem("evaluabot_token"));
+      .catch(() => { clearApiCache(); localStorage.removeItem("evaluabot_token"); setToken(""); });
   }, [token, resetToken]);
 
   function handleLogout() {
@@ -2760,7 +2760,7 @@ function App() {
   }
 
   if (resetToken || !token || !user) {
-    return <AuthScreen onLogin={(newToken, newUser) => { setToken(newToken); setUser(newUser); }} />;
+    return <AuthScreen onLogin={(newToken, newUser) => { clearApiCache(); setToken(newToken); setUser(newUser); }} />;
   }
 
   const isAdmin = Boolean(user?.is_admin);

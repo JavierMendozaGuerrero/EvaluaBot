@@ -1,3 +1,4 @@
+import json
 import logging
 import threading
 import time
@@ -10,6 +11,7 @@ from .notion_service import (
     guardar_evaluacion_personal,
     obtener_ca_de_empleado,
     obtener_config_calendario,
+    obtener_criterios_evaluacion,
     obtener_nombre_por_id_usuario,
     obtener_objetivos,
     obtener_slack_id_por_nombre,
@@ -54,6 +56,18 @@ _BLOQUES_OPORTUNIDAD_SIN_URGENCIA = [
             "action_id": "personal_ver_objetivos",
         },
     },
+    {
+        "type": "section",
+        "text": {
+            "type": "mrkdwn",
+            "text": "*3.* Señalar limitaciones o aspectos relevantes respecto al cumplimiento de los criterios de evaluación",
+        },
+        "accessory": {
+            "type": "button",
+            "text": {"type": "plain_text", "text": "📊 Ver criterios"},
+            "action_id": "personal_ver_criterios",
+        },
+    },
 ]
 
 _BLOQUES_OPORTUNIDAD = [
@@ -84,8 +98,20 @@ _BLOQUES_OPORTUNIDAD = [
         "type": "section",
         "text": {
             "type": "mrkdwn",
+            "text": "*3.* Señalar limitaciones o aspectos relevantes respecto al cumplimiento de los criterios de evaluación",
+        },
+        "accessory": {
+            "type": "button",
+            "text": {"type": "plain_text", "text": "📊 Ver criterios"},
+            "action_id": "personal_ver_criterios",
+        },
+    },
+    {
+        "type": "section",
+        "text": {
+            "type": "mrkdwn",
             "text": (
-                "*3.* Si necesitas ayuda con algún tema o has tenido alguna dificultad que quieras comentar\n"
+                "*4.* Si necesitas ayuda con algún tema o has tenido alguna dificultad que quieras comentar\n"
                 "_El botón de urgencia notifica a tu CA por Slack. Si no lo pulsas, el problema no se notifica automáticamente y solo quedará registrado._"
             ),
         },
@@ -683,6 +709,157 @@ def _handle_personal_urgencia_modificar(ack, body, logger):
         slack_app.client.chat_postMessage(channel=dm_channel, thread_ts=thread_ts, text="🚨 Describe de nuevo la urgencia:")
     except Exception:
         logger.exception("Error procesando personal_urgencia_modificar")
+
+
+# ---------------------------------------------------------------------------
+# Criterios de evaluación — modal interactivo
+# ---------------------------------------------------------------------------
+
+_GRUPOS_CRITERIOS = {
+    "negocio": "Negocio",
+    "palantir": "Palantir",
+    "middleoffice": "MiddleOffice",
+}
+
+_LIDERAZGO_KEYWORDS = {"liderazgo", "leadership", "leadership & management"}
+
+
+def _es_subarea_liderazgo(nombre: str) -> bool:
+    return any(kw in nombre.lower() for kw in _LIDERAZGO_KEYWORDS)
+
+
+def _build_grupo_selector_view() -> dict:
+    return {
+        "type": "modal",
+        "callback_id": "criterios_selector",
+        "title": {"type": "plain_text", "text": "Criterios de evaluación"},
+        "close": {"type": "plain_text", "text": "Cerrar"},
+        "blocks": [
+            {
+                "type": "section",
+                "text": {"type": "mrkdwn", "text": "¿Para qué área quieres ver los criterios?"},
+            },
+            {
+                "type": "actions",
+                "elements": [
+                    {
+                        "type": "static_select",
+                        "action_id": "criterios_elegir_grupo",
+                        "placeholder": {"type": "plain_text", "text": "Selecciona un área..."},
+                        "options": [
+                            {"text": {"type": "plain_text", "text": "Negocio"}, "value": "negocio"},
+                            {"text": {"type": "plain_text", "text": "Palantir"}, "value": "palantir"},
+                            {"text": {"type": "plain_text", "text": "Middle Office"}, "value": "middleoffice"},
+                        ],
+                    }
+                ],
+            },
+        ],
+    }
+
+
+def _build_criterios_view(grupo: str, criterios: dict, expanded: set) -> dict:
+    display = {"negocio": "Negocio", "palantir": "Palantir", "middleoffice": "Middle Office"}.get(grupo, grupo)
+    blocks: list = [
+        {
+            "type": "section",
+            "text": {
+                "type": "mrkdwn",
+                "text": f"📊 *Criterios de evaluación — {display}*\nPulsa *Ver* en cada subárea para expandirla:",
+            },
+        },
+        {"type": "divider"},
+    ]
+    for subarea, niveles in criterios.items():
+        es_liderazgo = _es_subarea_liderazgo(subarea)
+        titulo = f"*{subarea}*" + (" _(solo Asociado Sr y Manager)_" if es_liderazgo else "")
+        is_expanded = subarea in expanded
+        blocks.append({
+            "type": "section",
+            "text": {"type": "mrkdwn", "text": titulo},
+            "accessory": {
+                "type": "button",
+                "text": {"type": "plain_text", "text": "▼ Ocultar" if is_expanded else "▶ Ver"},
+                "action_id": "criterios_toggle",
+                "value": subarea,
+            },
+        })
+        if is_expanded:
+            for nivel, textos in niveles.items():
+                lineas = "\n".join(f"• {t}" for t in textos)
+                blocks.append({
+                    "type": "section",
+                    "text": {"type": "mrkdwn", "text": f"*{nivel}*\n{lineas}"[:3000]},
+                })
+            blocks.append({"type": "divider"})
+    return {
+        "type": "modal",
+        "callback_id": "criterios_ver",
+        "private_metadata": json.dumps({"grupo": grupo, "expanded": list(expanded)}),
+        "title": {"type": "plain_text", "text": "Criterios"},
+        "close": {"type": "plain_text", "text": "Cerrar"},
+        "blocks": blocks[:100],
+    }
+
+
+@slack_app.action("personal_ver_criterios")
+def _handle_personal_ver_criterios(ack, body, logger):
+    ack()
+    trigger_id = body.get("trigger_id")
+    if not trigger_id:
+        return
+    try:
+        slack_app.client.views_open(trigger_id=trigger_id, view=_build_grupo_selector_view())
+    except Exception:
+        logger.exception("Error abriendo modal de criterios")
+
+
+@slack_app.action("criterios_elegir_grupo")
+def _handle_criterios_elegir_grupo(ack, body, logger):
+    ack()
+    view = body.get("view", {})
+    view_id = view.get("id")
+    if not view_id:
+        return
+    action = (body.get("actions") or [{}])[0]
+    selected = action.get("selected_option") or {}
+    grupo = selected.get("value", "negocio")
+    try:
+        notion_grupo = _GRUPOS_CRITERIOS.get(grupo, grupo)
+        criterios = obtener_criterios_evaluacion(notion_grupo)
+        slack_app.client.views_update(
+            view_id=view_id,
+            view=_build_criterios_view(grupo, criterios, set()),
+        )
+    except Exception:
+        logger.exception("Error mostrando criterios del grupo '%s'", grupo)
+
+
+@slack_app.action("criterios_toggle")
+def _handle_criterios_toggle(ack, body, logger):
+    ack()
+    view = body.get("view", {})
+    try:
+        metadata = json.loads(view.get("private_metadata", "{}"))
+    except Exception:
+        metadata = {}
+    grupo = metadata.get("grupo", "negocio")
+    expanded = set(metadata.get("expanded", []))
+    action = (body.get("actions") or [{}])[0]
+    subarea = action.get("value", "")
+    if subarea in expanded:
+        expanded.discard(subarea)
+    else:
+        expanded.add(subarea)
+    try:
+        notion_grupo = _GRUPOS_CRITERIOS.get(grupo, grupo)
+        criterios = obtener_criterios_evaluacion(notion_grupo)
+        slack_app.client.views_update(
+            view_id=view["id"],
+            view=_build_criterios_view(grupo, criterios, expanded),
+        )
+    except Exception:
+        logger.exception("Error actualizando criterios para subárea '%s'", subarea)
 
 
 def ciclo_envio_personal() -> None:

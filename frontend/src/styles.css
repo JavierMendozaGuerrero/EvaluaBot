@@ -676,6 +676,77 @@ textarea.objetivos-textarea:focus {
   border-left: 2px solid var(--line);
 }
 
+/* Notas CA */
+.notas-ca-section {
+  margin-top: 48px;
+  border-top: 1px solid var(--line);
+  padding-top: 32px;
+}
+
+.notas-ca-titulo {
+  font-size: 18px;
+  font-weight: 700;
+  margin: 0 0 20px;
+}
+
+.notas-ca-form {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  margin-bottom: 32px;
+}
+
+.notas-ca-textarea {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 12px 14px;
+  font-size: 15px;
+  font-family: inherit;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  resize: vertical;
+  background: var(--bg);
+  color: var(--ink);
+}
+
+.notas-ca-textarea:focus {
+  outline: none;
+  border-color: var(--ink);
+}
+
+.notas-ca-historial {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.nota-ca-item {
+  padding: 16px 20px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--soft);
+}
+
+.nota-ca-fecha {
+  margin: 0 0 8px;
+}
+
+.nota-ca-texto {
+  margin: 0;
+  font-size: 15px;
+  white-space: pre-wrap;
+  line-height: 1.6;
+}
+
+.nota-ca-resumen-wrap {
+  margin-bottom: 10px;
+}
+
+.nota-ca-resumen-wrap summary {
+  cursor: pointer;
+  margin-bottom: 6px;
+}
+
 .dash-status {
   margin-top: 24px;
   text-align: center;

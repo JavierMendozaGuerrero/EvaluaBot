@@ -61,6 +61,7 @@ from .project_evals import (
     obtener_evals_completadas_proyecto,
     LABELS_TIPOS,
 )
+from .ca_reviews import guardar_nota_ca_web
 from .reports import generar_archivo_trayectoria, generar_archivos_informe
 from .skill_informes_anual import generar_informe_anual, obtener_empleados_evaluacion_anual
 from .users import (
@@ -494,6 +495,19 @@ class ApiHandler(BaseHTTPRequestHandler):
             else:
                 datos = self.leer_json()
                 form = None
+            if ruta == "/api/notas-ca":
+                sesion = self.sesion_actual()
+                if not sesion:
+                    raise PermissionError("Inicia sesión para acceder.")
+                advisee_nombre = datos.get("advisee", "").strip()
+                nota = datos.get("nota", "").strip()
+                if not advisee_nombre or not nota:
+                    self.responder_json({"error": "Faltan datos"}, 400)
+                    return
+                ca_nombre = sesion.get("persona", "")
+                ok, err = guardar_nota_ca_web(ca_nombre, advisee_nombre, nota)
+                self.responder_json({"ok": ok, "error": err})
+                return
             if ruta == "/api/register":
                 registrar_usuario(datos.get("username", ""), datos.get("password", ""))
                 self.responder_json({"ok": True})

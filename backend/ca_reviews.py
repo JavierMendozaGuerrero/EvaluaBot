@@ -151,6 +151,11 @@ def _obtener_o_crear_bbdd_ca(advisee: str) -> str:
     return db_id
 
 
+def guardar_nota_ca_web(ca_nombre: str, advisee: str, nota: str) -> tuple[bool, str]:
+    """Guarda una nota del CA sobre un advisee registrada desde la web."""
+    return _guardar_opinion(ca_nombre, advisee, nota)
+
+
 def _guardar_opinion(ca_nombre: str, advisee: str, opinion: str, resumen: str = "") -> tuple[bool, str]:
     try:
         db_id = _obtener_o_crear_bbdd_ca(advisee)

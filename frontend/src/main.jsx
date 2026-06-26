@@ -1883,16 +1883,27 @@ function AdviseesList({ token, advisees, onBack, onNavigate }) {
 
 function AdviseeDetail({ token, advisee, advisees, onBack, onNavigate }) {
   const [gestionOpen, setGestionOpen] = useState(false);
-  const [opiniones, setOpiniones] = useState(null);
-  const [loadingOpiniones, setLoadingOpiniones] = useState(false);
   const [accesoIndividual, setAccesoIndividual] = useState(false);
   const [togglingAccesoIndividual, setTogglingAccesoIndividual] = useState(false);
+  const [notas, setNotas] = useState(null);
+  const [loadingNotas, setLoadingNotas] = useState(true);
+  const [nuevaNota, setNuevaNota] = useState("");
+  const [guardandoNota, setGuardandoNota] = useState(false);
+  const [notaError, setNotaError] = useState("");
 
   useEffect(() => {
     const apply = (data) => setAccesoIndividual(data.activo || false);
     apiRequestCached(`/api/acceso-advisee-individual?advisee=${encodeURIComponent(advisee.nombre)}`, { token }, apply)
       .then(apply)
       .catch(() => {});
+  }, [token, advisee.nombre]);
+
+  useEffect(() => {
+    setLoadingNotas(true);
+    apiRequest(`/api/opiniones-ca?advisee=${encodeURIComponent(advisee.nombre)}`, { token })
+      .then((data) => setNotas(data.opiniones || []))
+      .catch(() => setNotas([]))
+      .finally(() => setLoadingNotas(false));
   }, [token, advisee.nombre]);
 
   async function toggleAccesoIndividual() {
@@ -1910,16 +1921,29 @@ function AdviseeDetail({ token, advisee, advisees, onBack, onNavigate }) {
     }
   }
 
-  async function cargarOpiniones() {
-    if (opiniones !== null) { setOpiniones(null); return; }
-    setLoadingOpiniones(true);
+  async function guardarNota(e) {
+    e.preventDefault();
+    const texto = nuevaNota.trim();
+    if (!texto) return;
+    setGuardandoNota(true);
+    setNotaError("");
     try {
-      const data = await apiRequest(`/api/opiniones-ca?advisee=${encodeURIComponent(advisee.nombre)}`, { token });
-      setOpiniones(data.opiniones || []);
+      const data = await apiRequest("/api/notas-ca", {
+        token,
+        method: "POST",
+        body: { advisee: advisee.nombre, nota: texto },
+      });
+      if (data.ok) {
+        const ahora = new Date().toISOString();
+        setNotas((prev) => [{ fecha: ahora, opinion: texto, resumen_advisee: "" }, ...(prev || [])]);
+        setNuevaNota("");
+      } else {
+        setNotaError("No se pudo guardar la nota.");
+      }
     } catch {
-      setOpiniones([]);
+      setNotaError("Error al guardar la nota.");
     } finally {
-      setLoadingOpiniones(false);
+      setGuardandoNota(false);
     }
   }
 
@@ -1947,9 +1971,6 @@ function AdviseeDetail({ token, advisee, advisees, onBack, onNavigate }) {
             </button>
             {gestionOpen && (
               <div className="advisee-gestion">
-                <button className="secondary" onClick={cargarOpiniones} disabled={loadingOpiniones}>
-                  {loadingOpiniones ? "Cargando..." : opiniones !== null ? "Ocultar opiniones" : "Ver tus opiniones sobre este advisee"}
-                </button>
                 <button className="secondary" onClick={() => onNavigate({ type: "informes-advisee", advisee, from: "advisee-detail", advisees })}>
                   Ver borrador de informe generado por Claude
                 </button>
@@ -1971,30 +1992,44 @@ function AdviseeDetail({ token, advisee, advisees, onBack, onNavigate }) {
             )}
           </div>
         </div>
-        {opiniones !== null && (
-          <section className="opiniones-modal panel" style={{ marginTop: "32px" }}>
-            <h2 style={{ marginBottom: "18px" }}>Opiniones sobre {advisee.nombre}</h2>
-            {opiniones.length ? (
-              <div className="opiniones-list">
-                {opiniones.map((op, i) => (
-                  <article key={i} className="opinion-item">
-                    <p className="opinion-fecha fine">{op.fecha ? op.fecha.slice(0, 10) : "Sin fecha"}</p>
-                    {op.resumen_advisee && (
-                      <div className="opinion-resumen">
-                        <p className="fine"><strong>Evaluaciones vistas:</strong></p>
-                        <pre className="opinion-pre">{op.resumen_advisee}</pre>
-                      </div>
-                    )}
-                    <p className="fine"><strong>Opinión del CA:</strong></p>
-                    <p className="opinion-texto">{op.opinion || "—"}</p>
-                  </article>
-                ))}
-              </div>
+
+        <section className="notas-ca-section">
+          <h3 className="notas-ca-titulo">Registro de reuniones / Comentarios</h3>
+          <form className="notas-ca-form" onSubmit={guardarNota}>
+            <textarea
+              className="notas-ca-textarea"
+              placeholder="Escribe aquí tus anotaciones sobre esta reunión o cualquier comentario..."
+              value={nuevaNota}
+              onChange={(e) => setNuevaNota(e.target.value)}
+              rows={4}
+            />
+            {notaError && <p className="form-error">{notaError}</p>}
+            <button type="submit" disabled={guardandoNota || !nuevaNota.trim()}>
+              {guardandoNota ? "Guardando..." : "Guardar nota"}
+            </button>
+          </form>
+
+          <div className="notas-ca-historial">
+            {loadingNotas ? (
+              <p className="fine">Cargando historial...</p>
+            ) : !notas || notas.length === 0 ? (
+              <p className="fine">No hay notas registradas todavía.</p>
             ) : (
-              <p>No hay opiniones guardadas sobre {advisee.nombre}.</p>
+              notas.map((nota, i) => (
+                <article key={i} className="nota-ca-item">
+                  <p className="nota-ca-fecha fine">{nota.fecha ? nota.fecha.slice(0, 10) : "Sin fecha"}</p>
+                  {nota.resumen_advisee && (
+                    <details className="nota-ca-resumen-wrap">
+                      <summary className="fine">Ver evaluaciones incluidas</summary>
+                      <pre className="opinion-pre">{nota.resumen_advisee}</pre>
+                    </details>
+                  )}
+                  <p className="nota-ca-texto">{nota.opinion || "—"}</p>
+                </article>
+              ))
             )}
-          </section>
-        )}
+          </div>
+        </section>
       </div>
       <Footer />
     </main>

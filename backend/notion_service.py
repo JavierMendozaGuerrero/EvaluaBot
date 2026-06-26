@@ -1357,14 +1357,31 @@ def _obtener_db_criterios(grupo: str) -> str | None:
             return None
         ids: dict[str, str] = {}
         for bloque in _iter_blocks(criterios_page_id):
-            if bloque.get("type") == "child_database":
+            tipo = bloque.get("type", "")
+            if tipo == "child_database":
                 titulo = _titulo_child_database(bloque)
                 try:
                     db = notion.databases.retrieve(database_id=bloque["id"])
                     db_id = _data_source_id(db)
                 except Exception:
                     db_id = bloque["id"]
-                ids.setdefault(titulo, db_id)  # usa la primera (original), ignora duplicados
+                ids.setdefault(titulo, db_id)
+            elif tipo == "child_page":
+                # Las BDs de criterios son páginas completas — buscar child_database dentro
+                titulo_pagina = (bloque.get("child_page") or {}).get("title", "")
+                page_id = bloque.get("id", "")
+                if not titulo_pagina or not page_id:
+                    continue
+                for sub in _iter_blocks(page_id):
+                    if sub.get("type") == "child_database":
+                        try:
+                            db = notion.databases.retrieve(database_id=sub["id"])
+                            db_id = _data_source_id(db)
+                        except Exception:
+                            db_id = sub["id"]
+                        ids.setdefault(titulo_pagina, db_id)
+                        break  # solo necesitamos la primera BD de cada página
+        logging.info("[criterios] BDs encontradas: %s", list(ids.keys()))
         with _lock_criterios:
             _criterios_db_ids = ids
             _criterios_db_ids_ts = time.time()
@@ -1389,6 +1406,11 @@ def obtener_criterios_evaluacion(grupo: str) -> dict:
     if not db_id:
         return {}
 
+    _NIVELES = ["Analista", "Asociado", "Asociado Sr", "Manager"]
+
+    def _rt(prop):
+        return "".join(t.get("plain_text", "") for t in (prop or {}).get("rich_text", [])).strip()
+
     resultado: dict = {}
     try:
         cursor = None
@@ -1397,24 +1419,22 @@ def obtener_criterios_evaluacion(grupo: str) -> dict:
             if cursor:
                 kwargs["start_cursor"] = cursor
             resp = _query_bbdd(db_id, **kwargs)
-            for row in resp.get("results", []):
+            rows = resp.get("results", [])
+            for row in rows:
                 props = row.get("properties", {})
-                texto = "".join(t.get("plain_text", "") for t in (props.get("Criterio") or {}).get("title", []))
-                dimension = (props.get("Dimension") or {}).get("select", {}) or {}
-                dimension = dimension.get("name", "")
-                nivel = (props.get("Nivel") or {}).get("select", {}) or {}
-                nivel = nivel.get("name", "")
-                orden = (props.get("Orden") or {}).get("number") or 999
-                if texto and dimension and nivel:
-                    resultado.setdefault(dimension, {}).setdefault(nivel, [])
-                    resultado[dimension][nivel].append((orden, texto))
+                criterio = "".join(t.get("plain_text", "") for t in (props.get("Criterio") or {}).get("title", [])).strip()
+                if not criterio:
+                    continue
+                niveles: dict = {}
+                for nivel in _NIVELES:
+                    texto = _rt(props.get(nivel))
+                    if texto:
+                        niveles[nivel] = [texto]
+                if niveles:
+                    resultado[criterio] = niveles
             if not resp.get("has_more"):
                 break
             cursor = resp.get("next_cursor")
-        # Ordenar por 'orden' y dejar solo textos
-        for dim in resultado:
-            for niv in resultado[dim]:
-                resultado[dim][niv] = [t for _, t in sorted(resultado[dim][niv])]
     except Exception:
         logging.exception("Error leyendo criterios para grupo '%s'", grupo)
         return {}

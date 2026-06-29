@@ -1002,6 +1002,16 @@ def ciclo_recordatorios_ca() -> None:
                 logging.exception(f"Error enviando recordatorio CA DM a {uid}")
 
 
+def obtener_resumen_advisee_para_ca(ca_nombre: str, advisee: str) -> tuple[str, bool]:
+    """Devuelve (resumen_texto, sin_novedades) para un advisee. Para uso desde la web."""
+    desde_fecha = _fecha_ultima_opinion(ca_nombre, advisee)
+    hace_4_semanas = (datetime.now(timezone.utc) - timedelta(weeks=4)).isoformat()
+    desde_fecha = max(desde_fecha, hace_4_semanas) if desde_fecha else hace_4_semanas
+    resumen = _resumen_advisee(advisee, desde_fecha)
+    sin_novedades = "no hay evaluaciones nuevas" in resumen or "No hay evaluaciones registradas" in resumen
+    return resumen, sin_novedades
+
+
 def ciclo_envio_ca() -> None:
     if config.APP_MODE != "produccion":
         try:

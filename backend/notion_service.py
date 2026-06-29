@@ -2916,9 +2916,13 @@ def obtener_preguntas_personales() -> dict:
 
 
 def guardar_evaluacion_personal(nombre: str, respuestas: dict) -> bool:
-    db_id = _buscar_o_crear_bbdd_en_personales(
-        "Respuestas", _PROPS_EVALUACIONES_PERSONALES, _cache_personal_eval_db,
-    )
+    try:
+        db_id = _buscar_o_crear_bbdd_en_personales(
+            "Respuestas", _PROPS_EVALUACIONES_PERSONALES, _cache_personal_eval_db,
+        )
+    except Exception:
+        logging.exception("Error localizando BD de evaluaciones personales para '%s'", nombre)
+        return False
     if not db_id:
         return False
     try:

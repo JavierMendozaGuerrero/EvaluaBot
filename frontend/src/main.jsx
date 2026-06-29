@@ -938,7 +938,6 @@ function ChatEvalProyecto({ token, user, onComplete, onNavigate }) {
       setEvaluadosEnSesion(prev => [...prev, clave]);
       botSay("✅ *Evaluación guardada en Notion*.\n\n¿Hay más miembros en el equipo que quieras evaluar?");
       setStep("mas_personas");
-      onComplete?.();
     } catch { botSay("⚠️ No se pudo guardar en Notion. Revisa permisos/logs."); }
     finally { setLoading(false); }
   }
@@ -1049,6 +1048,7 @@ function ChatEvalProyecto({ token, user, onComplete, onNavigate }) {
     } else {
       botSay("Perfecto, muchas gracias por tu tiempo ❤️. Ya puedes cerrar esta sección 👋");
       setStep("terminado");
+      onComplete?.();
     }
   }
 
@@ -1162,6 +1162,391 @@ function ChatEvalProyecto({ token, user, onComplete, onNavigate }) {
   );
 }
 
+function ChatEvalPersonal({ token, user, onComplete }) {
+  const persona = user?.persona || user?.username || "";
+  const [msgs, setMsgs] = React.useState([{
+    role: "bot",
+    text: "📝 *Seguimiento personal*\n\n_Esta evaluación es totalmente privada, solo podrá verla tu CA._\n_Si en algún momento quieres cancelar, cierra esta sección._\n\n*Pulsa el botón* para comenzar.",
+  }]);
+  const [step, setStep] = React.useState("intro");
+  const [comentario, setComentario] = React.useState("");
+  const [inputVal, setInputVal] = React.useState("");
+  const [urgenciaVal, setUrgenciaVal] = React.useState("");
+  const [urgenciaDesc, setUrgenciaDesc] = React.useState("");
+  const [loading, setLoading] = React.useState(false);
+  const bottomRef = React.useRef(null);
+
+  React.useEffect(() => { bottomRef.current?.scrollIntoView({ behavior: "smooth" }); }, [msgs]);
+
+  const botSay = (text) => setMsgs(m => [...m, { role: "bot", text }]);
+  const userSay = (text) => setMsgs(m => [...m, { role: "user", text }]);
+
+  function handleComenzar() {
+    userSay("Comenzar");
+    botSay("*Esta es tu oportunidad para:*\n\n*1.* Explicar cómo estás ayudando en _\"Contribution to the firm\"_\n*2.* Cómo te estás acercando a tus objetivos\n*3.* Señalar limitaciones o aspectos relevantes respecto al cumplimiento de los criterios de evaluación\n*4.* Si necesitas ayuda con algún tema o has tenido alguna dificultad que quieras comentar\n\nYa puedes escribir tu comentario.");
+    setStep("esperando_comentario");
+  }
+
+  async function handleVerObjetivos() {
+    try {
+      const d = await apiRequest(`/api/objetivos?nombre=${encodeURIComponent(persona)}`, { token });
+      const objs = d.objetivos || [];
+      if (objs.length) {
+        const lineas = objs.map(o => `• *${o.titulo}*${o.kpis ? `\n  _KPIs: ${o.kpis}_` : ""}`).join("\n");
+        botSay(`📌 *Tus objetivos actuales:*\n\n${lineas}`);
+      } else {
+        botSay("📌 No tienes objetivos registrados actualmente.");
+      }
+    } catch (e) { botSay(`⚠️ No se pudieron cargar los objetivos: ${e.message || "Error desconocido"}`); }
+  }
+
+  function handleVerCriterios() {
+    userSay("📊 Ver criterios");
+    botSay("¿Para qué área quieres ver los criterios?");
+    setStep("criterios_grupo");
+  }
+
+  async function handleCriteriosGrupo(grupo) {
+    const labels = { negocio: "Negocio", palantir: "Palantir", middleoffice: "Middle Office" };
+    userSay(labels[grupo] || grupo);
+    setLoading(true);
+    try {
+      const d = await apiRequest(`/api/criterios-evaluacion?grupo=${encodeURIComponent(grupo)}`, { token });
+      const criterios = d.criterios || {};
+      const entries = Object.entries(criterios);
+      if (!entries.length) {
+        botSay("📊 No hay criterios disponibles para este área.");
+      } else {
+        const texto = `📊 *Criterios — ${labels[grupo] || grupo}*\n\n` +
+          entries.map(([dim, niveles]) =>
+            `*${dim}*\n` + Object.entries(niveles).map(([n, ts]) => `  _${n}:_ ${Array.isArray(ts) ? ts.join(". ") : ts}`).join("\n")
+          ).join("\n\n");
+        botSay(texto);
+      }
+    } catch (e) {
+      botSay(`⚠️ No se pudieron cargar los criterios: ${e.message || "Error desconocido"}`);
+    } finally {
+      setLoading(false);
+    }
+    setStep("esperando_comentario");
+  }
+
+  function handleUrgencia() {
+    userSay("🚨 Urgencia");
+    setUrgenciaVal("");
+    setUrgenciaDesc("");
+    botSay("🚨 Describe en una frase breve la urgencia:");
+    setStep("urgencia_descripcion");
+  }
+
+  function handleUrgenciaSubmit() {
+    const val = urgenciaVal.trim();
+    if (!val) return;
+    userSay(val);
+    setUrgenciaDesc(val);
+    setUrgenciaVal("");
+    botSay(`📋 Tu urgencia:\n_${val}_\n\n¿La envío a tu CA?`);
+    setStep("urgencia_confirmacion");
+  }
+
+  async function handleUrgenciaEnviar() {
+    userSay("✅ Enviar al CA");
+    setLoading(true);
+    try {
+      const d = await apiRequest("/api/urgencia-personal", { token, method: "POST", body: { descripcion: urgenciaDesc } });
+      botSay(d.ok ? "✅ Tu urgencia ha sido enviada a tu CA." : "⚠️ No se pudo notificar a tu CA. Contacta directamente.");
+    } catch (e) {
+      botSay(`⚠️ No se pudo notificar: ${e.message || "Error desconocido"}`);
+    } finally {
+      setLoading(false);
+    }
+    setStep("esperando_comentario");
+  }
+
+  function handleUrgenciaModificar() {
+    userSay("✏️ Modificar");
+    setUrgenciaVal("");
+    botSay("🚨 Describe de nuevo la urgencia:");
+    setStep("urgencia_descripcion");
+  }
+
+  function handleComentario() {
+    const val = inputVal.trim();
+    if (!val) return;
+    userSay(val);
+    setComentario(val);
+    setInputVal("");
+    botSay(`📋 Tu comentario:\n_${val}_\n\n¿Lo guardo?`);
+    setStep("confirmacion");
+  }
+
+  async function handleConfirmar() {
+    userSay("✅ Sí, guardar");
+    setLoading(true);
+    try {
+      await apiRequest("/api/guardar-evaluacion-personal", { token, method: "POST", body: { comentario } });
+      botSay("✅ Evaluación guardada. ¿Quieres añadir otro comentario?");
+      setStep("preguntando_otro");
+    } catch (e) { botSay(`⚠️ No se pudo guardar: ${e.message || "Error desconocido"}`); }
+    finally { setLoading(false); }
+  }
+
+  function handleModificar() {
+    userSay("✏️ Modificar");
+    setComentario("");
+    botSay("Escribe de nuevo tu comentario:");
+    setStep("esperando_comentario");
+  }
+
+  function handleOtroSi() {
+    userSay("✅ Sí");
+    setComentario("");
+    setInputVal("");
+    botSay("¿Qué más me quieres contar? Responde con tu comentario.");
+    setStep("esperando_comentario");
+  }
+
+  function handleOtroNo() {
+    userSay("❌ No");
+    botSay("Muchas gracias. Ya puedes cerrar esta sección 👋");
+    setStep("terminado");
+    onComplete?.();
+  }
+
+  function renderInput() {
+    if (loading) return <div className="chat-input-area"><div className="chat-input-row"><span className="fine" style={{ color: "var(--muted)" }}>...</span></div></div>;
+    if (step === "intro") return (
+      <div className="chat-input-area"><div className="chat-btns"><button className="chat-btn primary" onClick={handleComenzar}>Comenzar</button></div></div>
+    );
+    if (step === "esperando_comentario") return (
+      <div className="chat-input-area">
+        <div className="chat-btns" style={{ marginBottom: "8px" }}>
+          <button className="chat-btn" onClick={handleVerObjetivos}>📋 Ver mis objetivos</button>
+          <button className="chat-btn" onClick={handleVerCriterios}>📊 Ver criterios</button>
+          <button className="chat-btn" style={{ color: "var(--danger, #e53e3e)" }} onClick={handleUrgencia}>🚨 Urgencia</button>
+        </div>
+        <div className="chat-input-row">
+          <textarea className="chat-input chat-textarea" placeholder="Escribe tu comentario..." value={inputVal} onChange={e => setInputVal(e.target.value)} onKeyDown={e => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); handleComentario(); } }} rows={3} autoFocus />
+          <button className="chat-send-btn" onClick={handleComentario}>→</button>
+        </div>
+      </div>
+    );
+    if (step === "criterios_grupo") return (
+      <div className="chat-input-area"><div className="chat-btns">
+        <button className="chat-btn" onClick={() => handleCriteriosGrupo("negocio")}>Negocio</button>
+        <button className="chat-btn" onClick={() => handleCriteriosGrupo("palantir")}>Palantir</button>
+        <button className="chat-btn" onClick={() => handleCriteriosGrupo("middleoffice")}>Middle Office</button>
+      </div></div>
+    );
+    if (step === "urgencia_descripcion") return (
+      <div className="chat-input-area">
+        <div className="chat-input-row">
+          <textarea className="chat-input chat-textarea" placeholder="Describe la urgencia..." value={urgenciaVal} onChange={e => setUrgenciaVal(e.target.value)} onKeyDown={e => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); handleUrgenciaSubmit(); } }} rows={2} autoFocus />
+          <button className="chat-send-btn" onClick={handleUrgenciaSubmit}>→</button>
+        </div>
+      </div>
+    );
+    if (step === "urgencia_confirmacion") return (
+      <div className="chat-input-area"><div className="chat-btns">
+        <button className="chat-btn primary" onClick={handleUrgenciaEnviar}>✅ Enviar al CA</button>
+        <button className="chat-btn" onClick={handleUrgenciaModificar}>✏️ Modificar</button>
+      </div></div>
+    );
+    if (step === "confirmacion") return (
+      <div className="chat-input-area"><div className="chat-btns">
+        <button className="chat-btn primary" onClick={handleConfirmar}>✅ Sí, guardar</button>
+        <button className="chat-btn" onClick={handleModificar}>✏️ Modificar</button>
+      </div></div>
+    );
+    if (step === "preguntando_otro") return (
+      <div className="chat-input-area"><div className="chat-btns">
+        <button className="chat-btn primary" onClick={handleOtroSi}>✅ Sí</button>
+        <button className="chat-btn" onClick={handleOtroNo}>❌ No</button>
+      </div></div>
+    );
+    if (step === "terminado") return (
+      <div className="chat-input-area"><span className="fine" style={{ color: "var(--muted)" }}>Evaluación completada ✅</span></div>
+    );
+    return null;
+  }
+
+  return (
+    <div className="eval-chat-area">
+      <div className="chat-msgs">
+        {msgs.map((msg, i) => (
+          <div key={i} className={`chat-msg-${msg.role}`}>
+            {msg.role === "bot"
+              ? <><span className="chat-avatar">🤖</span><div className="chat-bubble-bot">{renderMd(msg.text)}</div></>
+              : <div className="chat-bubble-user">{msg.text}</div>
+            }
+          </div>
+        ))}
+        <div ref={bottomRef} />
+      </div>
+      {renderInput()}
+    </div>
+  );
+}
+
+function ChatEvalCA({ token, user, adviseesProp, onComplete }) {
+  const [msgs, setMsgs] = React.useState([{
+    role: "bot",
+    text: "📋 *CA: Revisión de advisees*\n\n_Esta revisión es totalmente privada, solo podrás verla tú._\n\n*Pulsa el botón* para comenzar.",
+  }]);
+  const [step, setStep] = React.useState("intro");
+  const [adviseeActual, setAdviseeActual] = React.useState("");
+  const [opinion, setOpinion] = React.useState("");
+  const [inputVal, setInputVal] = React.useState("");
+  const [loading, setLoading] = React.useState(false);
+  const [advisees, setAdvisees] = React.useState([]);
+  const [guardados, setGuardados] = React.useState([]);
+  const bottomRef = React.useRef(null);
+
+  React.useEffect(() => { bottomRef.current?.scrollIntoView({ behavior: "smooth" }); }, [msgs]);
+
+  React.useEffect(() => {
+    apiRequest("/api/mis-advisees", { token })
+      .then(d => setAdvisees((d.advisees || []).map(a => a.nombre).filter(Boolean)))
+      .catch(() => setAdvisees((adviseesProp || []).map(a => a.nombre || a).filter(Boolean)));
+  }, [token]);
+
+  const botSay = (text) => setMsgs(m => [...m, { role: "bot", text }]);
+  const userSay = (text) => setMsgs(m => [...m, { role: "user", text }]);
+
+  const disponibles = advisees.filter(a => !guardados.includes(a));
+
+  function handleComenzar() {
+    userSay("Comenzar");
+    if (advisees.length === 0) {
+      botSay("Cargando advisees...");
+    }
+    setStep("esperando_advisee");
+    botSay("¿De qué advisee te gustaría hacer seguimiento?");
+  }
+
+  async function handleAdvisee(nombre) {
+    const val = (nombre || inputVal).trim();
+    if (!val) return;
+    setInputVal("");
+    if (val.toLowerCase() === "no") {
+      userSay("No");
+      botSay("¡Perfecto, gracias por tu tiempo! 🎉");
+      setStep("terminado");
+      return;
+    }
+    const num = parseInt(val);
+    const adviseeNombre = !isNaN(num) && num >= 1 && num <= disponibles.length
+      ? disponibles[num - 1]
+      : val;
+    const found = advisees.find(a => a.toLowerCase() === adviseeNombre.toLowerCase());
+    if (!found) {
+      botSay(`*${adviseeNombre}* no aparece en tu lista de advisees. Selecciona uno de los botones o escribe *no* para terminar.`);
+      return;
+    }
+    userSay(found);
+    setAdviseeActual(found);
+    setLoading(true);
+    try {
+      const d = await apiRequest(`/api/resumen-evaluaciones-advisee?advisee=${encodeURIComponent(found)}`, { token });
+      botSay(d.resumen);
+      if (d.sinNovedades) {
+        botSay("¿De qué advisee te gustaría hacer seguimiento?");
+      } else {
+        botSay("¿Qué opinas de las evaluaciones? Escribe tu comentario sobre el progreso de tu advisee.");
+        setStep("esperando_opinion");
+      }
+    } catch { botSay("⚠️ Error cargando evaluaciones. Inténtalo de nuevo."); }
+    finally { setLoading(false); }
+  }
+
+  function handleOpinion() {
+    const val = inputVal.trim();
+    if (!val) return;
+    userSay(val);
+    setOpinion(val);
+    setInputVal("");
+    botSay(`*Resumen de tu valoración:*\n• Advisee: *${adviseeActual}*\n• Opinión: ${val}\n\n¿Lo guardo?`);
+    setStep("confirmacion");
+  }
+
+  async function handleConfirmar() {
+    userSay("✅ Sí, guardar");
+    setLoading(true);
+    try {
+      await apiRequest("/api/notas-ca", { token, method: "POST", body: { advisee: adviseeActual, nota: opinion } });
+      const nuevosGuardados = [...guardados, adviseeActual];
+      setGuardados(nuevosGuardados);
+      onComplete?.();
+      const restantes = advisees.filter(a => !nuevosGuardados.includes(a));
+      if (restantes.length > 0) {
+        botSay("✅ Opinión guardada en Notion.\n\n¿De qué advisee te gustaría hacer seguimiento?");
+        setStep("esperando_advisee");
+      } else {
+        botSay("✅ Opinión guardada en Notion.\n\n¡Has completado el seguimiento de todos tus advisees! 🎉");
+        setStep("terminado");
+      }
+    } catch { botSay("⚠️ No se pudo guardar en Notion. Revisa permisos/logs."); }
+    finally { setLoading(false); }
+  }
+
+  function handleModificar() {
+    userSay("✏️ Modificar");
+    setOpinion("");
+    botSay("¿Qué comentario deseas registrar sobre las evaluaciones de tu advisee?");
+    setStep("esperando_opinion");
+  }
+
+  function renderInput() {
+    if (loading) return <div className="chat-input-area"><div className="chat-input-row"><span className="fine" style={{ color: "var(--muted)" }}>...</span></div></div>;
+    if (step === "intro") return (
+      <div className="chat-input-area"><div className="chat-btns"><button className="chat-btn primary" onClick={handleComenzar}>Comenzar</button></div></div>
+    );
+    if (step === "esperando_advisee") return (
+      <div className="chat-input-area">
+        <div className="chat-sugerencias" style={{ flexWrap: "wrap" }}>
+          {disponibles.map(a => (
+            <button key={a} className="chat-btn" onClick={() => handleAdvisee(a)}>{a}</button>
+          ))}
+          <button className="chat-btn" onClick={() => handleAdvisee("no")}>❌ Terminar</button>
+        </div>
+      </div>
+    );
+    if (step === "esperando_opinion") return (
+      <div className="chat-input-area"><div className="chat-input-row">
+        <textarea className="chat-input chat-textarea" placeholder="Escribe tu opinión..." value={inputVal} onChange={e => setInputVal(e.target.value)} onKeyDown={e => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); handleOpinion(); } }} rows={3} autoFocus />
+        <button className="chat-send-btn" onClick={handleOpinion}>→</button>
+      </div></div>
+    );
+    if (step === "confirmacion") return (
+      <div className="chat-input-area"><div className="chat-btns">
+        <button className="chat-btn primary" onClick={handleConfirmar}>✅ Sí, guardar</button>
+        <button className="chat-btn" onClick={handleModificar}>✏️ Modificar</button>
+      </div></div>
+    );
+    if (step === "terminado") return (
+      <div className="chat-input-area"><span className="fine" style={{ color: "var(--muted)" }}>Revisión completada ✅</span></div>
+    );
+    return null;
+  }
+
+  return (
+    <div className="eval-chat-area">
+      <div className="chat-msgs">
+        {msgs.map((msg, i) => (
+          <div key={i} className={`chat-msg-${msg.role}`}>
+            {msg.role === "bot"
+              ? <><span className="chat-avatar">🤖</span><div className="chat-bubble-bot">{renderMd(msg.text)}</div></>
+              : <div className="chat-bubble-user">{msg.text}</div>
+            }
+          </div>
+        ))}
+        <div ref={bottomRef} />
+      </div>
+      {renderInput()}
+    </div>
+  );
+}
+
 function HistorialEvaluacionesPage({ token, evaluado, evaluador, proyecto, onBack }) {
   const [historial, setHistorial] = React.useState(null);
   const [error, setError] = React.useState(null);
@@ -1239,29 +1624,58 @@ function HistorialEvaluacionesPage({ token, evaluado, evaluador, proyecto, onBac
   );
 }
 
-function EvaluacionesSlackSection({ token, user, advisees, onNavigate, completadasApp = {}, onCompletada }) {
+function EvaluacionesSlackSection({ token, user, advisees, onNavigate, onCompletada }) {
+  // sessionStorage persiste dentro de la misma sesión del navegador (sobrevive navegar atrás/adelante).
+  // Clave incluye los últimos 8 chars del token para que sea específica del usuario.
+  const storageKey = `eval_completadas_${(token || "").slice(-8)}`;
+
   const [estadoCiclo, setEstadoCiclo] = React.useState(null);
   const [tipoActivo, setTipoActivo] = React.useState(null);
-  const [completadasApi, setCompletadasApi] = React.useState({});
+  const [completadas, setCompletadas] = React.useState(() => {
+    try { return JSON.parse(sessionStorage.getItem(storageKey) || "{}"); } catch { return {}; }
+  });
+  // Ref para saber si el usuario ya empezó a interactuar antes de que llegue la API.
+  // Si ya empezó, ignoramos la respuesta de la API para no cambiar ticks mid-conversación.
+  const interactuoRef = React.useRef(false);
 
   React.useEffect(() => {
     apiRequest("/api/estado-ciclo-slack", { token })
-      .then(d => { setEstadoCiclo(d); setCompletadasApi(d.completadas || {}); })
+      .then(d => {
+        setEstadoCiclo(d);
+        if (!interactuoRef.current) {
+          // Merge: si la API dice que algo está hecho, se marca como hecho.
+          // Lo que ya estaba marcado en sesión se mantiene (por si la API tiene lag o falla).
+          setCompletadas(prev => {
+            const apiComp = d.completadas || {};
+            const merged = { ...prev };
+            Object.entries(apiComp).forEach(([k, v]) => { if (v) merged[k] = true; });
+            return merged;
+          });
+        }
+      })
       .catch(() => setEstadoCiclo({ cicloActivo: true, completadas: {}, esCA: false }));
   }, [token]);
-
-  // Merge: API result + lo que ya se completó en esta sesión
-  const completadas = React.useMemo(
-    () => ({ ...completadasApi, ...completadasApp }),
-    [completadasApi, completadasApp]
-  );
 
   const esCA = estadoCiclo?.esCA || advisees.length > 0;
   const tipos = [
     { key: "proyecto", label: "Evaluación mensual", disponible: true },
-    { key: "personal", label: "Evaluación personal", disponible: false },
-    ...(esCA ? [{ key: "ca", label: "Opiniones CA", disponible: false }] : []),
+    { key: "personal", label: "Evaluación personal", disponible: true },
+    ...(esCA ? [{ key: "ca", label: "Opiniones CA", disponible: true }] : []),
   ];
+
+  function handleTabClick(key) {
+    interactuoRef.current = true;
+    setTipoActivo(key);
+  }
+
+  function marcarCompletada(key) {
+    setCompletadas(c => {
+      const next = { ...c, [key]: true };
+      try { sessionStorage.setItem(storageKey, JSON.stringify(next)); } catch {}
+      return next;
+    });
+    onCompletada?.(key);
+  }
 
   return (
     <div>
@@ -1274,7 +1688,7 @@ function EvaluacionesSlackSection({ token, user, advisees, onNavigate, completad
             <button
               key={tipo.key}
               className={`eval-tipo-btn${tipoActivo === tipo.key ? " active" : ""}${completadas[tipo.key] ? " completada" : ""}`}
-              onClick={() => { if (tipo.disponible && !completadas[tipo.key]) setTipoActivo(tipo.key); }}
+              onClick={() => { if (tipo.disponible && !completadas[tipo.key]) handleTabClick(tipo.key); }}
               disabled={!tipo.disponible || completadas[tipo.key]}
               title={completadas[tipo.key] ? "Ya has completado esta evaluación en el ciclo actual" : !tipo.disponible ? "Próximamente" : ""}
             >
@@ -1290,8 +1704,12 @@ function EvaluacionesSlackSection({ token, user, advisees, onNavigate, completad
         </nav>
         <div style={{ minHeight: "500px", display: "flex", flexDirection: "column" }}>
           {tipoActivo === "proyecto"
-            ? <ChatEvalProyecto key="proyecto" token={token} user={user} onComplete={() => { setCompletadasApi(c => ({ ...c, proyecto: true })); onCompletada?.("proyecto"); }} onNavigate={onNavigate} />
-            : <div className="eval-chat-area"><div className="eval-placeholder"><p className="fine">{tipoActivo ? "Esta evaluación estará disponible próximamente." : "Selecciona un tipo de evaluación."}</p></div></div>
+            ? <ChatEvalProyecto key="proyecto" token={token} user={user} onComplete={() => marcarCompletada("proyecto")} onNavigate={onNavigate} />
+            : tipoActivo === "personal"
+              ? <ChatEvalPersonal key="personal" token={token} user={user} onComplete={() => marcarCompletada("personal")} />
+              : tipoActivo === "ca"
+                ? <ChatEvalCA key="ca" token={token} user={user} adviseesProp={advisees} onComplete={() => marcarCompletada("ca")} />
+                : <div className="eval-chat-area"><div className="eval-placeholder"><p className="fine">Selecciona un tipo de evaluación.</p></div></div>
           }
         </div>
       </div>

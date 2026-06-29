@@ -38,6 +38,7 @@ from .notion_service import (
     evaluacion_personal_guardada_desde,
     obtener_config_calendario,
     siguiente_envio_calendario,
+    guardar_evaluacion_personal,
     guardar_en_notion,
     buscar_empleado_y_cargo,
     obtener_preguntas_desde_notion,
@@ -46,6 +47,7 @@ from .notion_service import (
     obtener_evaluados_middleoffice,
     sugerir_empleados_parecidos,
     obtener_historial_mis_evaluaciones,
+    obtener_criterios_evaluacion,
 )
 from .hierarchy import comparar_jerarquia, tipo_relacion
 from .project_evals import (
@@ -61,7 +63,8 @@ from .project_evals import (
     obtener_evals_completadas_proyecto,
     LABELS_TIPOS,
 )
-from .ca_reviews import guardar_nota_ca_web
+from .ca_reviews import guardar_nota_ca_web, obtener_resumen_advisee_para_ca
+from .personal_eval import notificar_urgencia_personal_web
 from .reports import generar_archivo_trayectoria, generar_archivos_informe
 from .skill_informes_anual import generar_informe_anual, obtener_empleados_evaluacion_anual
 from .users import (
@@ -206,6 +209,17 @@ class ApiHandler(BaseHTTPRequestHandler):
                 nombre = query_params.get("nombre", [""])[0]
                 perfil = obtener_perfil_empleado(nombre)
                 self.responder_json(perfil)
+                return
+            if ruta == "/api/criterios-evaluacion":
+                sesion = self.sesion_actual()
+                if not sesion:
+                    raise PermissionError("Inicia sesión para acceder.")
+                query_params = urllib.parse.parse_qs(parsed.query)
+                grupo = query_params.get("grupo", ["negocio"])[0]
+                _GRUPO_NOTION = {"negocio": "Negocio", "palantir": "Palantir", "middleoffice": "MiddleOffice"}
+                notion_grupo = _GRUPO_NOTION.get(grupo, grupo)
+                criterios = obtener_criterios_evaluacion(notion_grupo)
+                self.responder_json({"criterios": criterios})
                 return
             if ruta == "/api/objetivos":
                 sesion = self.sesion_actual()
@@ -401,10 +415,11 @@ class ApiHandler(BaseHTTPRequestHandler):
                     *obtener_advisees(persona, ca_aliases=_ca_aliases),
                     *listar_advisees_con_opiniones_ca(persona, ca_aliases=_ca_aliases),
                 })
+                es_ca = len(advisees_ca) > 0 or ca_tiene_acceso_activo(persona, ca_aliases=_ca_aliases)
                 self.responder_json({
                     "cicloActivo": True,
                     "completadas": completadas,
-                    "esCA": len(advisees_ca) > 0,
+                    "esCA": es_ca,
                 })
                 return
             if ruta == "/api/buscar-empleado-slack":
@@ -463,6 +478,26 @@ class ApiHandler(BaseHTTPRequestHandler):
                         {"clave": "q2", "texto": pn.get("q2") or "Indica un ejemplo concreto que justifique tu valoración"},
                     ]
                 self.responder_json({"empleado": empleado, "relacion": relacion, "preguntas": preguntas})
+                return
+            if ruta == "/api/resumen-evaluaciones-advisee":
+                sesion = self.sesion_actual()
+                if not sesion:
+                    raise PermissionError("Inicia sesión para acceder.")
+                query_params = urllib.parse.parse_qs(parsed.query)
+                advisee = query_params.get("advisee", [""])[0]
+                if not advisee:
+                    self.responder_json({"error": "Falta el advisee."}, 400)
+                    return
+                ca_nombre = sesion.get("persona", "")
+                ca_aliases = [sesion.get("username", ""), sesion.get("email", "")]
+                advisees_ca = list({
+                    *obtener_advisees(ca_nombre, ca_aliases=ca_aliases),
+                    *listar_advisees_con_opiniones_ca(ca_nombre, ca_aliases=ca_aliases),
+                })
+                if normalizar_nombre(advisee) not in [normalizar_nombre(a) for a in advisees_ca]:
+                    raise PermissionError("No tienes acceso a las evaluaciones de este advisee.")
+                resumen, sin_novedades = obtener_resumen_advisee_para_ca(ca_nombre, advisee)
+                self.responder_json({"resumen": resumen, "sinNovedades": sin_novedades})
                 return
             if ruta == "/api/historial-evaluaciones":
                 sesion = self.sesion_actual()
@@ -714,6 +749,30 @@ class ApiHandler(BaseHTTPRequestHandler):
                     self.responder_json({"ok": True})
                 else:
                     self.responder_json({"error": "No se pudo guardar la evaluación en Notion."}, 500)
+                return
+            if ruta == "/api/urgencia-personal":
+                nombre = sesion.get("persona", "")
+                descripcion = datos.get("descripcion", "").strip()
+                if not nombre or not descripcion:
+                    self.responder_json({"error": "Faltan datos."}, 400)
+                    return
+                ok = notificar_urgencia_personal_web(nombre, descripcion)
+                self.responder_json({"ok": ok})
+                return
+            if ruta == "/api/guardar-evaluacion-personal":
+                nombre = sesion.get("persona", "")
+                if not nombre:
+                    self.responder_json({"error": "Tu sesión no tiene un nombre asociado. Vuelve a iniciar sesión."}, 400)
+                    return
+                comentario = datos.get("comentario", "").strip()
+                if not comentario:
+                    self.responder_json({"error": "El comentario no puede estar vacío."}, 400)
+                    return
+                ok = guardar_evaluacion_personal(nombre, {"comentario": comentario})
+                if not ok:
+                    self.responder_json({"error": "No se pudo guardar en Notion. Revisa los permisos del token de Notion."}, 500)
+                    return
+                self.responder_json({"ok": True})
                 return
             if ruta == "/api/guardar-evaluacion-slack":
                 persona = sesion.get("persona", "")

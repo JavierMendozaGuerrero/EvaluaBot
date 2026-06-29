@@ -208,6 +208,11 @@ def _enviar_preguntando_otro(channel, thread_ts):
     )
 
 
+def notificar_urgencia_personal_web(nombre: str, descripcion: str) -> bool:
+    """Notifica la urgencia al CA del empleado. Para uso desde la web."""
+    return _notificar_urgencia_al_ca(nombre, descripcion, logging.getLogger(__name__))
+
+
 def _notificar_urgencia_al_ca(nombre, descripcion, logger):
     nombre_ca = obtener_ca_de_empleado(nombre)
     if not nombre_ca:

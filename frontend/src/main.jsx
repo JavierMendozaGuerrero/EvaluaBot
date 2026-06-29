@@ -1756,14 +1756,12 @@ function EvaluacionesSlackSection({ token, user, advisees, onNavigate, onComplet
           });
         }
       })
-      .catch(() => setEstadoCiclo({ cicloActivo: true, completadas: {}, esCA: false }));
+      .catch(() => setEstadoCiclo({ cicloActivo: true, completadas: {} }));
   }, [token]);
 
-  const esCA = estadoCiclo?.esCA || advisees.length > 0;
   const tipos = [
     { key: "proyecto", label: "Evaluación mensual", disponible: true },
     { key: "personal", label: "Evaluación personal", disponible: true },
-    ...(esCA ? [{ key: "ca", label: "Opiniones CA", disponible: true }] : []),
   ];
 
   // Comprobar si hay evaluaciones mensuales en periodo de gracia (2 días)
@@ -1825,9 +1823,7 @@ function EvaluacionesSlackSection({ token, user, advisees, onNavigate, onComplet
             ? <ChatEvalProyecto key="proyecto" token={token} user={user} onComplete={() => marcarCompletada("proyecto")} onNavigate={onNavigate} />
             : tipoActivo === "personal"
               ? <ChatEvalPersonal key="personal" token={token} user={user} onComplete={() => marcarCompletada("personal")} />
-              : tipoActivo === "ca"
-                ? <ChatEvalCA key="ca" token={token} user={user} adviseesProp={advisees} onComplete={() => marcarCompletada("ca")} />
-                : <div className="eval-chat-area"><div className="eval-placeholder"><p className="fine">Selecciona un tipo de evaluación.</p></div></div>
+              : <div className="eval-chat-area"><div className="eval-placeholder"><p className="fine">Selecciona un tipo de evaluación.</p></div></div>
           }
         </div>
       </div>

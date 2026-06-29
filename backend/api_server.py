@@ -411,16 +411,9 @@ class ApiHandler(BaseHTTPRequestHandler):
                     logging.exception("Error comprobando estado ciclo slack")
                     completadas["proyecto"] = evaluacion_proyecto_guardada_desde(persona, _fallback_5w)
                     completadas["personal"] = evaluacion_personal_guardada_desde(persona, _fallback_5w)
-                _ca_aliases = [sesion.get("username", ""), sesion.get("email", "")]
-                advisees_ca = list({
-                    *obtener_advisees(persona, ca_aliases=_ca_aliases),
-                    *listar_advisees_con_opiniones_ca(persona, ca_aliases=_ca_aliases),
-                })
-                es_ca = len(advisees_ca) > 0 or ca_tiene_acceso_activo(persona, ca_aliases=_ca_aliases)
                 self.responder_json({
                     "cicloActivo": True,
                     "completadas": completadas,
-                    "esCA": es_ca,
                 })
                 return
             if ruta == "/api/buscar-empleado-slack":

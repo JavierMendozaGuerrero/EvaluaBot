@@ -391,21 +391,26 @@ class ApiHandler(BaseHTTPRequestHandler):
                 persona = sesion.get("persona", "")
                 completadas = {"proyecto": False, "personal": False}
                 _fallback_5w = (datetime.now(timezone.utc) - timedelta(weeks=5)).timestamp()
+                _debug_fechas = {}
                 try:
                     cal = obtener_config_calendario()
                     fecha_proyecto = cal.get("proyecto_ca")
                     if fecha_proyecto:
                         siguiente = siguiente_envio_calendario(fecha_proyecto, 4)
                         ultimo = siguiente - timedelta(weeks=4)
+                        _debug_fechas["proyecto_desde"] = ultimo.strftime("%Y-%m-%d")
                         completadas["proyecto"] = evaluacion_proyecto_guardada_desde(persona, ultimo.timestamp())
                     else:
+                        _debug_fechas["proyecto_desde"] = datetime.fromtimestamp(_fallback_5w, tz=timezone.utc).strftime("%Y-%m-%d") + " (fallback)"
                         completadas["proyecto"] = evaluacion_proyecto_guardada_desde(persona, _fallback_5w)
                     fecha_personal = cal.get("personal")
                     if fecha_personal:
                         siguiente_p = siguiente_envio_calendario(fecha_personal, 4)
                         ultimo_p = siguiente_p - timedelta(weeks=4)
+                        _debug_fechas["personal_desde"] = ultimo_p.strftime("%Y-%m-%d")
                         completadas["personal"] = evaluacion_personal_guardada_desde(persona, ultimo_p.timestamp())
                     else:
+                        _debug_fechas["personal_desde"] = datetime.fromtimestamp(_fallback_5w, tz=timezone.utc).strftime("%Y-%m-%d") + " (fallback)"
                         completadas["personal"] = evaluacion_personal_guardada_desde(persona, _fallback_5w)
                 except Exception:
                     logging.exception("Error comprobando estado ciclo slack")
@@ -416,11 +421,23 @@ class ApiHandler(BaseHTTPRequestHandler):
                     *obtener_advisees(persona, ca_aliases=_ca_aliases),
                     *listar_advisees_con_opiniones_ca(persona, ca_aliases=_ca_aliases),
                 })
-                es_ca = len(advisees_ca) > 0 or ca_tiene_acceso_activo(persona, ca_aliases=_ca_aliases)
+                _acceso_activo = ca_tiene_acceso_activo(persona, ca_aliases=_ca_aliases)
+                es_ca = len(advisees_ca) > 0 or _acceso_activo
+                logging.info(
+                    "[estado-ciclo-slack] persona=%r aliases=%r advisees=%r acceso_activo=%r esCA=%r completadas=%r fechas=%r",
+                    persona, _ca_aliases, advisees_ca, _acceso_activo, es_ca, completadas, _debug_fechas,
+                )
                 self.responder_json({
                     "cicloActivo": True,
                     "completadas": completadas,
                     "esCA": es_ca,
+                    "_debug": {
+                        "persona": persona,
+                        "aliases": _ca_aliases,
+                        "advisees": advisees_ca,
+                        "acceso_activo": _acceso_activo,
+                        "completadas_desde": _debug_fechas,
+                    },
                 })
                 return
             if ruta == "/api/buscar-empleado-slack":

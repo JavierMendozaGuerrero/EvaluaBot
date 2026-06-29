@@ -771,11 +771,22 @@ function renderMd(text) {
 
 function ChatEvalProyecto({ token, user, onComplete, onNavigate }) {
   const persona = user?.persona || user?.username || "";
-  const [msgs, setMsgs] = React.useState([{
-    role: "bot",
-    text: "📍 *Tienes una evaluación mensual pendiente.*\n\n_Esta evaluación es totalmente privada, solo podrá verla el CA de la persona evaluada._\n_Si en algún momento quieres cancelar, pulsa Cancelar._\n\n*Pulsa el botón* para comenzar la evaluación.",
-  }]);
-  const [step, setStep] = React.useState("intro");
+  const storageKey = `evalproy_${(token || "").slice(-8)}`;
+  const GRACE_MS = 2 * 24 * 60 * 60 * 1000;
+
+  const _evalGuardadasIniciales = React.useMemo(() => {
+    try {
+      const saved = JSON.parse(sessionStorage.getItem(storageKey) || "[]");
+      return saved.filter(e => Date.now() - e.ts < GRACE_MS);
+    } catch { return []; }
+  }, []);
+  const _enGraciaAlMontar = _evalGuardadasIniciales.length > 0;
+
+  const [msgs, setMsgs] = React.useState(() => _enGraciaAlMontar
+    ? [{ role: "bot", text: "💬 Tienes evaluaciones recientes que puedes modificar durante 2 días desde que las guardaste.\n\nPulsa *✏️ Modificar respuestas* para cambiar algo." }]
+    : [{ role: "bot", text: "📍 *Tienes una evaluación mensual pendiente.*\n\n_Esta evaluación es totalmente privada, solo podrá verla el CA de la persona evaluada._\n_Si en algún momento quieres cancelar, pulsa Cancelar._\n\n*Pulsa el botón* para comenzar la evaluación." }]
+  );
+  const [step, setStep] = React.useState(_enGraciaAlMontar ? "terminado" : "intro");
   const [area, setArea] = React.useState(null);
   const [proyecto, setProyecto] = React.useState("");
   const [evaluadoNombre, setEvaluadoNombre] = React.useState("");
@@ -790,6 +801,14 @@ function ChatEvalProyecto({ token, user, onComplete, onNavigate }) {
   const [sugerencias, setSugerencias] = React.useState([]);
   const [moEvaluables, setMoEvaluables] = React.useState([]);
   const [modificandoCampo, setModificandoCampo] = React.useState(null);
+  // Evaluaciones guardadas en esta sesión con su page_id para el grace period (2 días)
+  const [evaluacionesGuardadas, setEvaluacionesGuardadas] = React.useState(() => {
+    try {
+      const saved = JSON.parse(sessionStorage.getItem(storageKey) || "[]");
+      return saved.filter(e => Date.now() - e.ts < GRACE_MS);
+    } catch { return []; }
+  });
+  const [editandoPageId, setEditandoPageId] = React.useState(null);
   const bottomRef = React.useRef(null);
 
   React.useEffect(() => { bottomRef.current?.scrollIntoView({ behavior: "smooth" }); }, [msgs]);
@@ -930,16 +949,53 @@ function ChatEvalProyecto({ token, user, onComplete, onNavigate }) {
     setLoading(true);
     try {
       const respsClave = Object.fromEntries(Object.entries(respuestas).filter(([k, v]) => k !== "evaluado" && k !== "proyecto" && v));
-      await apiRequest("/api/guardar-evaluacion-slack", {
-        token, method: "POST",
-        body: { evaluado: respuestas.evaluado, proyecto: respuestas.proyecto || "", area: area || "negocio", respuestas: respsClave },
-      });
-      const clave = `${(respuestas.proyecto || "").toLowerCase()}|${(respuestas.evaluado || "").toLowerCase()}`;
-      setEvaluadosEnSesion(prev => [...prev, clave]);
-      botSay("✅ *Evaluación guardada en Notion*.\n\n¿Hay más miembros en el equipo que quieras evaluar?");
-      setStep("mas_personas");
-    } catch { botSay("⚠️ No se pudo guardar en Notion. Revisa permisos/logs."); }
+      if (editandoPageId) {
+        await apiRequest("/api/actualizar-evaluacion-slack", {
+          token, method: "POST",
+          body: { page_id: editandoPageId, evaluado: respuestas.evaluado, proyecto: respuestas.proyecto || "", area: area || "negocio", respuestas: respsClave },
+        });
+        const updated = evaluacionesGuardadas.map(e =>
+          e.page_id === editandoPageId ? { ...e, respuestas: { ...respuestas }, ts: Date.now() } : e
+        );
+        setEvaluacionesGuardadas(updated);
+        try { sessionStorage.setItem(storageKey, JSON.stringify(updated)); } catch {}
+        setEditandoPageId(null);
+        botSay("✅ *Evaluación actualizada* ❤️\n\n¿Quieres modificar la evaluación de alguien más?");
+        setStep("preguntar_mas_modificaciones");
+      } else {
+        const data = await apiRequest("/api/guardar-evaluacion-slack", {
+          token, method: "POST",
+          body: { evaluado: respuestas.evaluado, proyecto: respuestas.proyecto || "", area: area || "negocio", respuestas: respsClave },
+        });
+        const nueva = {
+          page_id: data.page_id,
+          evaluado: respuestas.evaluado,
+          proyecto: respuestas.proyecto || "",
+          ts: Date.now(),
+          respuestas: { ...respuestas },
+          area: area || "negocio",
+          preguntas: [...preguntas],
+        };
+        const updated = [...evaluacionesGuardadas, nueva];
+        setEvaluacionesGuardadas(updated);
+        try { sessionStorage.setItem(storageKey, JSON.stringify(updated)); } catch {}
+        const clave = `${(respuestas.proyecto || "").toLowerCase()}|${(respuestas.evaluado || "").toLowerCase()}`;
+        setEvaluadosEnSesion(prev => [...prev, clave]);
+        botSay("✅ *Evaluación guardada en Notion*.\n\n¿Hay más miembros en el equipo que quieras evaluar?");
+        setStep("mas_personas");
+      }
+    } catch (e) { botSay(`⚠️ No se pudo guardar en Notion. ${e.message || ""}`); }
     finally { setLoading(false); }
+  }
+
+  function handleElegirModificar(ev) {
+    userSay(`✏️ ${ev.evaluado}${ev.proyecto ? ` — ${ev.proyecto}` : ""}`);
+    setEditandoPageId(ev.page_id);
+    setRespuestas(ev.respuestas);
+    setArea(ev.area);
+    setPreguntas(ev.preguntas || []);
+    botSay(getResumen(ev.respuestas, ev.preguntas || []));
+    setStep("confirmar");
   }
 
   function handleModificar() {
@@ -1046,7 +1102,12 @@ function ChatEvalProyecto({ token, user, onComplete, onNavigate }) {
       botSay("Escribe el nombre de uno de los proyectos en los que estás trabajando. Más adelante podrás evaluar el resto");
       setStep("pedir_proyecto");
     } else {
-      botSay("Perfecto, muchas gracias por tu tiempo ❤️. Ya puedes cerrar esta sección 👋");
+      const modificables = evaluacionesGuardadas.filter(e => Date.now() - e.ts < GRACE_MS);
+      if (modificables.length > 0) {
+        botSay("Perfecto, muchas gracias por tu tiempo ❤️\n\n💬 Si quieres modificar tus respuestas, tienes un plazo de 2 días.");
+      } else {
+        botSay("Perfecto, muchas gracias por tu tiempo ❤️. Ya puedes cerrar esta sección 👋");
+      }
       setStep("terminado");
       onComplete?.();
     }
@@ -1138,9 +1199,51 @@ function ChatEvalProyecto({ token, user, onComplete, onNavigate }) {
         <button className="chat-btn" onClick={() => handleMasProyectos(false)}>❌ No</button>
       </div></div>
     );
-    if (step === "terminado") return (
-      <div className="chat-input-area"><span className="fine" style={{ color: "var(--muted)" }}>Evaluación completada ✅</span></div>
-    );
+    if (step === "terminado") {
+      const modificables = evaluacionesGuardadas.filter(e => Date.now() - e.ts < GRACE_MS);
+      return (
+        <div className="chat-input-area">
+          <div className="chat-btns">
+            <span className="fine" style={{ color: "var(--muted)" }}>Evaluación completada ✅</span>
+            {modificables.length > 0 && (
+              <button className="chat-btn" onClick={() => {
+                botSay("¿La evaluación de quién quieres modificar?");
+                setStep("elegir_modificar");
+              }}>✏️ Modificar respuestas</button>
+            )}
+          </div>
+        </div>
+      );
+    }
+    if (step === "elegir_modificar") {
+      const modificables = evaluacionesGuardadas.filter(e => Date.now() - e.ts < GRACE_MS);
+      return (
+        <div className="chat-input-area"><div className="chat-btns">
+          {modificables.map((ev, i) => (
+            <button key={i} className="chat-btn" onClick={() => handleElegirModificar(ev)}>
+              {ev.evaluado}{ev.proyecto ? ` — ${ev.proyecto}` : ""}
+            </button>
+          ))}
+        </div></div>
+      );
+    }
+    if (step === "preguntar_mas_modificaciones") {
+      const modificables = evaluacionesGuardadas.filter(e => Date.now() - e.ts < GRACE_MS);
+      return (
+        <div className="chat-input-area"><div className="chat-btns">
+          {modificables.length > 0 && (
+            <button className="chat-btn primary" onClick={() => {
+              botSay("¿La evaluación de quién quieres modificar?");
+              setStep("elegir_modificar");
+            }}>✅ Sí</button>
+          )}
+          <button className="chat-btn" onClick={() => {
+            botSay("¡Hasta pronto! 👋");
+            setStep("terminado");
+          }}>❌ No</button>
+        </div></div>
+      );
+    }
     return null;
   }
 
@@ -1663,6 +1766,15 @@ function EvaluacionesSlackSection({ token, user, advisees, onNavigate, onComplet
     ...(esCA ? [{ key: "ca", label: "Opiniones CA", disponible: true }] : []),
   ];
 
+  // Comprobar si hay evaluaciones mensuales en periodo de gracia (2 días)
+  const proyectoEnGracia = React.useMemo(() => {
+    try {
+      const key = `evalproy_${(token || "").slice(-8)}`;
+      const saved = JSON.parse(sessionStorage.getItem(key) || "[]");
+      return saved.some(e => Date.now() - e.ts < 2 * 24 * 60 * 60 * 1000);
+    } catch { return false; }
+  }, [token]);
+
   function handleTabClick(key) {
     interactuoRef.current = true;
     setTipoActivo(key);
@@ -1684,23 +1796,29 @@ function EvaluacionesSlackSection({ token, user, advisees, onNavigate, onComplet
       </p>
       <div className="eval-slack-layout">
         <nav className="eval-tipos">
-          {tipos.map(tipo => (
+          {tipos.map(tipo => {
+            const enGracia = tipo.key === "proyecto" && completadas[tipo.key] && proyectoEnGracia;
+            const bloqueada = !tipo.disponible || (completadas[tipo.key] && !enGracia);
+            return (
             <button
               key={tipo.key}
-              className={`eval-tipo-btn${tipoActivo === tipo.key ? " active" : ""}${completadas[tipo.key] ? " completada" : ""}`}
-              onClick={() => { if (tipo.disponible && !completadas[tipo.key]) handleTabClick(tipo.key); }}
-              disabled={!tipo.disponible || completadas[tipo.key]}
-              title={completadas[tipo.key] ? "Ya has completado esta evaluación en el ciclo actual" : !tipo.disponible ? "Próximamente" : ""}
+              className={`eval-tipo-btn${tipoActivo === tipo.key ? " active" : ""}${completadas[tipo.key] && !enGracia ? " completada" : ""}`}
+              onClick={() => { if (!bloqueada) handleTabClick(tipo.key); }}
+              disabled={bloqueada}
+              title={completadas[tipo.key] && !enGracia ? "Ya has completado esta evaluación en el ciclo actual" : enGracia ? "Puedes modificar tus respuestas (2 días de margen)" : !tipo.disponible ? "Próximamente" : ""}
             >
               <span>{tipo.label}</span>
-              {completadas[tipo.key]
+              {completadas[tipo.key] && !enGracia
                 ? <span className="eval-tick">✅</span>
-                : !tipo.disponible
-                  ? <span className="eval-tick" style={{ fontSize: "11px", opacity: 0.4 }}>Próx.</span>
-                  : null
+                : enGracia
+                  ? <span className="eval-tick" title="Modificable">✏️</span>
+                  : !tipo.disponible
+                    ? <span className="eval-tick" style={{ fontSize: "11px", opacity: 0.4 }}>Próx.</span>
+                    : null
               }
             </button>
-          ))}
+            );
+          })}
         </nav>
         <div style={{ minHeight: "500px", display: "flex", flexDirection: "column" }}>
           {tipoActivo === "proyecto"

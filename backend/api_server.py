@@ -40,6 +40,7 @@ from .notion_service import (
     siguiente_envio_calendario,
     guardar_evaluacion_personal,
     guardar_en_notion,
+    actualizar_en_notion,
     buscar_empleado_y_cargo,
     obtener_preguntas_desde_notion,
     obtener_preguntas_mo,
@@ -790,11 +791,34 @@ class ApiHandler(BaseHTTPRequestHandler):
                 cargo_evaluador = evaluador_perfil.get("cargo", "")
                 relacion = comparar_jerarquia(cargo_evaluador, cargo_evaluado or "")
                 _AREA_DISPLAY = {"negocio": "Negocio", "middleoffice": "MiddleOffice", "palantir": "Palantir"}
-                ok = guardar_en_notion(persona, respuestas_completas, relacion=relacion, area=_AREA_DISPLAY.get(area, "Negocio"))
+                page_id = guardar_en_notion(persona, respuestas_completas, relacion=relacion, area=_AREA_DISPLAY.get(area, "Negocio"))
+                if page_id:
+                    self.responder_json({"ok": True, "page_id": page_id})
+                else:
+                    self.responder_json({"error": "No se pudo guardar en Notion."}, 500)
+                return
+            if ruta == "/api/actualizar-evaluacion-slack":
+                persona = sesion.get("persona", "")
+                page_id = datos.get("page_id", "").strip()
+                evaluado_nombre = datos.get("evaluado", "").strip()
+                proyecto_nombre = datos.get("proyecto", "").strip()
+                area = datos.get("area", "negocio").strip().lower()
+                respuestas_usuario = datos.get("respuestas", {})
+                if not page_id or not persona or not evaluado_nombre:
+                    self.responder_json({"error": "Faltan campos obligatorios."}, 400)
+                    return
+                respuestas_completas = {"evaluado": evaluado_nombre, "proyecto": proyecto_nombre}
+                respuestas_completas.update({k: v for k, v in respuestas_usuario.items() if v})
+                _, cargo_evaluado = buscar_empleado_y_cargo(evaluado_nombre)
+                evaluador_perfil = obtener_perfil_empleado(persona)
+                cargo_evaluador = evaluador_perfil.get("cargo", "")
+                relacion = comparar_jerarquia(cargo_evaluador, cargo_evaluado or "")
+                _AREA_DISPLAY = {"negocio": "Negocio", "middleoffice": "MiddleOffice", "palantir": "Palantir"}
+                ok = actualizar_en_notion(page_id, persona, respuestas_completas, relacion=relacion, area=_AREA_DISPLAY.get(area, "Negocio"))
                 if ok:
                     self.responder_json({"ok": True})
                 else:
-                    self.responder_json({"error": "No se pudo guardar en Notion."}, 500)
+                    self.responder_json({"error": "No se pudo actualizar en Notion."}, 500)
                 return
             self.responder_json({"error": "No encontrado"}, 404)
         except PermissionError as error:

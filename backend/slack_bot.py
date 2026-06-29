@@ -19,6 +19,7 @@ from .notion_service import (
     buscar_empleado_y_cargo,
     evaluacion_proyecto_guardada_desde,
     guardar_barbecho_en_notion,
+    actualizar_en_notion,
     guardar_en_notion,
     obtener_cargo_por_slack_id,
     obtener_config_calendario,
@@ -292,8 +293,8 @@ def _handle_valoracion_interactiva(ack, body, client, logger):
             client.chat_update(
                 channel=channel,
                 ts=msg["ts"],
-                blocks=[{"type": "section", "text": {"type": "mrkdwn", "text": f"Valoración: *{valor} / 5* ✅"}}],
-                text=f"Valoración: {valor} / 5",
+                blocks=[{"type": "section", "text": {"type": "mrkdwn", "text": f"Valoración: *{valor} / 4* ✅"}}],
+                text=f"Valoración: {valor} / 4",
             )
         except Exception:
             logger.warning("No se pudo actualizar el mensaje de valoración interactiva")
@@ -780,6 +781,78 @@ def _enviar_mas_miembros(channel, thread_ts):
                         "type": "button",
                         "text": {"type": "plain_text", "text": "❌ No"},
                         "action_id": "proyecto_mas_no",
+                    },
+                ],
+            },
+        ],
+    )
+
+
+def _enviar_boton_modificar(channel: str, thread_ts: str) -> None:
+    texto = "💬 Si quieres modificar tus respuestas, tienes un plazo de 2 días."
+    slack_app.client.chat_postMessage(
+        channel=channel,
+        thread_ts=thread_ts,
+        text=texto,
+        blocks=[
+            {"type": "section", "text": {"type": "mrkdwn", "text": texto}},
+            {
+                "type": "actions",
+                "elements": [
+                    {
+                        "type": "button",
+                        "text": {"type": "plain_text", "text": "✏️ Modificar respuestas"},
+                        "action_id": "proyecto_modificar_eval",
+                    }
+                ],
+            },
+        ],
+    )
+
+
+def _enviar_lista_modificar(channel: str, thread_ts: str, evaluaciones: list) -> None:
+    texto = "✏️ ¿La evaluación de quién quieres modificar?"
+    botones = [
+        {
+            "type": "button",
+            "text": {"type": "plain_text", "text": f"{ev['evaluado']} — {ev['proyecto']}"},
+            "action_id": f"proyecto_sel_mod_{i}",
+            "value": ev["page_id"],
+        }
+        for i, ev in enumerate(evaluaciones)
+    ]
+    slack_app.client.chat_postMessage(
+        channel=channel,
+        thread_ts=thread_ts,
+        text=texto,
+        blocks=[
+            {"type": "section", "text": {"type": "mrkdwn", "text": texto}},
+            {"type": "actions", "elements": botones},
+        ],
+    )
+
+
+def _enviar_pregunta_mas_modificaciones(channel: str, thread_ts: str) -> None:
+    texto = "✅ ¡Respuestas actualizadas! ¿Quieres modificar la evaluación de alguien más?"
+    slack_app.client.chat_postMessage(
+        channel=channel,
+        thread_ts=thread_ts,
+        text=texto,
+        blocks=[
+            {"type": "section", "text": {"type": "mrkdwn", "text": texto}},
+            {
+                "type": "actions",
+                "elements": [
+                    {
+                        "type": "button",
+                        "text": {"type": "plain_text", "text": "✅ Sí"},
+                        "style": "primary",
+                        "action_id": "proyecto_modif_mas_si",
+                    },
+                    {
+                        "type": "button",
+                        "text": {"type": "plain_text", "text": "❌ No"},
+                        "action_id": "proyecto_modif_mas_no",
                     },
                 ],
             },
@@ -1313,7 +1386,24 @@ def handle_message_events(event, logger):
                 pregunta = "Responde `sí` o `no` para indicar si hay más proyectos."
 
         elif modo == "terminado":
-            accion = "ya_terminado"
+            _ahora_fin = time.time()
+            _evs_fin = [e for e in (estado.get("evaluaciones_guardadas") or []) if _ahora_fin - e["ts"] <= 2 * 24 * 3600]
+            if normalizar_nombre(texto) in {"modificar", "modificar respuestas", "editar"} and _evs_fin:
+                accion = "mostrar_seleccion_modificar"
+            else:
+                accion = "ya_terminado"
+
+        elif modo == "preguntar_mas_modificaciones":
+            _ahora_mm = time.time()
+            _evs_mm = [e for e in (estado.get("evaluaciones_guardadas") or []) if _ahora_mm - e["ts"] <= 2 * 24 * 3600]
+            if _es_si(texto) and _evs_mm:
+                accion = "mostrar_seleccion_modificar"
+            elif _es_no(texto):
+                estado["modo"] = "terminado"
+                accion = "terminar_modificacion"
+            else:
+                accion = "preguntar"
+                pregunta = "Responde `sí` o `no`."
 
     # Despacho de acciones — fuera del lock
     _ACCIONES_PREGUNTA = {
@@ -1417,8 +1507,24 @@ def handle_message_events(event, logger):
             relacion_final = estado.get("relacion_jerarquica", "igual")
             _AREA_DISPLAY = {"negocio": "Negocio", "middleoffice": "MiddleOffice", "palantir": "Palantir"}
             area_final = _AREA_DISPLAY.get(estado.get("area", "negocio"), "Negocio")
-        guardado = guardar_en_notion(nombre, respuestas_finales, relacion=relacion_final, area=area_final)
-        if guardado:
+            editando_page_id = estado.get("editando_page_id")
+        if editando_page_id:
+            ok = actualizar_en_notion(editando_page_id, nombre, respuestas_finales, relacion=relacion_final, area=area_final)
+            if ok:
+                with lock:
+                    estado.pop("editando_page_id", None)
+                    estado["modo"] = "preguntar_mas_modificaciones"
+                    for ev in estado.get("evaluaciones_guardadas", []):
+                        if ev["page_id"] == editando_page_id:
+                            ev["respuestas"] = dict(respuestas_finales)
+                            ev["ts"] = time.time()
+                            break
+                _enviar_pregunta_mas_modificaciones(dm_channel, thread_ts)
+            else:
+                reply("⚠️ No se pudo actualizar en Notion. Revisa permisos/logs.")
+            return
+        page_id = guardar_en_notion(nombre, respuestas_finales, relacion=relacion_final, area=area_final)
+        if page_id:
             with lock:
                 clave_guardada = (
                     normalizar_nombre(respuestas_finales.get("proyecto", "")),
@@ -1426,6 +1532,16 @@ def handle_message_events(event, logger):
                 )
                 estado.setdefault("evaluados_en_sesion", set()).add(clave_guardada)
                 estado["modo"] = "preguntar_mas_personas"
+                estado.setdefault("evaluaciones_guardadas", []).append({
+                    "page_id": page_id,
+                    "evaluado": respuestas_finales.get("evaluado", ""),
+                    "proyecto": respuestas_finales.get("proyecto", ""),
+                    "ts": time.time(),
+                    "preguntas_area": list(estado.get("preguntas_area", [])),
+                    "relacion_jerarquica": relacion_final,
+                    "area": estado.get("area", "negocio"),
+                    "respuestas": dict(respuestas_finales),
+                })
             _enviar_mas_miembros(dm_channel, thread_ts)
             return
         reply("⚠️ No se pudo guardar en Notion. Revisa permisos/logs.")
@@ -1444,6 +1560,23 @@ def handle_message_events(event, logger):
         return
     if accion == "terminar":
         reply("Perfecto, muchas gracias por tu tiempo ❤️. Ya puedes salir del hilo 👋")
+        _ahora_t = time.time()
+        _evs_t = [e for e in (estado.get("evaluaciones_guardadas") or []) if _ahora_t - e["ts"] <= 2 * 24 * 3600]
+        if _evs_t:
+            _enviar_boton_modificar(dm_channel, thread_ts)
+        return
+    if accion == "mostrar_seleccion_modificar":
+        _ahora_s = time.time()
+        _evs_s = [e for e in (estado.get("evaluaciones_guardadas") or []) if _ahora_s - e["ts"] <= 2 * 24 * 3600]
+        if _evs_s:
+            _enviar_lista_modificar(dm_channel, thread_ts, _evs_s)
+        return
+    if accion == "terminar_modificacion":
+        reply("✅ ¡Listo! Evaluación finalizada. Muchas gracias 👋")
+        _ahora_tm = time.time()
+        _evs_tm = [e for e in (estado.get("evaluaciones_guardadas") or []) if _ahora_tm - e["ts"] <= 2 * 24 * 3600]
+        if _evs_tm:
+            _enviar_boton_modificar(dm_channel, thread_ts)
         return
     if accion == "ya_terminado":
         reply("Esta evaluación ya ha concluido, por favor salga del hilo. 👋")
@@ -1477,8 +1610,24 @@ def handle_proyecto_confirmar(ack, body, logger):
         relacion_final = estado.get("relacion_jerarquica", "igual")
         _AREA_DISPLAY = {"negocio": "Negocio", "middleoffice": "MiddleOffice", "palantir": "Palantir"}
         area_final = _AREA_DISPLAY.get(estado.get("area", "negocio"), "Negocio")
-    guardado = guardar_en_notion(nombre, respuestas_finales, relacion=relacion_final, area=area_final)
-    if guardado:
+        editando_page_id = estado.get("editando_page_id")
+    if editando_page_id:
+        ok = actualizar_en_notion(editando_page_id, nombre, respuestas_finales, relacion=relacion_final, area=area_final)
+        if ok:
+            with lock:
+                estado.pop("editando_page_id", None)
+                estado["modo"] = "preguntar_mas_modificaciones"
+                for ev in estado.get("evaluaciones_guardadas", []):
+                    if ev["page_id"] == editando_page_id:
+                        ev["respuestas"] = dict(respuestas_finales)
+                        ev["ts"] = time.time()
+                        break
+            _enviar_pregunta_mas_modificaciones(dm_channel, thread_ts)
+        else:
+            reply("⚠️ No se pudo actualizar en Notion. Revisa permisos/logs.")
+        return
+    page_id = guardar_en_notion(nombre, respuestas_finales, relacion=relacion_final, area=area_final)
+    if page_id:
         with lock:
             clave_guardada = (
                 normalizar_nombre(respuestas_finales.get("proyecto", "")),
@@ -1486,6 +1635,16 @@ def handle_proyecto_confirmar(ack, body, logger):
             )
             estado.setdefault("evaluados_en_sesion", set()).add(clave_guardada)
             estado["modo"] = "preguntar_mas_personas"
+            estado.setdefault("evaluaciones_guardadas", []).append({
+                "page_id": page_id,
+                "evaluado": respuestas_finales.get("evaluado", ""),
+                "proyecto": respuestas_finales.get("proyecto", ""),
+                "ts": time.time(),
+                "preguntas_area": list(estado.get("preguntas_area", [])),
+                "relacion_jerarquica": relacion_final,
+                "area": estado.get("area", "negocio"),
+                "respuestas": dict(respuestas_finales),
+            })
         _enviar_mas_miembros(dm_channel, thread_ts)
         return
     reply("⚠️ No se pudo guardar en Notion. Revisa permisos/logs.")
@@ -1548,13 +1707,141 @@ def handle_proyecto_mas_no(ack, body):
         _area_mp = estado.get("area", "negocio")
         if _area_mp == "middleoffice":
             estado["modo"] = "terminado"
+            _evs_mo = [e for e in (estado.get("evaluaciones_guardadas") or []) if time.time() - e["ts"] <= 2 * 24 * 3600]
         else:
             estado["modo"] = "preguntar_mas_proyectos"
+            _evs_mo = []
 
     if _area_mp == "middleoffice":
         reply("Perfecto, muchas gracias por tu tiempo ❤️. Ya puedes salir del hilo 👋")
+        if _evs_mo:
+            _enviar_boton_modificar(dm_channel, thread_ts)
     else:
         _enviar_mas_proyectos(dm_channel, thread_ts)
+
+
+@slack_app.action("proyecto_modificar_eval")
+def handle_proyecto_modificar_eval(ack, body, logger):
+    ack()
+    user_id = body["user"]["id"]
+    channel = body["channel"]["id"]
+    msg = body.get("message", {})
+    thread_ts = msg.get("thread_ts") or msg.get("ts", "")
+    dm_channel = evaluacion_dm_canal.get(user_id, channel)
+
+    def reply(text):
+        slack_app.client.chat_postMessage(channel=dm_channel, thread_ts=thread_ts, text=text)
+
+    _evs_validas = []
+    with lock:
+        es_activo = user_id in evaluaciones_dm_activas
+        estado = conversaciones.get(user_id)
+        if not es_activo or not estado:
+            reply("⚠️ No hay ninguna evaluación activa en este momento.")
+            return
+        _ahora = time.time()
+        _evs_validas = [e for e in (estado.get("evaluaciones_guardadas") or []) if _ahora - e["ts"] <= 2 * 24 * 3600]
+        if not _evs_validas:
+            reply("⚠️ El plazo de modificación de 2 días ha expirado.")
+            return
+
+    _enviar_lista_modificar(dm_channel, thread_ts, _evs_validas)
+
+
+@slack_app.action(re.compile(r"^proyecto_sel_mod_\d+$"))
+def handle_proyecto_seleccionar_modificar(ack, body, logger):
+    ack()
+    user_id = body["user"]["id"]
+    channel = body["channel"]["id"]
+    msg = body.get("message", {})
+    thread_ts = msg.get("thread_ts") or msg.get("ts", "")
+    dm_channel = evaluacion_dm_canal.get(user_id, channel)
+
+    def reply(text):
+        slack_app.client.chat_postMessage(channel=dm_channel, thread_ts=thread_ts, text=text)
+
+    accion_body = next((a for a in body.get("actions", []) if re.match(r"^proyecto_sel_mod_\d+$", a.get("action_id", ""))), None)
+    page_id_sel = accion_body.get("value", "") if accion_body else ""
+
+    _ev_data = None
+    with lock:
+        es_activo = user_id in evaluaciones_dm_activas
+        estado = conversaciones.get(user_id)
+        if not es_activo or not estado:
+            reply("⚠️ No hay ninguna evaluación activa.")
+            return
+        ev = next((e for e in (estado.get("evaluaciones_guardadas") or []) if e["page_id"] == page_id_sel), None)
+        if not ev or time.time() - ev["ts"] > 2 * 24 * 3600:
+            reply("⚠️ El plazo de modificación de 2 días ha expirado.")
+            return
+        estado["editando_page_id"] = ev["page_id"]
+        estado["respuestas"] = dict(ev.get("respuestas", {"evaluado": ev["evaluado"], "proyecto": ev["proyecto"]}))
+        estado["preguntas_area"] = ev["preguntas_area"]
+        estado["relacion_jerarquica"] = ev["relacion_jerarquica"]
+        estado["area"] = ev["area"]
+        estado["modo"] = "confirmacion"
+        _ev_data = dict(ev)
+
+    resumen = resumen_respuestas(
+        _ev_data["respuestas"] if _ev_data.get("respuestas") else {"evaluado": _ev_data["evaluado"], "proyecto": _ev_data["proyecto"]},
+        area=_ev_data["area"],
+        preguntas_area=_ev_data["preguntas_area"],
+    )
+    _enviar_resumen_con_botones(dm_channel, thread_ts, resumen)
+
+
+@slack_app.action("proyecto_modif_mas_si")
+def handle_proyecto_modif_mas_si(ack, body, logger):
+    ack()
+    user_id = body["user"]["id"]
+    channel = body["channel"]["id"]
+    msg = body.get("message", {})
+    thread_ts = msg.get("thread_ts") or msg.get("ts", "")
+    dm_channel = evaluacion_dm_canal.get(user_id, channel)
+
+    def reply(text):
+        slack_app.client.chat_postMessage(channel=dm_channel, thread_ts=thread_ts, text=text)
+
+    _evs_validas = []
+    with lock:
+        es_activo = user_id in evaluaciones_dm_activas
+        estado = conversaciones.get(user_id)
+        if not es_activo or not estado or estado.get("modo") != "preguntar_mas_modificaciones":
+            return
+        _ahora = time.time()
+        _evs_validas = [e for e in (estado.get("evaluaciones_guardadas") or []) if _ahora - e["ts"] <= 2 * 24 * 3600]
+
+    if _evs_validas:
+        _enviar_lista_modificar(dm_channel, thread_ts, _evs_validas)
+    else:
+        reply("⚠️ El plazo de modificación de 2 días ha expirado.")
+
+
+@slack_app.action("proyecto_modif_mas_no")
+def handle_proyecto_modif_mas_no(ack, body, logger):
+    ack()
+    user_id = body["user"]["id"]
+    channel = body["channel"]["id"]
+    msg = body.get("message", {})
+    thread_ts = msg.get("thread_ts") or msg.get("ts", "")
+    dm_channel = evaluacion_dm_canal.get(user_id, channel)
+
+    def reply(text):
+        slack_app.client.chat_postMessage(channel=dm_channel, thread_ts=thread_ts, text=text)
+
+    _evs_validas = []
+    with lock:
+        es_activo = user_id in evaluaciones_dm_activas
+        estado = conversaciones.get(user_id)
+        if not es_activo or not estado or estado.get("modo") != "preguntar_mas_modificaciones":
+            return
+        estado["modo"] = "terminado"
+        _ahora = time.time()
+        _evs_validas = [e for e in (estado.get("evaluaciones_guardadas") or []) if _ahora - e["ts"] <= 2 * 24 * 3600]
+
+    reply("✅ ¡Listo! Evaluación finalizada. Muchas gracias 👋")
+    if _evs_validas:
+        _enviar_boton_modificar(dm_channel, thread_ts)
 
 
 @slack_app.action("proyecto_proyectos_si")
@@ -1601,8 +1888,11 @@ def handle_proyecto_proyectos_no(ack, body):
         if not es_activo or not estado or estado.get("modo") != "preguntar_mas_proyectos":
             return
         estado["modo"] = "terminado"
+        _evs_pno = [e for e in (estado.get("evaluaciones_guardadas") or []) if time.time() - e["ts"] <= 2 * 24 * 3600]
 
     reply("Perfecto, muchas gracias por tu tiempo ❤️. Ya puedes salir del hilo 👋")
+    if _evs_pno:
+        _enviar_boton_modificar(dm_channel, thread_ts)
 
 
 @slack_app.action("proyecto_modificar")

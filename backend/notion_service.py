@@ -1063,7 +1063,7 @@ def guardar_en_notion(nombre, respuestas, relacion="igual", area="Negocio"):
         valoracion = _extras[0] if len(_extras) > 0 else ""
         justificacion = _extras[1] if len(_extras) > 1 else ""
         suf_col = {"superior": "de superiores", "inferior": "de inferiores"}.get(relacion, "de iguales")
-        _crear_pagina_en_bbdd(
+        pagina = _crear_pagina_en_bbdd(
             database_id,
             {
                 "Name": {"title": [{"text": {"content": f"Evaluacion {fecha.strftime('%Y-%m-%d %H:%M')}"}}]},
@@ -1075,9 +1075,29 @@ def guardar_en_notion(nombre, respuestas, relacion="igual", area="Negocio"):
                 f"Justificación {suf_col}": {"rich_text": [{"text": {"content": justificacion}}]},
             },
         )
-        return True
+        return pagina["id"]
     except Exception:
         logging.exception("Error guardando en Notion")
+        return None
+
+
+def actualizar_en_notion(page_id: str, nombre: str, respuestas: dict, relacion: str = "igual", area: str = "Negocio") -> bool:
+    try:
+        _skip = {"evaluado", "proyecto", "satisfaccion"}
+        _extras = [v for k, v in respuestas.items() if k not in _skip and v]
+        valoracion = _extras[0] if len(_extras) > 0 else ""
+        justificacion = _extras[1] if len(_extras) > 1 else ""
+        suf_col = {"superior": "de superiores", "inferior": "de inferiores"}.get(relacion, "de iguales")
+        notion.pages.update(
+            page_id=page_id,
+            properties={
+                f"Valoración {suf_col}": {"rich_text": [{"text": {"content": valoracion}}]},
+                f"Justificación {suf_col}": {"rich_text": [{"text": {"content": justificacion}}]},
+            },
+        )
+        return True
+    except Exception:
+        logging.exception("Error actualizando en Notion")
         return False
 
 

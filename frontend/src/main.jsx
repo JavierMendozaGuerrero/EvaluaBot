@@ -1,6 +1,20 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { createRoot } from "react-dom/client";
+import "./styles/globals.css";
+import "./styles/components.css";
 import "./styles.css";
+import privacidadMd from "./legal/privacidad.md?raw";
+import terminosMd from "./legal/terminos.md?raw";
+
+const LEGAL_DOCS = {
+  privacidad: { titulo: "Política de privacidad", texto: privacidadMd },
+  terminos: { titulo: "Términos y condiciones", texto: terminosMd },
+};
+
+function getLegalDoc() {
+  const hash = (window.location.hash || "").replace(/^#/, "").toLowerCase();
+  return LEGAL_DOCS[hash] ? hash : null;
+}
 
 const API_BASE = import.meta.env.VITE_API_BASE_URL || `${window.location.protocol}//${window.location.hostname}:8000`;
 
@@ -8,20 +22,49 @@ function apiUrl(path) {
   return `${API_BASE}${path}`;
 }
 
+// ── Barra de carga global (top loading bar) ──
+// count = peticiones en curso; total/done = peticiones de la "tanda" actual,
+// para que el progreso sea proporcional a las que ya han terminado (done/total).
+const _loading = { count: 0, total: 0, done: 0, listeners: new Set() };
+function subscribeLoading(fn) {
+  _loading.listeners.add(fn);
+  return () => _loading.listeners.delete(fn);
+}
+function _emitLoading() {
+  const snapshot = { count: _loading.count, total: _loading.total, done: _loading.done };
+  _loading.listeners.forEach((fn) => fn(snapshot));
+}
+function startLoading() {
+  if (_loading.count === 0) { _loading.total = 0; _loading.done = 0; } // nueva tanda
+  _loading.count += 1;
+  _loading.total += 1;
+  _emitLoading();
+}
+function stopLoading() {
+  _loading.count = Math.max(0, _loading.count - 1);
+  _loading.done += 1;
+  _emitLoading();
+}
+
 async function apiRequest(path, { token, method = "GET", body } = {}) {
-  const response = await fetch(apiUrl(path), {
-    method,
-    headers: {
-      "Content-Type": "application/json",
-      ...(token ? { Authorization: `Bearer ${token}` } : {}),
-    },
-    body: body ? JSON.stringify(body) : undefined,
-  });
-  const data = await response.json().catch(() => ({}));
-  if (!response.ok) {
-    throw new Error(data.error || "No se pudo completar la accion.");
+  startLoading();
+  try {
+    const response = await fetch(apiUrl(path), {
+      method,
+      headers: {
+        "Content-Type": "application/json",
+        ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      },
+      body: body ? JSON.stringify(body) : undefined,
+    });
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok) {
+      throw new Error(data.error || "No se pudo completar la accion.");
+    }
+    return data;
+  } finally {
+    stopLoading();
   }
-  return data;
 }
 
 const _CACHE_TTL = 5 * 60 * 1000;
@@ -112,10 +155,88 @@ function Footer() {
     <footer className="site-footer">
       <p className="site-footer-copy">© {new Date().getFullYear()} <strong>Igeneris</strong></p>
       <nav className="site-footer-links">
-        <a href="#">Privacidad</a>
-        <a href="#">Términos</a>
+        <a href="#privacidad">Privacidad</a>
+        <a href="#terminos">Términos</a>
       </nav>
     </footer>
+  );
+}
+
+function renderLegalInline(text) {
+  // **negrita** y [texto](#hash) -> enlaces internos
+  const parts = text.split(/(\*\*[^*]+\*\*|\[[^\]]+\]\([^)]+\))/g);
+  return parts.map((part, i) => {
+    if (part.startsWith("**") && part.endsWith("**") && part.length > 4) {
+      return <strong key={i}>{part.slice(2, -2)}</strong>;
+    }
+    const link = part.match(/^\[([^\]]+)\]\(([^)]+)\)$/);
+    if (link) {
+      return <a key={i} href={link[2]}>{link[1]}</a>;
+    }
+    return <span key={i}>{part}</span>;
+  });
+}
+
+function LegalContent({ texto }) {
+  const lines = texto.split("\n");
+  const blocks = [];
+  let list = null;
+
+  const flushList = () => {
+    if (list) { blocks.push({ type: "ul", ordered: list.ordered, items: list.items }); list = null; }
+  };
+
+  lines.forEach((raw) => {
+    const line = raw.trimEnd();
+    if (/^-\s+/.test(line) || /^\d+\.\s+/.test(line)) {
+      const ordered = /^\d+\.\s+/.test(line);
+      const item = line.replace(/^(-|\d+\.)\s+/, "");
+      if (!list || list.ordered !== ordered) { flushList(); list = { ordered, items: [] }; }
+      list.items.push(item);
+    } else if (line.startsWith("### ")) {
+      flushList(); blocks.push({ type: "h3", text: line.slice(4) });
+    } else if (line.startsWith("## ")) {
+      flushList(); blocks.push({ type: "h2", text: line.slice(3) });
+    } else if (line.startsWith("# ")) {
+      flushList(); blocks.push({ type: "h1", text: line.slice(2) });
+    } else if (line.trim() === "") {
+      flushList();
+    } else {
+      flushList(); blocks.push({ type: "p", text: line });
+    }
+  });
+  flushList();
+
+  return (
+    <div className="legal-content">
+      {blocks.map((b, i) => {
+        if (b.type === "h1") return <h1 key={i} className="legal-h1">{b.text}</h1>;
+        if (b.type === "h2") return <h2 key={i} className="legal-h2">{renderLegalInline(b.text)}</h2>;
+        if (b.type === "h3") return <h3 key={i} className="legal-h3">{renderLegalInline(b.text)}</h3>;
+        if (b.type === "ul") {
+          const Tag = b.ordered ? "ol" : "ul";
+          return <Tag key={i} className="legal-list">{b.items.map((it, j) => <li key={j}>{renderLegalInline(it)}</li>)}</Tag>;
+        }
+        return <p key={i} className="legal-p">{renderLegalInline(b.text)}</p>;
+      })}
+    </div>
+  );
+}
+
+function LegalPage({ doc, onBack }) {
+  const data = LEGAL_DOCS[doc];
+  useEffect(() => { window.scrollTo(0, 0); }, [doc]);
+  return (
+    <main className="page">
+      <nav className="nav">
+        <a className="brand" href="/"><img src="/src/logo.png" alt="igeneris" className="brand-logo" /></a>
+        <button className="link-button" onClick={onBack}>← Volver</button>
+      </nav>
+      <div className="legal-wrap">
+        {data ? <LegalContent texto={data.texto} /> : <p>Documento no disponible.</p>}
+      </div>
+      <Footer />
+    </main>
   );
 }
 
@@ -182,18 +303,6 @@ function AdminPanel({ token, onBack }) {
     }
   }
 
-  async function generarWrapped() {
-    if (!selected) return;
-    setStatusMsg("Preparando trayectoria visual...");
-    try {
-      const data = await apiRequest("/api/trayectoria", { token, method: "POST", body: { evaluado: selected.nombre } });
-      setStatusMsg("");
-      window.open(apiUrl(`${data.htmlUrl}&token=${encodeURIComponent(token)}`), "_blank", "noopener,noreferrer");
-    } catch (err) {
-      setStatusMsg(err.message);
-    }
-  }
-
   async function openFile(path, filename) {
     if (!filename.endsWith(".docx")) {
       window.open(apiUrl(`${path}&token=${encodeURIComponent(token)}`), "_blank", "noopener,noreferrer");
@@ -255,13 +364,6 @@ function AdminPanel({ token, onBack }) {
               ) : (
                 <p className="fine">{informeFinal?.mensaje || "Sin informe final disponible."}</p>
               )}
-              <button
-                className="secondary"
-                onClick={generarWrapped}
-                disabled={statusMsg === "Preparando trayectoria visual..."}
-              >
-                {statusMsg === "Preparando trayectoria visual..." ? "Generando..." : "Su wrapped"}
-              </button>
               {statusMsg && statusMsg !== "Preparando trayectoria visual..." && (
                 <p className="fine error">{statusMsg}</p>
               )}
@@ -597,6 +699,7 @@ function AuthScreen({ onLogin }) {
   const [error, setError] = useState("");
   const [message, setMessage] = useState("");
   const [loading, setLoading] = useState(false);
+  const [maskedEmail, setMaskedEmail] = useState("");
   const passwordToValidate = mode === "reset" ? form.newPassword : mode === "register" ? form.password : "";
   const passwordInvalid = Boolean(passwordToValidate) && !isStrongPassword(passwordToValidate);
   const passwordsMismatch = mode === "reset"
@@ -661,18 +764,32 @@ function AuthScreen({ onLogin }) {
     }
   }
 
+  const showBack = mode === "forgot" || mode === "reset" || mode === "verify-code";
+  const backToLogin = () => { window.history.replaceState({}, "", window.location.pathname); setError(""); setMessage(""); setForm((f) => ({ ...f, verifyCode: "" })); setMode("login"); };
+  const title = mode === "verify-code" ? "Verificación requerida" : mode === "forgot" ? "Recuperar contraseña" : mode === "reset" ? "Nueva contraseña" : mode === "login" ? "Iniciar sesión" : "Crear cuenta";
+  const desc = mode === "forgot"
+    ? "Introduce tu email corporativo y te enviaremos un enlace para restablecer tu contraseña."
+    : mode === "reset"
+      ? "Elige una nueva contraseña para tu cuenta."
+      : "";
+
   return (
     <main className="page auth-page">
       <nav className="nav">
         <a className="brand" href="/"><img src="/src/logo.png" alt="igeneris" className="brand-logo" /></a>
       </nav>
-      <div className="auth-body">
-        <p className="kicker">Evaluaciones internas</p>
-        <h2 className="auth-heading">
-          {mode === "verify-code" ? "Verificación requerida" : mode === "forgot" ? "Recupera tu acceso" : mode === "reset" ? "Nueva contraseña" : mode === "login" ? "Iniciar sesión" : "Crear cuenta"}
-        </h2>
-        {error && <p className="error">{error}</p>}
-        {message && <p className="fine">{message}</p>}
+      <div style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center", padding: "48px 24px" }}>
+       <div className="auth-body" style={{ paddingTop: 0 }}>
+        {showBack && (
+          <button type="button" className="link-button" onClick={backToLogin} style={{ marginBottom: 22 }}>
+            ← Volver al inicio de sesión
+          </button>
+        )}
+        <p className="eyebrow">Evaluaciones internas</p>
+        <h1 style={{ fontSize: 38, marginBottom: desc ? 12 : 22 }}>{title}</h1>
+        {desc && <p className="fine" style={{ color: "rgba(0,0,0,.6)", marginBottom: 18 }}>{desc}</p>}
+        {error && <p className="error" style={{ marginBottom: 12 }}>{error}</p>}
+        {message && <p className="fine" style={{ marginBottom: 12 }}>{message}</p>}
         <form onSubmit={submit}>
           {mode === "verify-code" ? (
             <>
@@ -721,21 +838,22 @@ function AuthScreen({ onLogin }) {
             </label>
           )}
           {(mode === "register" || mode === "reset") && (
-            <p className={(passwordInvalid || passwordsMismatch) ? "error fine" : "fine"}>
+            <p className={(passwordInvalid || passwordsMismatch) ? "error fine" : "fine"} style={{ marginTop: 12 }}>
               Mínimo 8 caracteres, una mayúscula y un carácter especial. Las contraseñas deben coincidir.
             </p>
           )}
-          <div className="actions">
-            <button type="submit" disabled={!canSubmit}>
+          <hr style={{ border: "none", borderTop: "1px solid var(--border)", margin: "20px 0" }} />
+          <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
+            <button type="submit" className="btn-pill-primary" disabled={!canSubmit}>
               {loading ? "Procesando..." : mode === "verify-code" ? "Verificar" : mode === "forgot" ? "Enviar enlace" : mode === "reset" ? "Guardar contraseña" : mode === "login" ? "Iniciar sesión" : "Crear cuenta"}
             </button>
             {mode === "login" && (
-              <button type="button" className="secondary" onClick={() => { setError(""); setMessage(""); setMode("forgot"); }}>
+              <button type="button" className="btn-pill-ghost" onClick={() => { setError(""); setMessage(""); setMode("forgot"); }}>
                 Olvidé mi contraseña
               </button>
             )}
-            {(mode === "forgot" || mode === "reset" || mode === "verify-code") && (
-              <button type="button" className="secondary" onClick={() => { window.history.replaceState({}, "", window.location.pathname); setError(""); setMessage(""); setForm((f) => ({ ...f, verifyCode: "" })); setMode("login"); }}>
+            {showBack && (
+              <button type="button" className="btn-pill-ghost" onClick={backToLogin}>
                 Volver
               </button>
             )}
@@ -743,9 +861,10 @@ function AuthScreen({ onLogin }) {
         </form>
         {mode === "login" && (
           <p className="auth-legal">
-            Al acceder aceptas nuestra <a href="#">política de privacidad</a> y los <a href="#">términos y condiciones</a> de uso de la plataforma.
+            Al acceder aceptas nuestra <a href="#privacidad">política de privacidad</a> y los <a href="#terminos">términos y condiciones</a> de uso de la plataforma.
           </p>
         )}
+       </div>
       </div>
     </main>
   );
@@ -1835,6 +1954,45 @@ function EvaluacionesSlackSection({ token, user, advisees, onNavigate, onComplet
   );
 }
 
+function DashNavItem({ label, onClick, disabled }) {
+  const [hover, setHover] = useState(false);
+  return (
+    <div
+      role="button"
+      tabIndex={0}
+      onClick={disabled ? undefined : onClick}
+      onMouseEnter={() => setHover(true)}
+      onMouseLeave={() => setHover(false)}
+      style={{
+        padding: "13px 0", fontSize: 14, fontWeight: 400,
+        cursor: disabled ? "default" : "pointer",
+        borderBottom: "1px solid var(--border)",
+        color: disabled ? "rgba(0,0,0,.3)" : hover ? "var(--accent)" : "#000",
+        transition: "color .15s", userSelect: "none",
+      }}
+    >
+      {label}
+    </div>
+  );
+}
+
+function DashCollapsible({ title, open, onToggle, children }) {
+  return (
+    <div>
+      <div onClick={onToggle} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", cursor: "pointer", userSelect: "none" }}>
+        <span className="eyebrow" style={{ marginBottom: 0 }}>{title}</span>
+        <svg viewBox="0 0 24 24" fill="none" stroke="rgba(0,0,0,.3)" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"
+          style={{ width: 11, height: 11, flexShrink: 0, transform: open ? "rotate(180deg)" : "rotate(0deg)", transition: "transform .25s" }}>
+          <polyline points="18 15 12 9 6 15" />
+        </svg>
+      </div>
+      {open && <div style={{ marginTop: 10 }}>{children}</div>}
+    </div>
+  );
+}
+
+const DASH_DIVIDER = { border: "none", borderTop: "1px solid var(--border)", margin: "16px 0" };
+
 function Dashboard({ token, user, onLogout, onNavigate, onBackToRoleSelect = null }) {
   const [evaluados, setEvaluados] = useState([]);
   const [evaluado, setEvaluado] = useState("");
@@ -1853,10 +2011,14 @@ function Dashboard({ token, user, onLogout, onNavigate, onBackToRoleSelect = nul
   const [informeFinalEmpleado, setInformeFinalEmpleado] = useState(null);
   const [adminModo, setAdminModo] = useState("borrador");
   const [informeFinalAdmin, setInformeFinalAdmin] = useState(null);
-  const isAdmin = Boolean(user?.is_admin);
+  // En modo "Perfil personal" (onBackToRoleSelect activo) el admin debe verse y
+  // comportarse igual que cualquier otro empleado, con los mismos botones del To-do.
+  const isAdmin = Boolean(user?.is_admin) && !onBackToRoleSelect;
   const [perfil, setPerfil] = useState({ foto: "", cargo: "" });
   const [misObjetivos, setMisObjetivos] = useState([]);
   const [informesOpen, setInformesOpen] = useState(false);
+  const [objOpen, setObjOpen] = useState(true);
+  const [projOpen, setProjOpen] = useState(true);
   const [seccionActiva, setSeccionActiva] = useState(null);
   const [proyectosActivos, setProyectosActivos] = useState([]);
   const [proyectosManager, setProyectosManager] = useState(null);
@@ -2060,91 +2222,60 @@ function Dashboard({ token, user, onLogout, onNavigate, onBackToRoleSelect = nul
         </div>
       </nav>
 
-      <div className="profile-wrap">
-        <h2 className="profile-name">{persona}</h2>
+      <div className="profile-wrap" style={{ flex: 1 }}>
+        <h1 className="profile-name">{persona}</h1>
         <div className="profile-grid">
 
-          <nav className="profile-menu">
-            {!isAdmin && (
-              <button
-                className="menu-item"
-                onClick={() => onNavigate({ type: "activar-evaluaciones-proyecto" })}
-              >
-                Responsables de proyecto
-              </button>
-            )}
-            {!isAdmin && proyectosManager?.length > 0 && (
-              <button
-                className="menu-item"
-                onClick={() => onNavigate({ type: "mis-proyectos-activos" })}
-              >
-                Mis proyectos en activo
-              </button>
-            )}
-            {!isAdmin && proyectosActivos.length > 0 && (
-              <button
-                className="menu-item"
-                onClick={() => onNavigate({ type: "evaluaciones-proyecto", proyectos: proyectosActivos })}
-              >
-                Evaluaciones por proyectos
-              </button>
-            )}
-            <button className={`menu-item${informesOpen ? " active" : ""}`} onClick={() => setInformesOpen((v) => !v)}>
-              Mis informes
-            </button>
-            {informesOpen && (
-              <div className="submenu">
-                {informeFinalEmpleado === null ? (
-                  <p className="fine">Cargando...</p>
-                ) : informeFinalEmpleado?.disponible ? (
-                  <>
-                    {informeFinalEmpleado.htmlUrl && (
-                      <button className="secondary" onClick={() => openFile(informeFinalEmpleado.htmlUrl, "informe_final.html")}>
-                        Abrir en web
-                      </button>
-                    )}
-                    {informeFinalEmpleado.docxUrl && (
-                      <button className="secondary" onClick={() => openFile(informeFinalEmpleado.docxUrl, "informe_final.docx")}>
-                        Descargar Word
-                      </button>
-                    )}
-                  </>
-                ) : (
-                  <p className="fine">No tienes acceso.</p>
-                )}
-              </div>
-            )}
-            <button
-              className="menu-item"
-              onClick={() => generate("trayectoria")}
-              disabled={!ownEvaluado || status === "Preparando trayectoria visual..."}
-            >
-              {status === "Preparando trayectoria visual..." ? "Generando..." : "Mi wrapped"}
-            </button>
-            <button
-              className="menu-item"
-              onClick={() => onNavigate({ type: "evaluaciones-slack" })}
-            >
-              Evaluaciones en Slack
-            </button>
-            {advisees.length > 0 && (
-              <button
-                className="menu-item"
-                onClick={() => onNavigate({ type: "advisees-list", advisees })}
-              >
-                Mis advisees
-              </button>
-            )}
-            {isAdmin && !onBackToRoleSelect && (
-              <button
-                className={`menu-item${seccionActiva === "admin" ? " active" : ""}`}
-                onClick={() => setSeccionActiva((v) => v === "admin" ? null : "admin")}
-              >
-                Panel admin
-              </button>
-            )}
-          </nav>
+          {/* LEFT — To-do */}
+          <div>
+            <p className="eyebrow" style={{ color: "var(--fg)", textAlign: "center", fontWeight: 500 }}>To-do</p>
+            <hr style={DASH_DIVIDER} />
+            <nav style={{ display: "flex", flexDirection: "column" }}>
+              {!isAdmin && (
+                <DashNavItem label="Activar evaluaciones de proyecto" onClick={() => onNavigate({ type: "activar-evaluaciones-proyecto" })} />
+              )}
+              {!isAdmin && proyectosActivos.length > 0 && (
+                <div style={{ borderBottom: "1px solid var(--border)" }}>
+                  <div
+                    role="button"
+                    tabIndex={0}
+                    onClick={() => setProjOpen((v) => !v)}
+                    style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "13px 0", fontSize: 14, fontWeight: 400, cursor: "pointer", color: "#000", userSelect: "none" }}
+                  >
+                    Evaluaciones por proyectos
+                    <svg viewBox="0 0 24 24" fill="none" stroke="rgba(0,0,0,.3)" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"
+                      style={{ width: 11, height: 11, flexShrink: 0, transform: projOpen ? "rotate(180deg)" : "rotate(0deg)", transition: "transform .25s" }}>
+                      <polyline points="18 15 12 9 6 15" />
+                    </svg>
+                  </div>
+                  {projOpen && (
+                    <div style={{ display: "flex", flexDirection: "column", gap: 6, paddingBottom: 12 }}>
+                      {proyectosActivos.map((p) => (
+                        <div
+                          key={p.nombre_proyecto}
+                          onClick={() => onNavigate({ type: "evaluaciones-proyecto", proyectos: proyectosActivos, initialProyecto: p.nombre_proyecto })}
+                          style={{ fontSize: 13, color: "#000", cursor: "pointer", padding: "4px 0", paddingLeft: 4 }}
+                        >
+                          {p.nombre_proyecto}
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )}
+              {advisees.length > 0 && (
+                <DashNavItem label="Mis advisees" onClick={() => onNavigate({ type: "advisees-list", advisees })} />
+              )}
+              {!isAdmin && proyectosManager?.length > 0 && (
+                <DashNavItem label="Gestionar mis proyectos en activo" onClick={() => onNavigate({ type: "mis-proyectos-activos" })} />
+              )}
+              {isAdmin && !onBackToRoleSelect && (
+                <DashNavItem label="Panel admin" onClick={() => setSeccionActiva((v) => v === "admin" ? null : "admin")} />
+              )}
+            </nav>
+          </div>
 
+          {/* CENTER — profile photo */}
           <div className="profile-photo-wrap">
             {perfil.foto
               ? <img src={perfil.foto} alt={persona} className="profile-photo" />
@@ -2152,19 +2283,54 @@ function Dashboard({ token, user, onLogout, onNavigate, onBackToRoleSelect = nul
             }
           </div>
 
+          {/* RIGHT — To-see */}
           <aside className="profile-info">
-            <p className="profile-info-label">Mi puesto</p>
-            <p className="profile-info-value">{perfil.cargo || "—"}</p>
-            <p className="profile-info-label" style={{ marginTop: "28px" }}>Mis objetivos</p>
-            {misObjetivos.length ? (
-              <ul className="profile-obj-list" style={{ margin: 0, paddingLeft: "16px" }}>
-                {misObjetivos.map((obj, i) => (
-                  <li key={i} className="profile-obj-text">{obj.titulo}</li>
-                ))}
-              </ul>
-            ) : (
-              <p className="fine">Sin objetivos definidos.</p>
-            )}
+            <p className="eyebrow" style={{ color: "var(--fg)", textAlign: "center", fontWeight: 500 }}>To-see</p>
+            <hr style={{ ...DASH_DIVIDER, margin: 0 }} />
+
+            <div>
+              <p className="eyebrow" style={{ marginBottom: 3 }}>Mi puesto</p>
+              <p style={{ fontSize: 14, color: "#000" }}>{perfil.cargo || "—"}</p>
+            </div>
+
+            <hr style={{ ...DASH_DIVIDER, margin: 0 }} />
+
+            <DashCollapsible title="Mis objetivos" open={objOpen} onToggle={() => setObjOpen((v) => !v)}>
+              {misObjetivos.length ? (
+                <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+                  {misObjetivos.map((obj, i) => (
+                    <div key={i}>
+                      <p style={{ fontSize: 13, color: "#000", display: "flex", alignItems: "center", gap: 6 }}>
+                        <span style={{ width: 5, height: 5, borderRadius: "50%", background: "var(--accent)", flexShrink: 0, display: "inline-block" }} />
+                        {obj.titulo}
+                      </p>
+                      {obj.kpis && <p style={{ fontSize: 12, fontWeight: 200, color: "rgba(0,0,0,.55)", paddingLeft: 11 }}>{obj.kpis}</p>}
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <p className="fine">Sin objetivos definidos.</p>
+              )}
+            </DashCollapsible>
+
+            <hr style={{ ...DASH_DIVIDER, margin: 0 }} />
+
+            <DashCollapsible title="Mis informes" open={informesOpen} onToggle={() => setInformesOpen((v) => !v)}>
+              {informeFinalEmpleado === null ? (
+                <p className="fine">Cargando...</p>
+              ) : informeFinalEmpleado?.disponible ? (
+                <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
+                  {informeFinalEmpleado.htmlUrl && (
+                    <button className="secondary" onClick={() => openFile(informeFinalEmpleado.htmlUrl, "informe_final.html")}>Abrir en web</button>
+                  )}
+                  {informeFinalEmpleado.docxUrl && (
+                    <button className="secondary" onClick={() => openFile(informeFinalEmpleado.docxUrl, "informe_final.docx")}>Descargar Word</button>
+                  )}
+                </div>
+              ) : (
+                <p className="fine">No tienes acceso.</p>
+              )}
+            </DashCollapsible>
           </aside>
 
         </div>
@@ -2579,19 +2745,25 @@ function AdviseeDetail({ token, advisee, advisees, onBack, onNavigate }) {
 function MisProyectosActivosPage({ token, user, onBack }) {
   const [proyectos, setProyectos] = useState([]);
   const [loading, setLoading] = useState(true);
-  const [expanded, setExpanded] = useState(null);
   const [estadoMap, setEstadoMap] = useState({});
-  const [loadingEstado, setLoadingEstado] = useState({});
   const [todosEmpleados, setTodosEmpleados] = useState([]);
   const [añadirMap, setAñadirMap] = useState({});
   const [añadirValor, setAñadirValor] = useState({});
   const [accionMsg, setAccionMsg] = useState({});
 
-  const persona = user?.persona || user?.username || "";
+  function cargarEstado(nombre) {
+    apiRequest(`/api/estado-proyecto?proyecto=${encodeURIComponent(nombre)}`, { token })
+      .then((d) => setEstadoMap((prev) => ({ ...prev, [nombre]: d.estado || [] })))
+      .catch(() => setEstadoMap((prev) => ({ ...prev, [nombre]: [] })));
+  }
 
   function cargarProyectos() {
     apiRequest("/api/proyectos-manager", { token })
-      .then((d) => setProyectos(d.proyectos || []))
+      .then((d) => {
+        const lista = d.proyectos || [];
+        setProyectos(lista);
+        lista.forEach((p) => cargarEstado(p.nombre_proyecto));
+      })
       .catch(() => {})
       .finally(() => setLoading(false));
   }
@@ -2602,20 +2774,6 @@ function MisProyectosActivosPage({ token, user, onBack }) {
       .then((d) => setTodosEmpleados(d.empleados || []))
       .catch(() => {});
   }, [token]);
-
-  function cargarEstado(nombre) {
-    setLoadingEstado((prev) => ({ ...prev, [nombre]: true }));
-    apiRequest(`/api/estado-proyecto?proyecto=${encodeURIComponent(nombre)}`, { token })
-      .then((d) => setEstadoMap((prev) => ({ ...prev, [nombre]: d.estado || [] })))
-      .catch(() => setEstadoMap((prev) => ({ ...prev, [nombre]: [] })))
-      .finally(() => setLoadingEstado((prev) => ({ ...prev, [nombre]: false })));
-  }
-
-  function toggleProyecto(nombre) {
-    if (expanded === nombre) { setExpanded(null); return; }
-    setExpanded(nombre);
-    cargarEstado(nombre);
-  }
 
   async function modificarMiembro(accion, proyecto, empleado) {
     setAccionMsg((prev) => ({ ...prev, [proyecto]: "" }));
@@ -2645,140 +2803,127 @@ function MisProyectosActivosPage({ token, user, onBack }) {
         <a className="brand" href="/"><img src="/src/logo.png" alt="igeneris" className="brand-logo" /></a>
         <button className="link-button" onClick={onBack}>← Volver</button>
       </nav>
-      <section className="hero">
-        <div>
-          <p className="kicker">Gestión de proyecto</p>
-          <h1 style={{ fontSize: "clamp(32px,6vw,72px)" }}>Mis proyectos en activo</h1>
-        </div>
-      </section>
-      <section className="panel" style={{ marginTop: "32px" }}>
+
+      <div style={{ flex: 1, maxWidth: 880, width: "100%", paddingTop: 40, paddingBottom: 48 }}>
+        <p className="eyebrow">Gestión de proyecto</p>
+        <h1 style={{ marginBottom: 28 }}>Mis proyectos en activo</h1>
+
         {loading ? (
-          <p>Cargando...</p>
+          <p className="fine">Cargando...</p>
         ) : proyectos.length === 0 ? (
           <p className="fine">No tienes proyectos con evaluaciones activas.</p>
         ) : (
-          <div style={{ display: "flex", flexDirection: "column", gap: "16px" }}>
-            {proyectos.map((p) => {
-              const isOpen = expanded === p.nombre_proyecto;
-              const estado = estadoMap[p.nombre_proyecto] || [];
-              const cargando = loadingEstado[p.nombre_proyecto];
-              const mostrarAnadir = añadirMap[p.nombre_proyecto];
-              const valorAnadir = añadirValor[p.nombre_proyecto] || "";
-              const msg = accionMsg[p.nombre_proyecto] || "";
-              const equipoActual = p.equipo || [];
-              const disponibles = todosEmpleados.filter((e) => !equipoActual.includes(e));
-              return (
-                <div key={p.nombre_proyecto} style={{ border: "1px solid var(--border,#e5e7eb)", borderRadius: "8px", overflow: "hidden" }}>
-                  <button
-                    className="link-button"
-                    style={{ width: "100%", textAlign: "left", padding: "16px 20px", display: "flex", justifyContent: "space-between", alignItems: "center", fontWeight: 600, background: "none", border: "none", cursor: "pointer" }}
-                    onClick={() => toggleProyecto(p.nombre_proyecto)}
-                  >
-                    <span>{p.nombre_proyecto}</span>
-                    <span className="fine" style={{ fontWeight: 400 }}>{p.equipo.length} miembros &nbsp;{isOpen ? "▲" : "▼"}</span>
-                  </button>
-                  {isOpen && (
-                    <div style={{ padding: "0 20px 20px" }}>
-                      <div style={{ marginBottom: "12px", display: "flex", flexWrap: "wrap", gap: "8px", alignItems: "center" }}>
-                        <span style={{ fontSize: "13px", color: "#6b7280" }}>Equipo:</span>
-                        {equipoActual.map((miembro) => (
-                          <span key={miembro} style={{ display: "inline-flex", alignItems: "center", gap: "4px", background: "#f3f4f6", borderRadius: "99px", padding: "2px 10px", fontSize: "13px" }}>
-                            {miembro}
-                            <button
-                              onClick={() => modificarMiembro("eliminar", p.nombre_proyecto, miembro)}
-                              title={`Eliminar ${miembro}`}
-                              style={{ background: "none", border: "none", cursor: "pointer", color: "#ef4444", fontWeight: 700, padding: "0 2px", lineHeight: 1 }}
-                            >×</button>
-                          </span>
-                        ))}
-                        <button
-                          className="link-button"
-                          style={{ fontSize: "13px", padding: "2px 10px", border: "1px dashed var(--border,#e5e7eb)", borderRadius: "99px" }}
-                          onClick={() => setAñadirMap((prev) => ({ ...prev, [p.nombre_proyecto]: !mostrarAnadir }))}
-                        >
-                          {mostrarAnadir ? "Cancelar" : "+ Añadir"}
-                        </button>
-                      </div>
-                      {mostrarAnadir && (
-                        <div style={{ display: "flex", gap: "8px", marginBottom: "12px", alignItems: "center" }}>
-                          <select
-                            value={valorAnadir}
-                            onChange={(e) => setAñadirValor((prev) => ({ ...prev, [p.nombre_proyecto]: e.target.value }))}
-                            style={{ flex: 1, padding: "6px 10px", borderRadius: "6px", border: "1px solid var(--border,#e5e7eb)", fontSize: "14px" }}
-                          >
-                            <option value="">Selecciona una persona...</option>
-                            {disponibles.map((e) => <option key={e} value={e}>{e}</option>)}
-                          </select>
-                          <button
-                            className="cta-button"
-                            style={{ padding: "6px 16px", fontSize: "14px" }}
-                            disabled={!valorAnadir}
-                            onClick={() => modificarMiembro("añadir", p.nombre_proyecto, valorAnadir)}
-                          >Añadir</button>
-                        </div>
-                      )}
-                      {msg && <p style={{ fontSize: "13px", color: msg.includes("Error") || msg.includes("error") ? "#ef4444" : "#16a34a", marginBottom: "8px" }}>{msg}</p>}
-                      {cargando ? (
-                        <p className="fine">Cargando estado de evaluaciones...</p>
-                      ) : estado.length === 0 ? (
-                        <p className="fine">Sin datos de evaluación todavía.</p>
-                      ) : (
-                        <div style={{ overflowX: "auto" }}>
-                          <table style={{ width: "100%", borderCollapse: "collapse", fontSize: "14px" }}>
-                            <thead>
-                              <tr style={{ borderBottom: "2px solid var(--border,#e5e7eb)" }}>
-                                <th style={{ textAlign: "left", padding: "8px 4px" }}>Miembro</th>
-                                <th style={{ textAlign: "center", padding: "8px 12px" }}>Recibidas</th>
-                                <th style={{ textAlign: "center", padding: "8px 12px" }}>Autoevaluación</th>
-                                <th style={{ textAlign: "left", padding: "8px 4px" }}>Evaluado por</th>
-                                <th style={{ textAlign: "left", padding: "8px 4px" }}>Pendiente de</th>
-                              </tr>
-                            </thead>
-                            <tbody>
-                              {estado.map((m) => {
-                                const total = m.n_evaluaciones + m.pendientes.length;
-                                const completo = m.pendientes.length === 0;
-                                const ninguna = m.n_evaluaciones === 0;
-                                const badge = completo
-                                  ? { bg: "#dcfce7", color: "#166534" }
-                                  : ninguna ? { bg: "#fee2e2", color: "#991b1b" }
-                                  : { bg: "#fef9c3", color: "#713f12" };
-                                return (
-                                  <tr key={m.nombre} style={{ borderBottom: "1px solid var(--border,#f0f0f0)" }}>
-                                    <td style={{ padding: "10px 4px", fontWeight: 500 }}>{m.nombre}</td>
-                                    <td style={{ padding: "10px 12px", textAlign: "center" }}>
-                                      <span style={{ background: badge.bg, color: badge.color, padding: "2px 10px", borderRadius: "99px", fontWeight: 600, fontSize: "13px" }}>
-                                        {m.n_evaluaciones}/{total}
-                                      </span>
-                                    </td>
-                                    <td style={{ padding: "10px 12px", textAlign: "center" }}>
-                                      {m.autoevaluacion_hecha
-                                        ? <span style={{ color: "#16a34a", fontWeight: 600 }}>✓</span>
-                                        : <span style={{ color: "#ef4444", fontWeight: 600 }}>✗</span>}
-                                    </td>
-                                    <td style={{ padding: "10px 4px", color: "#4b5563" }}>
-                                      {m.evaluadores.length ? m.evaluadores.join(", ") : <span className="fine">—</span>}
-                                    </td>
-                                    <td style={{ padding: "10px 4px" }}>
-                                      {completo
-                                        ? <span style={{ color: "#16a34a" }}>✓ Completo</span>
-                                        : <span style={{ color: "#ef4444" }}>{m.pendientes.join(", ")}</span>}
-                                    </td>
-                                  </tr>
-                                );
-                              })}
-                            </tbody>
-                          </table>
-                        </div>
-                      )}
+          proyectos.map((p) => {
+            const nombre = p.nombre_proyecto;
+            const estado = estadoMap[nombre];
+            const mostrarAnadir = añadirMap[nombre];
+            const valorAnadir = añadirValor[nombre] || "";
+            const msg = accionMsg[nombre] || "";
+            const equipoActual = p.equipo || [];
+            const disponibles = todosEmpleados.filter((e) => !equipoActual.includes(e));
+            const total = estado ? estado.length : equipoActual.length;
+            const done = estado ? estado.filter((m) => m.pendientes.length === 0).length : 0;
+            const pct = total ? Math.round((done / total) * 100) : 0;
+            const msgEsError = msg.includes("Error") || msg.includes("error");
+            return (
+              <div key={nombre} className="card" style={{ marginBottom: 16 }}>
+                {/* Header */}
+                <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 16, flexWrap: "wrap", marginBottom: 16 }}>
+                  <div>
+                    <p style={{ fontSize: 14, fontWeight: 500, color: "#000", marginBottom: 2 }}>{nombre}</p>
+                    <p style={{ fontSize: 12, fontWeight: 200, color: "rgba(0,0,0,.45)" }}>{done} de {total} evaluaciones completadas</p>
+                  </div>
+                  <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                    <div style={{ width: 72, height: 5, background: "var(--border)", borderRadius: 3, overflow: "hidden" }}>
+                      <div style={{ height: "100%", width: `${pct}%`, background: "#000", borderRadius: 3 }} />
                     </div>
-                  )}
+                    <span style={{ fontSize: 11, fontWeight: 400, color: "rgba(0,0,0,.45)", whiteSpace: "nowrap" }}>{pct}%</span>
+                  </div>
                 </div>
-              );
-            })}
-          </div>
+
+                {/* Members table */}
+                {!estado ? (
+                  <p className="fine">Cargando estado de evaluaciones...</p>
+                ) : estado.length === 0 ? (
+                  <p className="fine">Sin datos de evaluación todavía.</p>
+                ) : (
+                  <div style={{ overflowX: "auto" }}>
+                    <table className="gest-table">
+                      <thead>
+                        <tr>
+                          {["Miembro", "Recibidas", "Autoevaluación", "Estado", ""].map((h) => (
+                            <th key={h}>{h}</th>
+                          ))}
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {estado.map((m) => {
+                          const tot = m.n_evaluaciones + m.pendientes.length;
+                          const completo = m.pendientes.length === 0;
+                          const pendienteTitle = completo
+                            ? (m.evaluadores.length ? `Evaluado por: ${m.evaluadores.join(", ")}` : "")
+                            : `Pendiente de: ${m.pendientes.join(", ")}`;
+                          return (
+                            <tr key={m.nombre}>
+                              <td>{m.nombre}</td>
+                              <td>
+                                <span className={`badge ${completo ? "badge-dark" : "badge-light"}`}>{m.n_evaluaciones}/{tot}</span>
+                              </td>
+                              <td>
+                                {m.autoevaluacion_hecha
+                                  ? <span style={{ color: "#000", fontSize: 14 }}>✓</span>
+                                  : <span style={{ color: "var(--accent)", fontSize: 14 }}>✗</span>}
+                              </td>
+                              <td>
+                                <span className={`badge ${completo ? "badge-dark" : "badge-light"}`} title={pendienteTitle}>
+                                  {completo ? "Completo" : "Pendiente"}
+                                </span>
+                              </td>
+                              <td>
+                                <button
+                                  onClick={() => modificarMiembro("eliminar", nombre, m.nombre)}
+                                  title={`Eliminar ${m.nombre}`}
+                                  style={{ background: "none", border: "none", minHeight: "auto", padding: "2px 4px", color: "rgba(0,0,0,.3)", fontSize: 16, cursor: "pointer" }}
+                                >×</button>
+                              </td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+
+                {msg && <p className={msgEsError ? "error" : "fine"} style={{ marginTop: 10 }}>{msg}</p>}
+
+                {/* Add member */}
+                {mostrarAnadir ? (
+                  <div style={{ display: "flex", gap: 8, marginTop: 12, alignItems: "center", flexWrap: "wrap" }}>
+                    <select
+                      value={valorAnadir}
+                      onChange={(e) => setAñadirValor((prev) => ({ ...prev, [nombre]: e.target.value }))}
+                      style={{ flex: 1, minWidth: 180 }}
+                    >
+                      <option value="">Selecciona una persona...</option>
+                      {disponibles.map((e) => <option key={e} value={e}>{e}</option>)}
+                    </select>
+                    <button disabled={!valorAnadir} onClick={() => modificarMiembro("añadir", nombre, valorAnadir)}>Añadir</button>
+                    <button className="secondary" onClick={() => setAñadirMap((prev) => ({ ...prev, [nombre]: false }))}>Cancelar</button>
+                  </div>
+                ) : (
+                  <button
+                    type="button"
+                    onClick={() => setAñadirMap((prev) => ({ ...prev, [nombre]: true }))}
+                    style={{ marginTop: 12, height: 32, minHeight: "auto", padding: "0 14px", background: "transparent", color: "#000", border: "1px solid var(--border)", borderRadius: "var(--radius-pill)", fontSize: 12, fontWeight: 400 }}
+                  >
+                    + Añadir miembro
+                  </button>
+                )}
+              </div>
+            );
+          })
         )}
-      </section>
+      </div>
       <Footer />
     </main>
   );
@@ -2838,24 +2983,35 @@ function ActivarEvaluacionesProyectoPage({ token, user, onBack, onActivado }) {
     }
   }
 
+  const filtrados = todosEmpleados.filter((n) => n.toLowerCase().includes(busqueda.toLowerCase().trim()));
+  const canSubmit = proyecto.trim().length > 0 && seleccionados.length > 0 && !loading;
+  const plural = seleccionados.length !== 1;
+  const statusEsError = status.includes("Error") || status.includes("pudo") || status.includes("existe") || status.includes("Escribe") || status.includes("Selecciona");
+
   return (
     <main className="page">
       <nav className="nav">
         <a className="brand" href="/"><img src="/src/logo.png" alt="igeneris" className="brand-logo" /></a>
         <button className="link-button" onClick={onBack}>← Volver</button>
       </nav>
-      <section className="hero">
-        <div>
-          <p className="kicker">Gestión de proyecto</p>
-          <h1 style={{ fontSize: "clamp(32px,6vw,72px)" }}>Activar evaluaciones</h1>
-        </div>
-      </section>
-      <section className="panel" style={{ marginTop: "32px" }}>
+
+      <div style={{ flex: 1, maxWidth: 880, width: "100%", margin: "0 auto", paddingTop: 40, paddingBottom: 48 }}>
+        <p className="eyebrow">Gestión de proyecto</p>
+        <h1>Activar evaluaciones</h1>
+        <p className="fine" style={{ marginTop: 10, color: "rgba(0,0,0,.6)" }}>
+          Como responsable de proyecto, introduce el nombre del proyecto y selecciona los miembros de tu equipo.
+          Se les notificará por Slack y podrán acceder a los formularios de evaluación.
+        </p>
+        <hr style={{ border: "none", borderTop: "1px solid var(--border)", margin: "24px 0" }} />
+
         {enviado ? (
           <>
-            <p className="fine" style={{ color: "#166534" }}>{status}</p>
+            <div style={{ display: "flex", alignItems: "center", gap: 10, fontSize: 14, color: "#000" }}>
+              <span style={{ display: "inline-flex", alignItems: "center", justifyContent: "center", width: 22, height: 22, borderRadius: "50%", background: "#000", color: "#fff", fontSize: 12, flexShrink: 0 }}>✓</span>
+              {status}
+            </div>
             <div className="actions">
-              <button onClick={() => { setEnviado(false); setProyecto(""); setSeleccionados([]); setStatus(""); }}>
+              <button onClick={() => { setEnviado(false); setProyecto(""); setSeleccionados([]); setStatus(""); setBusqueda(""); }}>
                 Activar otro proyecto
               </button>
               <button className="secondary" onClick={onBack}>Volver al inicio</button>
@@ -2863,57 +3019,88 @@ function ActivarEvaluacionesProyectoPage({ token, user, onBack, onActivado }) {
           </>
         ) : (
           <form onSubmit={activar}>
-            <p className="fine">Como responsable de proyecto, introduce el nombre del proyecto y selecciona los miembros de tu equipo. Se les notificará por Slack y podrán acceder a los formularios de evaluación.</p>
-            <label>Nombre del proyecto</label>
-            <p className="fine">Formato: AÑO_EMPRESA_NOMBRE (sin espacios ni tildes, p.ej. <em>2024_Acme_Innovacion</em>)</p>
+            <label htmlFor="proj-name">Nombre del proyecto</label>
+            <p className="fine" style={{ marginTop: -2, marginBottom: 8, color: "rgba(0,0,0,.45)", fontSize: 11 }}>
+              Formato: AÑO_EMPRESA_NOMBRE (sin espacios ni tildes, p.ej. 2026_Acme_Innovacion)
+            </p>
             <input
+              id="proj-name"
               type="text"
               value={proyecto}
               onChange={(e) => setProyecto(e.target.value)}
-              placeholder="2024_Empresa_NombreProyecto"
+              placeholder="2026_Empresa_NombreProyecto"
               required
             />
-            <label style={{ marginTop: "24px" }}>Miembros del equipo</label>
+
+            <label style={{ marginTop: 24 }}>Miembros del equipo</label>
             {loadingEmpleados ? (
               <p className="fine">Cargando empleados...</p>
             ) : (
               <>
-                <input
-                  type="text"
-                  value={busqueda}
-                  onChange={(e) => setBusqueda(e.target.value)}
-                  placeholder="Buscar por nombre..."
-                  style={{ marginTop: "8px", marginBottom: "8px" }}
-                />
-                <div style={{ display: "flex", flexDirection: "column", gap: "8px", maxHeight: "340px", overflowY: "auto", padding: "4px 0" }}>
-                  {todosEmpleados
-                    .filter((nombre) => nombre.toLowerCase().includes(busqueda.toLowerCase().trim()))
-                    .map((nombre) => (
-                      <label key={nombre} className="check-label" style={{ cursor: "pointer", userSelect: "none" }}>
-                        <input
-                          type="checkbox"
-                          className="check-input"
-                          checked={seleccionados.includes(nombre)}
-                          onChange={() => toggleEmpleado(nombre)}
-                        />
-                        {nombre}
-                      </label>
-                    ))}
-                  {todosEmpleados.filter((n) => n.toLowerCase().includes(busqueda.toLowerCase().trim())).length === 0 && (
-                    <p className="fine" style={{ margin: 0 }}>No hay resultados para "{busqueda}".</p>
+                <div style={{ position: "relative" }}>
+                  <span style={{ position: "absolute", left: 11, top: "50%", transform: "translateY(-50%)", color: "rgba(0,0,0,.35)", display: "flex", pointerEvents: "none" }}>
+                    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+                  </span>
+                  <input
+                    type="text"
+                    value={busqueda}
+                    onChange={(e) => setBusqueda(e.target.value)}
+                    placeholder="Buscar por nombre..."
+                    style={{ paddingLeft: 32 }}
+                  />
+                </div>
+                <div style={{ marginTop: 8, maxHeight: 220, overflowY: "auto", border: "1px solid var(--border)", borderRadius: "var(--radius-md)", background: "#fff" }}>
+                  {filtrados.map((nombre) => {
+                    const checked = seleccionados.includes(nombre);
+                    return (
+                      <div
+                        key={nombre}
+                        onClick={() => toggleEmpleado(nombre)}
+                        style={{ display: "flex", alignItems: "center", gap: 10, padding: "9px 12px", borderBottom: "1px solid var(--border)", cursor: "pointer", userSelect: "none" }}
+                      >
+                        <span style={{ width: 14, height: 14, borderRadius: 4, border: `1px solid ${checked ? "#000" : "var(--border)"}`, background: checked ? "#000" : "#fff", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
+                          {checked && (
+                            <svg width="9" height="7" viewBox="0 0 9 7" fill="none"><path d="M1 3.5l2.5 2.5 4.5-5" stroke="#fff" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/></svg>
+                          )}
+                        </span>
+                        <span style={{ fontSize: 13, fontWeight: 400, color: "#000" }}>{nombre}</span>
+                      </div>
+                    );
+                  })}
+                  {filtrados.length === 0 && (
+                    <p className="fine" style={{ margin: 0, padding: "12px" }}>No hay resultados para "{busqueda}".</p>
                   )}
                 </div>
               </>
             )}
-            {status && <p className={status.includes("Error") || status.includes("pudo") || status.includes("existe") ? "error" : "fine"} style={{ marginTop: "12px" }}>{status}</p>}
-            <div className="actions">
-              <button type="submit" disabled={loading}>
-                {loading ? "Activando..." : `Activar evaluaciones (${seleccionados.length} seleccionados)`}
-              </button>
-            </div>
+
+            <p style={{ fontSize: 12, fontWeight: 200, color: "rgba(0,0,0,.5)", marginTop: 12 }}>
+              <strong style={{ fontWeight: 500 }}>{seleccionados.length}</strong>{" "}
+              miembro{plural ? "s" : ""} seleccionado{plural ? "s" : ""}
+            </p>
+
+            {status && <p className={statusEsError ? "error" : "fine"} style={{ marginTop: 8 }}>{status}</p>}
+
+            <button
+              type="submit"
+              disabled={!canSubmit}
+              style={{
+                marginTop: 16, height: 36, padding: "0 20px", borderRadius: "var(--radius-pill)",
+                border: "none", fontSize: 13, letterSpacing: "0.02em",
+                background: canSubmit ? "var(--accent)" : "var(--border)",
+                color: canSubmit ? "#fff" : "rgba(0,0,0,.35)",
+                cursor: canSubmit ? "pointer" : "not-allowed",
+              }}
+            >
+              {loading
+                ? "Activando..."
+                : canSubmit
+                  ? `Activar evaluaciones (${seleccionados.length} seleccionado${plural ? "s" : ""})`
+                  : "Activar evaluaciones de proyecto"}
+            </button>
           </form>
         )}
-      </section>
+      </div>
       <Footer />
     </main>
   );
@@ -2971,88 +3158,106 @@ function EvaluacionesProyectoPage({ token, user, proyectos, onBack, onNavigate, 
     return lista;
   }, [equipo, persona, managerDelProyecto]);
 
+  const items = evaluacionesAHacer.map(({ tipo, evaluado, label }) => {
+    const evalKey = `${tipo}:${evaluado}`;
+    const completado =
+      (completedEvals[proyectoSeleccionado] || []).includes(evalKey) ||
+      completadasNotion.includes(evalKey);
+    return { tipo, evaluado, label, evalKey, completado };
+  });
+  const totalEvals = items.length;
+  const doneEvals = items.filter((i) => i.completado).length;
+  const pct = totalEvals ? Math.round((doneEvals / totalEvals) * 100) : 0;
+  const grupoAuto = items.filter((i) => i.tipo === "autoevaluacion");
+  const grupoManager = items.filter((i) => i.tipo === "miembros_a_manager");
+  const grupoMiembros = items.filter((i) => i.tipo === "mismos_miembros" || i.tipo === "manager_a_miembros");
+
+  const abrirFormulario = (it) =>
+    onNavigate({ type: "formulario-evaluacion-proyecto", proyecto: proyectoSeleccionado, tipo: it.tipo, evaluado: it.evaluado, manager: managerDelProyecto, proyectos });
+  const abrirHistorial = (it) =>
+    onNavigate({ type: "historial-evaluaciones", evaluado: it.evaluado, evaluador: persona, proyecto: proyectoSeleccionado, from: "evaluaciones-proyecto", proyectos });
+
+  const renderRow = (it, showHistorial) => (
+    <div key={it.evalKey} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, padding: "10px 0", borderBottom: "1px solid var(--border)" }}>
+      <div
+        onClick={it.completado ? undefined : () => abrirFormulario(it)}
+        style={{ cursor: it.completado ? "default" : "pointer", flex: 1, minWidth: 0 }}
+        title={it.completado ? "" : "Rellenar evaluación"}
+      >
+        <p style={{ fontSize: 14, fontWeight: 400, color: "#000" }}>{it.evaluado}</p>
+        <p style={{ fontSize: 12, fontWeight: 200, color: it.completado ? "rgba(0,0,0,.4)" : "var(--accent)" }}>
+          {it.completado ? "Completada" : "Pendiente"}
+        </p>
+      </div>
+      {showHistorial && (
+        <button className="btn-historial" onClick={() => abrirHistorial(it)} type="button">Historial</button>
+      )}
+    </div>
+  );
+
+  const EvalSection = ({ title, children }) => (
+    <div style={{ marginBottom: 28 }}>
+      <p className="eyebrow" style={{ marginBottom: 10, paddingBottom: 8, borderBottom: "1px solid var(--border)" }}>{title}</p>
+      <div>{children}</div>
+    </div>
+  );
+
   return (
     <main className="page">
       <nav className="nav">
         <a className="brand" href="/"><img src="/src/logo.png" alt="igeneris" className="brand-logo" /></a>
         <button className="link-button" onClick={onBack}>← Volver</button>
       </nav>
-      <section className="hero">
-        <div>
-          <p className="kicker">Evaluaciones</p>
-          <h1 style={{ fontSize: "clamp(32px,6vw,72px)" }}>Evaluaciones por proyectos</h1>
-        </div>
-      </section>
 
-      {proyectos.length > 1 && (
-        <section className="panel" style={{ marginTop: "32px" }}>
-          <label>Proyecto</label>
-          <select value={proyectoSeleccionado} onChange={(e) => setProyectoSeleccionado(e.target.value)}>
-            {proyectos.map((p) => (
-              <option key={p.nombre_proyecto} value={p.nombre_proyecto}>{p.nombre_proyecto}</option>
-            ))}
-          </select>
-        </section>
-      )}
+      <div style={{ flex: 1, maxWidth: 980, width: "100%", paddingTop: 40, paddingBottom: 48 }}>
+        <p className="eyebrow">Evaluación de proyecto</p>
+        <h1 style={{ marginBottom: 24 }}>{proyectoSeleccionado || "Evaluaciones por proyectos"}</h1>
 
-      {proyectoSeleccionado && (
-        <section className="panel" style={{ marginTop: "32px" }}>
-          <p className="kicker">{proyectoSeleccionado}</p>
-          <h2>Tus evaluaciones</h2>
-          {loadingEquipo ? (
+        {proyectos.length > 1 && (
+          <div style={{ marginBottom: 28, maxWidth: 360 }}>
+            <label htmlFor="proj-sel">Proyecto</label>
+            <select id="proj-sel" value={proyectoSeleccionado} onChange={(e) => setProyectoSeleccionado(e.target.value)}>
+              {proyectos.map((p) => (
+                <option key={p.nombre_proyecto} value={p.nombre_proyecto}>{p.nombre_proyecto}</option>
+              ))}
+            </select>
+          </div>
+        )}
+
+        {proyectoSeleccionado && (
+          loadingEquipo ? (
             <p className="fine">Cargando...</p>
           ) : (
-            <div style={{ display: "flex", flexDirection: "column", gap: "12px", marginTop: "16px" }}>
-              {evaluacionesAHacer.map(({ tipo, evaluado, label }) => {
-                const evalKey = `${tipo}:${evaluado}`;
-                const completado =
-                  (completedEvals[proyectoSeleccionado] || []).includes(evalKey) ||
-                  completadasNotion.includes(evalKey);
-                const mostrarHistorial = tipo !== "autoevaluacion";
-                return (
-                  <div key={evalKey} style={{ display: "flex", gap: "10px", alignItems: "stretch" }}>
-                    <button
-                      className="secondary"
-                      style={{ flex: 1, textAlign: "left", padding: "14px 18px", opacity: completado ? 0.55 : 1 }}
-                      disabled={completado}
-                      onClick={() =>
-                        onNavigate({
-                          type: "formulario-evaluacion-proyecto",
-                          proyecto: proyectoSeleccionado,
-                          tipo,
-                          evaluado,
-                          manager: managerDelProyecto,
-                          proyectos,
-                        })
-                      }
-                    >
-                      {completado && <span style={{ marginRight: "8px", color: "#166534" }}>✓</span>}
-                      {label}
-                    </button>
-                    {mostrarHistorial && (
-                      <button
-                        className="secondary"
-                        style={{ padding: "10px 14px", fontSize: "13px", whiteSpace: "nowrap", flexShrink: 0 }}
-                        onClick={() => onNavigate({
-                          type: "historial-evaluaciones",
-                          evaluado,
-                          evaluador: persona,
-                          proyecto: proyectoSeleccionado,
-                          from: "evaluaciones-proyecto",
-                          proyectos,
-                        })}
-                        title="Ver evaluaciones anteriores de esta persona en este proyecto"
-                      >
-                        📊 Historial
-                      </button>
-                    )}
-                  </div>
-                );
-              })}
-            </div>
-          )}
-        </section>
-      )}
+            <>
+              <div style={{ marginBottom: 36 }}>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", marginBottom: 8 }}>
+                  <span style={{ fontSize: 13, fontWeight: 200, color: "rgba(0,0,0,.55)" }}>Progreso de evaluaciones</span>
+                  <span style={{ fontSize: 13, fontWeight: 400, color: "#000" }}>{doneEvals} de {totalEvals} completadas · {pct}%</span>
+                </div>
+                <div style={{ height: 6, background: "var(--border)", borderRadius: 3, overflow: "hidden" }}>
+                  <div style={{ height: "100%", width: `${pct}%`, background: "#000", borderRadius: 3, transition: "width .6s" }} />
+                </div>
+              </div>
+
+              {grupoAuto.length > 0 && (
+                <EvalSection title="Autoevaluación">
+                  {grupoAuto.map((it) => renderRow(it, false))}
+                </EvalSection>
+              )}
+              {grupoManager.length > 0 && (
+                <EvalSection title="Evaluaciones a manager">
+                  {grupoManager.map((it) => renderRow(it, true))}
+                </EvalSection>
+              )}
+              {grupoMiembros.length > 0 && (
+                <EvalSection title="Evaluaciones a miembros">
+                  {grupoMiembros.map((it) => renderRow(it, true))}
+                </EvalSection>
+              )}
+            </>
+          )
+        )}
+      </div>
       <Footer />
     </main>
   );
@@ -3288,6 +3493,60 @@ function EvaluacionesSlackPage({ token, user, advisees, onBack, onNavigate, comp
   );
 }
 
+// Barra de carga: traduce las peticiones en curso a variables CSS que pinta `.nav::after`.
+// El ancho es proporcional a las peticiones que ya han terminado (done/total): así
+// avanza por pasos reales en vez de saltar al final enseguida.
+function TopLoadingBar() {
+  useEffect(() => {
+    const root = document.documentElement;
+    let trickle = null;
+    let hideTimer = null;
+    let progress = 0;          // % mostrado actualmente
+    let total = 0, done = 0, count = 0;
+    const set = (p) => { progress = p; root.style.setProperty("--load-progress", `${p}%`); };
+
+    // Mientras una petición sigue en curso, avanza despacio hacia el siguiente
+    // escalón proporcional (done+1)/total, sin pasar de él ni llegar al 100%.
+    const tick = () => {
+      const ceiling = total > 0 ? Math.min(((done + 1) / total) * 100, 95) : 90;
+      if (progress < ceiling) set(progress + (ceiling - progress) * 0.06);
+    };
+
+    const unsubscribe = subscribeLoading((s) => {
+      total = s.total; done = s.done; count = s.count;
+
+      if (count === 0) {
+        // tanda terminada → completa al 100% y desvanece
+        if (trickle) { clearInterval(trickle); trickle = null; }
+        set(100);
+        hideTimer = setTimeout(() => {
+          root.style.setProperty("--load-opacity", "0");
+          set(0);
+        }, 350);
+        return;
+      }
+
+      clearTimeout(hideTimer);
+      hideTimer = null;
+      root.style.setProperty("--load-opacity", "1");
+      // suelo proporcional: salta al % de peticiones ya completadas
+      const floor = total > 0 ? (done / total) * 100 : 0;
+      if (progress < floor) set(floor);
+      if (!trickle) trickle = setInterval(tick, 250);
+    });
+
+    return () => {
+      unsubscribe();
+      if (trickle) clearInterval(trickle);
+      clearTimeout(hideTimer);
+      root.style.removeProperty("--load-progress");
+      root.style.removeProperty("--load-opacity");
+    };
+  }, []);
+
+  return null;
+}
+
 function App() {
   const resetToken = getResetToken();
   const [token, setToken] = useState(localStorage.getItem("evaluabot_token") || sessionStorage.getItem("evaluabot_token") || "");
@@ -3296,10 +3555,24 @@ function App() {
   const [adminMode, setAdminMode] = useState(null); // null | "personal" | "admin"
   const [completedEvals, setCompletedEvals] = useState({});
   const [slackEvalCompletadas, setSlackEvalCompletadas] = useState({});
+  const [legalDoc, setLegalDoc] = useState(getLegalDoc());
+
+  useEffect(() => {
+    const onHash = () => setLegalDoc(getLegalDoc());
+    window.addEventListener("hashchange", onHash);
+    return () => window.removeEventListener("hashchange", onHash);
+  }, []);
 
   function navigate(newPage, newAdminModeOverride) {
     setPage(newPage);
     if (newAdminModeOverride !== undefined) setAdminMode(newAdminModeOverride);
+  }
+
+  function closeLegal() {
+    if (window.location.hash) {
+      window.history.replaceState(null, "", window.location.pathname + window.location.search);
+    }
+    setLegalDoc(null);
   }
 
   useEffect(() => {
@@ -3328,6 +3601,10 @@ function App() {
     if (p?.from === "advisee-detail") return () => navigate({ type: "advisee-detail", advisee: p.advisee, advisees: p.advisees });
     if (p?.from === "advisees-list") return () => navigate({ type: "advisees-list", advisees: p.advisees });
     return () => navigate(null);
+  }
+
+  if (legalDoc) {
+    return <LegalPage doc={legalDoc} onBack={closeLegal} />;
   }
 
   if (resetToken || !token || !user) {
@@ -3446,4 +3723,9 @@ function App() {
   );
 }
 
-createRoot(document.getElementById("root")).render(<App />);
+createRoot(document.getElementById("root")).render(
+  <>
+    <TopLoadingBar />
+    <App />
+  </>
+);

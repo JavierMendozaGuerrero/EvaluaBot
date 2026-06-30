@@ -159,6 +159,10 @@ class ApiHandler(BaseHTTPRequestHandler):
                     if not sesion.get("is_admin") and normalizar_nombre(bbdd["evaluado"]) != normalizar_nombre(sesion.get("persona")):
                         continue
                     opciones.append({"value": bbdd["evaluado"], "label": bbdd["evaluado"]})
+                datos = obtener_datos_empleados_por_nombres([o["value"] for o in opciones])
+                fotos = {normalizar_nombre(d["nombre"]): d.get("foto", "") for d in datos}
+                for o in opciones:
+                    o["foto"] = fotos.get(normalizar_nombre(o["value"]), "")
                 self.responder_json({"evaluados": opciones})
                 return
             if ruta == "/api/mis-advisees":
@@ -582,7 +586,7 @@ class ApiHandler(BaseHTTPRequestHandler):
                 except Exception:
                     logging.exception("No se pudo generar el informe anual IGENERIS para %s", evaluado)
                 if not respuesta:
-                    raise RuntimeError("No se pudo generar ningún informe para esta persona.")
+                    raise RuntimeError("No se pudo generar ningún informe para esta persona. No ha recibido evaluaciones.")
                 self.responder_json(respuesta)
                 return
             if ruta == "/api/trayectoria":

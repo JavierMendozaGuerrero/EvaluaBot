@@ -297,9 +297,9 @@ function AdminPanel({ token, onBack }) {
     setStatusMsg("");
     try {
       const perfil = await apiRequest(`/api/perfil-empleado?nombre=${encodeURIComponent(item.value)}`, { token });
-      setSelected({ nombre: item.value, foto: perfil.foto || null, cargo: perfil.cargo || "" });
+      setSelected({ nombre: item.value, foto: perfil.foto || item.foto || null, cargo: perfil.cargo || "" });
     } catch {
-      setSelected({ nombre: item.value, foto: null, cargo: "" });
+      setSelected({ nombre: item.value, foto: item.foto || null, cargo: "" });
     }
   }
 
@@ -364,7 +364,7 @@ function AdminPanel({ token, onBack }) {
               ) : (
                 <p className="fine">{informeFinal?.mensaje || "Sin informe final disponible."}</p>
               )}
-              {statusMsg && statusMsg !== "Preparando trayectoria visual..." && (
+              {statusMsg && (
                 <p className="fine error">{statusMsg}</p>
               )}
             </div>
@@ -399,7 +399,10 @@ function AdminPanel({ token, onBack }) {
               className="advisee-page-card"
               onClick={() => selectEmpleado(e)}
             >
-              <div className="advisee-page-foto advisee-foto-placeholder">{e.label.charAt(0)}</div>
+              {e.foto
+                ? <img src={e.foto} alt={e.label} className="advisee-page-foto" />
+                : <div className="advisee-page-foto advisee-foto-placeholder">{e.label.charAt(0)}</div>
+              }
               <span className="advisee-page-nombre">{e.label}</span>
             </button>
           ))}
@@ -408,84 +411,6 @@ function AdminPanel({ token, onBack }) {
           )}
         </div>
       </div>
-      <Footer />
-    </main>
-  );
-}
-
-function InformesAdvisee({ token, advisee, onBack }) {
-  const [status, setStatus] = useState("");
-  const [links, setLinks] = useState(null);
-
-  async function generate(kind) {
-    setLinks(null);
-    setStatus(kind === "generar" ? "Claude esta generando el informe..." : "Preparando trayectoria visual...");
-    try {
-      const data = await apiRequest(`/api/${kind}`, { token, method: "POST", body: { evaluado: advisee.nombre } });
-      setStatus(kind === "generar" ? `Informe listo con ${data.total} evaluaciones.` : `Trayectoria lista con ${data.total} evaluaciones.`);
-      setLinks(data);
-    } catch (err) {
-      setStatus(err.message);
-    }
-  }
-
-  async function openFile(path, filename) {
-    if (!filename.endsWith(".docx")) {
-      window.open(apiUrl(`${path}&token=${encodeURIComponent(token)}`), "_blank", "noopener,noreferrer");
-      return;
-    }
-    try {
-      const response = await fetch(apiUrl(path), { headers: { Authorization: `Bearer ${token}` } });
-      if (!response.ok) {
-        const data = await response.json().catch(() => ({}));
-        throw new Error(data.error || "No se pudo descargar el archivo.");
-      }
-      const blob = await response.blob();
-      const url = URL.createObjectURL(blob);
-      const link = document.createElement("a");
-      link.href = url;
-      link.download = filename;
-      link.click();
-      URL.revokeObjectURL(url);
-    } catch (err) {
-      setStatus(err.message);
-    }
-  }
-
-  return (
-    <main className="page">
-      <nav className="nav">
-        <a className="brand" href="/"><img src="/src/logo.png" alt="igeneris" className="brand-logo" /></a>
-        <button className="link-button" onClick={onBack}>← Volver</button>
-      </nav>
-      <section className="hero dashboard-hero">
-        <div>
-          {advisee.foto
-            ? <img src={advisee.foto} alt={advisee.nombre} className="objetivos-foto" />
-            : <div className="objetivos-foto objetivos-foto-placeholder">{advisee.nombre.charAt(0)}</div>
-          }
-          <p className="kicker">Informes</p>
-          <h1>{advisee.nombre}</h1>
-        </div>
-        <div className="panel">
-          <p className="lead">Genera el informe ejecutivo o la trayectoria visual a partir del feedback recogido.</p>
-          <div className="actions">
-            <button onClick={() => generate("generar")}>Generar informe</button>
-            <button className="secondary" onClick={() => generate("trayectoria")}>Generar trayectoria</button>
-          </div>
-        </div>
-      </section>
-
-      {status && <section className="status panel"><p>{status}</p></section>}
-      {links && (
-        <section className="result panel">
-          <h2>Resultado</h2>
-          <div className="actions">
-            {links.htmlUrl && <button onClick={() => openFile(links.htmlUrl, "informe.html")}>Abrir web</button>}
-            {links.docxAnualUrl && <button className="secondary" onClick={() => openFile(links.docxAnualUrl, `informe_${advisee.nombre.replace(/\s+/g, "_")}.docx`)}>Descargar Word</button>}
-          </div>
-        </section>
-      )}
       <Footer />
     </main>
   );
@@ -543,9 +468,15 @@ function MisObjetivosPage({ token, persona, onBack }) {
   );
 }
 
+const MESES_ES = [
+  "Enero", "Febrero", "Marzo", "Abril", "Mayo", "Junio",
+  "Julio", "Agosto", "Septiembre", "Octubre", "Noviembre", "Diciembre",
+];
+
 function ObjetivosPage({ token, advisee, caName, onBack }) {
   const [objetivos, setObjetivos] = useState([]);
   const [form, setForm] = useState({ titulo: "", kpis: "", descripcion: "", tipo: "" });
+  const [pendientes, setPendientes] = useState([]);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [deleting, setDeleting] = useState(null);
@@ -561,21 +492,66 @@ function ObjetivosPage({ token, advisee, caName, onBack }) {
     recargar().catch((err) => setError(err.message)).finally(() => setLoading(false));
   }, [token, advisee.nombre]);
 
+  function objetivoLimpio() {
+    return {
+      titulo: form.titulo.trim(),
+      kpis: form.kpis.trim(),
+      descripcion: form.descripcion.trim(),
+      tipo: form.tipo.trim(),
+    };
+  }
+
+  function añadirOtro() {
+    if (!form.titulo.trim()) return;
+    setPendientes((prev) => [...prev, objetivoLimpio()]);
+    setForm({ titulo: "", kpis: "", descripcion: "", tipo: "" });
+    setError("");
+    setSuccess("");
+  }
+
+  function quitarPendiente(idx) {
+    setPendientes((prev) => prev.filter((_, i) => i !== idx));
+  }
+
+  // Agrupa los objetivos por año y, dentro de cada año, por mes.
+  // objetivos ya viene ordenado por fecha descendente desde el backend.
+  const objetivosPorAnio = useMemo(() => {
+    const anios = new Map(); // anio -> Map(mesIdx -> [obj])
+    for (const obj of objetivos) {
+      const fecha = obj.fecha || "";
+      const anio = fecha.slice(0, 4) || "Sin fecha";
+      const mesIdx = fecha.length >= 7 ? parseInt(fecha.slice(5, 7), 10) - 1 : -1;
+      if (!anios.has(anio)) anios.set(anio, new Map());
+      const meses = anios.get(anio);
+      if (!meses.has(mesIdx)) meses.set(mesIdx, []);
+      meses.get(mesIdx).push(obj);
+    }
+    return [...anios.entries()].map(([anio, meses]) => [anio, [...meses.entries()]]);
+  }, [objetivos]);
+
   async function guardar(e) {
     e.preventDefault();
-    if (!form.titulo.trim()) return;
+    // Guarda el bloque completo: los objetivos ya añadidos + el que esté en el
+    // formulario (aunque no se haya pulsado "Añadir otro"), para no perder datos.
+    const aGuardar = form.titulo.trim() ? [...pendientes, objetivoLimpio()] : pendientes;
+    if (!aGuardar.length) return;
     setError("");
     setSuccess("");
     setSaving(true);
     try {
-      await apiRequest("/api/objetivos", {
-        token,
-        method: "POST",
-        body: { nombre: advisee.nombre, titulo: form.titulo.trim(), kpis: form.kpis.trim(), descripcion: form.descripcion.trim(), tipo: form.tipo.trim() },
-      });
+      for (const obj of aGuardar) {
+        await apiRequest("/api/objetivos", {
+          token,
+          method: "POST",
+          body: { nombre: advisee.nombre, ...obj },
+        });
+      }
       await recargar();
       setForm({ titulo: "", kpis: "", descripcion: "", tipo: "" });
-      setSuccess("Objetivo guardado correctamente.");
+      setPendientes([]);
+      setSuccess(aGuardar.length === 1
+        ? "Objetivo guardado correctamente."
+        : `${aGuardar.length} objetivos guardados correctamente.`);
     } catch (err) {
       setError(err.message);
     } finally {
@@ -615,13 +591,38 @@ function ObjetivosPage({ token, advisee, caName, onBack }) {
           <h2>Nuevo objetivo</h2>
           {error && <p className="error">{error}</p>}
           {success && <p className="fine">{success}</p>}
+
+          {pendientes.length > 0 && (
+            <div className="objetivos-pendientes">
+              {pendientes.map((obj, i) => (
+                <div key={i} className="objetivo-chip">
+                  <div className="objetivo-chip-body">
+                    <div className="objetivo-chip-titulo">{obj.titulo}</div>
+                    {(obj.tipo || obj.kpis) && (
+                      <div className="objetivo-chip-meta">
+                        {[obj.tipo, obj.kpis].filter(Boolean).join(" · ")}
+                      </div>
+                    )}
+                  </div>
+                  <button
+                    type="button"
+                    className="objetivo-chip-remove"
+                    aria-label="Quitar objetivo"
+                    onClick={() => quitarPendiente(i)}
+                  >
+                    ×
+                  </button>
+                </div>
+              ))}
+            </div>
+          )}
+
           <label>Título *</label>
           <input
             type="text"
             value={form.titulo}
             onChange={(e) => setForm((f) => ({ ...f, titulo: e.target.value }))}
             placeholder="Ej: Mejorar habilidades de presentación"
-            required
           />
           <label style={{ marginTop: "12px" }}>Tipo</label>
           <input
@@ -646,8 +647,15 @@ function ObjetivosPage({ token, advisee, caName, onBack }) {
             placeholder="Detalla cómo trabajar este objetivo..."
           />
           <div className="actions">
-            <button type="submit" disabled={saving || !form.titulo.trim()}>
-              {saving ? "Guardando..." : "Guardar objetivo"}
+            <button type="button" className="secondary" onClick={añadirOtro} disabled={saving || !form.titulo.trim()}>
+              + Añadir otro
+            </button>
+            <button type="submit" disabled={saving || (!form.titulo.trim() && pendientes.length === 0)}>
+              {saving
+                ? "Guardando..."
+                : (pendientes.length + (form.titulo.trim() ? 1 : 0)) > 1
+                  ? `Guardar ${pendientes.length + (form.titulo.trim() ? 1 : 0)} objetivos`
+                  : "Guardar objetivo"}
             </button>
           </div>
         </form>
@@ -659,27 +667,36 @@ function ObjetivosPage({ token, advisee, caName, onBack }) {
         {loading ? (
           <p>Cargando...</p>
         ) : objetivos.length ? (
-          <div className="objetivos-list">
-            {objetivos.map((obj) => (
-              <article key={obj.page_id} className="objetivo-item">
-                <p className="opinion-fecha fine">
-                  {obj.fecha ? obj.fecha.slice(0, 10) : "Sin fecha"}
-                  {obj.tipo ? ` · ${obj.tipo}` : ""}
-                </p>
-                <p className="objetivo-titulo"><strong>{obj.titulo}</strong></p>
-                {obj.kpis && <p className="objetivo-texto fine"><em>KPIs:</em> {obj.kpis}</p>}
-                {obj.descripcion && <p className="objetivo-texto">{obj.descripcion}</p>}
-                <div style={{ marginTop: "8px" }}>
-                  <button
-                    className="link-button"
-                    style={{ color: "var(--muted, #999)", fontSize: "12px" }}
-                    disabled={deleting === obj.page_id}
-                    onClick={() => eliminar(obj.page_id)}
-                  >
-                    {deleting === obj.page_id ? "Eliminando..." : "Eliminar"}
-                  </button>
-                </div>
-              </article>
+          <div className="objetivos-anios">
+            {objetivosPorAnio.map(([anio, meses], anioIdx) => (
+              <details key={anio} className="objetivos-anio" open={anioIdx === 0}>
+                <summary className="objetivos-anio-head"><span>{anio}</span></summary>
+                {meses.map(([mesIdx, items], mesPos) => (
+                  <details key={mesIdx} className="objetivos-mes" open={mesPos === 0}>
+                    <summary className="objetivos-mes-head">{mesIdx >= 0 ? MESES_ES[mesIdx] : "Sin fecha"}</summary>
+                    <div className="objetivos-list">
+                      {items.map((obj) => (
+                        <article key={obj.page_id} className="objetivo-item">
+                          {obj.tipo && <p className="opinion-fecha fine">{obj.tipo}</p>}
+                          <p className="objetivo-titulo"><strong>{obj.titulo}</strong></p>
+                          {obj.kpis && <p className="objetivo-texto fine"><em>KPIs:</em> {obj.kpis}</p>}
+                          {obj.descripcion && <p className="objetivo-texto">{obj.descripcion}</p>}
+                          <div style={{ marginTop: "8px" }}>
+                            <button
+                              className="link-button"
+                              style={{ color: "var(--muted, #999)", fontSize: "12px" }}
+                              disabled={deleting === obj.page_id}
+                              onClick={() => eliminar(obj.page_id)}
+                            >
+                              {deleting === obj.page_id ? "Eliminando..." : "Eliminar"}
+                            </button>
+                          </div>
+                        </article>
+                      ))}
+                    </div>
+                  </details>
+                ))}
+              </details>
             ))}
           </div>
         ) : (
@@ -786,7 +803,7 @@ function AuthScreen({ onLogin }) {
           </button>
         )}
         <p className="eyebrow">Evaluaciones internas</p>
-        <h1 style={{ fontSize: 38, marginBottom: desc ? 12 : 22 }}>{title}</h1>
+        <h1 style={{ fontSize: 30, marginBottom: desc ? 12 : 22 }}>{title}</h1>
         {desc && <p className="fine" style={{ color: "rgba(0,0,0,.6)", marginBottom: 18 }}>{desc}</p>}
         {error && <p className="error" style={{ marginBottom: 12 }}>{error}</p>}
         {message && <p className="fine" style={{ marginBottom: 12 }}>{message}</p>}
@@ -1960,7 +1977,7 @@ function DashNavItem({ label, onClick, disabled }) {
       onMouseEnter={() => setHover(true)}
       onMouseLeave={() => setHover(false)}
       style={{
-        padding: "13px 0", fontSize: 14, fontWeight: 400,
+        padding: "11px 0", fontSize: 14, fontWeight: 400,
         cursor: disabled ? "default" : "pointer",
         borderBottom: "1px solid var(--border)",
         color: disabled ? "rgba(0,0,0,.3)" : hover ? "var(--accent)" : "#000",
@@ -2100,20 +2117,15 @@ function Dashboard({ token, user, onLogout, onNavigate, onBackToRoleSelect = nul
   const targetEvaluado = isAdmin ? evaluado : (evaluado || ownEvaluado);
   const selectedLabel = useMemo(() => evaluados.find((item) => item.value === evaluado)?.label || "", [evaluados, evaluado]);
 
-  async function generate(kind) {
+  async function generate() {
     setLinks(null);
-    setStatus(kind === "generar" ? "Claude está generando el informe..." : "Preparando trayectoria visual...");
+    setStatus("Claude está generando el informe...");
     try {
       const body = { evaluado: targetEvaluado };
-      if (kind === "generar" && cargoAnual) body.cargo = cargoAnual;
-      const data = await apiRequest(`/api/${kind}`, { token, method: "POST", body });
+      if (cargoAnual) body.cargo = cargoAnual;
+      const data = await apiRequest("/api/generar", { token, method: "POST", body });
       setLinks(data);
-      if (kind === "trayectoria" && data.htmlUrl) {
-        setStatus("");
-        window.open(apiUrl(`${data.htmlUrl}&token=${encodeURIComponent(token)}`), "_blank", "noopener,noreferrer");
-      } else {
-        setStatus(kind === "generar" ? `Informe listo con ${data.total} evaluaciones.` : "");
-      }
+      setStatus(`Informe listo con ${data.total} evaluaciones.`);
     } catch (err) {
       setStatus(err.message);
     }
@@ -2236,7 +2248,7 @@ function Dashboard({ token, user, onLogout, onNavigate, onBackToRoleSelect = nul
                     role="button"
                     tabIndex={0}
                     onClick={() => setProjOpen((v) => !v)}
-                    style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "13px 0", fontSize: 14, fontWeight: 400, cursor: "pointer", color: "#000", userSelect: "none" }}
+                    style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "11px 0", fontSize: 14, fontWeight: 400, cursor: "pointer", color: "#000", userSelect: "none" }}
                   >
                     Evaluaciones por proyectos
                     <svg viewBox="0 0 24 24" fill="none" stroke="rgba(0,0,0,.3)" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"
@@ -2250,7 +2262,7 @@ function Dashboard({ token, user, onLogout, onNavigate, onBackToRoleSelect = nul
                         <div
                           key={p.nombre_proyecto}
                           onClick={() => onNavigate({ type: "evaluaciones-proyecto", proyectos: proyectosActivos, initialProyecto: p.nombre_proyecto })}
-                          style={{ fontSize: 13, color: "#000", cursor: "pointer", padding: "4px 0", paddingLeft: 4 }}
+                          style={{ fontSize: 13, color: "#000", cursor: "pointer", padding: "5px 0", paddingLeft: 4 }}
                         >
                           {p.nombre_proyecto}
                         </div>
@@ -2297,10 +2309,10 @@ function Dashboard({ token, user, onLogout, onNavigate, onBackToRoleSelect = nul
                   {misObjetivos.map((obj, i) => (
                     <div key={i}>
                       <p style={{ fontSize: 13, color: "#000", display: "flex", alignItems: "center", gap: 6 }}>
-                        <span style={{ width: 5, height: 5, borderRadius: "50%", background: "var(--accent)", flexShrink: 0, display: "inline-block" }} />
+                        <span style={{ width: 6, height: 6, borderRadius: "50%", background: "var(--accent)", flexShrink: 0, display: "inline-block" }} />
                         {obj.titulo}
                       </p>
-                      {obj.kpis && <p style={{ fontSize: 12, fontWeight: 200, color: "rgba(0,0,0,.55)", paddingLeft: 11 }}>{obj.kpis}</p>}
+                      {obj.kpis && <p style={{ fontSize: 13, fontWeight: 200, color: "rgba(0,0,0,.55)", paddingLeft: 12 }}>{obj.kpis}</p>}
                     </div>
                   ))}
                 </div>
@@ -2332,7 +2344,7 @@ function Dashboard({ token, user, onLogout, onNavigate, onBackToRoleSelect = nul
         </div>
       </div>
 
-      {status && status !== "Preparando trayectoria visual..." && (
+      {status && (
         <p className="dash-status fine">{status}</p>
       )}
 
@@ -2356,13 +2368,7 @@ function Dashboard({ token, user, onLogout, onNavigate, onBackToRoleSelect = nul
                   <p className="kicker">Informe anual</p>
                   <h2>Informe anual{targetEvaluado ? ` de ${targetEvaluado}` : ""}</h2>
                   <p>Genera una base para el informe anual de evaluaciones.</p>
-                  <button onClick={() => generate("generar")} disabled={!targetEvaluado}>Generar informe anual</button>
-                </article>
-                <article className="tool wrapped">
-                  <p className="kicker">Trayectoria</p>
-                  <h2>Vista tipo wrapped</h2>
-                  <p>Navega por fechas, proyecto, satisfacción y comentarios clave.</p>
-                  <button className="secondary" onClick={() => generate("trayectoria")} disabled={!targetEvaluado}>Generar trayectoria</button>
+                  <button onClick={generate} disabled={!targetEvaluado}>Generar informe anual</button>
                 </article>
               </div>
               {links && (
@@ -2588,6 +2594,8 @@ function AdviseeDetail({ token, advisee, advisees, onBack, onNavigate }) {
   const [nuevaNota, setNuevaNota] = useState("");
   const [guardandoNota, setGuardandoNota] = useState(false);
   const [notaError, setNotaError] = useState("");
+  const [generandoBorrador, setGenerandoBorrador] = useState(false);
+  const [borradorError, setBorradorError] = useState("");
 
   useEffect(() => {
     const apply = (data) => setAccesoIndividual(data.activo || false);
@@ -2616,6 +2624,37 @@ function AdviseeDetail({ token, advisee, advisees, onBack, onNavigate }) {
     } catch {
     } finally {
       setTogglingAccesoIndividual(false);
+    }
+  }
+
+  // Genera el borrador de informe con Claude y lo descarga directamente (sin pantalla intermedia).
+  async function descargarBorrador() {
+    setGenerandoBorrador(true);
+    setBorradorError("");
+    try {
+      const data = await apiRequest("/api/generar", {
+        token,
+        method: "POST",
+        body: { evaluado: advisee.nombre },
+      });
+      const path = data.docxAnualUrl;
+      if (!path) throw new Error("No se generó el documento.");
+      const response = await fetch(apiUrl(path), { headers: { Authorization: `Bearer ${token}` } });
+      if (!response.ok) {
+        const d = await response.json().catch(() => ({}));
+        throw new Error(d.error || "No se pudo descargar el archivo.");
+      }
+      const blob = await response.blob();
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = `informe_${advisee.nombre.replace(/\s+/g, "_")}.docx`;
+      link.click();
+      URL.revokeObjectURL(url);
+    } catch (err) {
+      setBorradorError(err.message);
+    } finally {
+      setGenerandoBorrador(false);
     }
   }
 
@@ -2694,9 +2733,10 @@ function AdviseeDetail({ token, advisee, advisees, onBack, onNavigate }) {
             </button>
             {gestionOpen && (
               <div className="advisee-gestion">
-                <button className="secondary" onClick={() => onNavigate({ type: "informes-advisee", advisee, from: "advisee-detail", advisees })}>
-                  Ver borrador de informe generado por Claude
+                <button className="secondary" onClick={descargarBorrador} disabled={generandoBorrador}>
+                  {generandoBorrador ? "Generando borrador..." : "Descargar borrador de informe generado por Claude"}
                 </button>
+                {borradorError && <p className="form-error">{borradorError}</p>}
                 <button className="secondary" onClick={() => onNavigate({ type: "subir-informe", advisee, from: "advisee-detail", advisees })}>
                   Subir informe final
                 </button>
@@ -2828,7 +2868,7 @@ function MisProyectosActivosPage({ token, user, onBack }) {
         <button className="link-button" onClick={onBack}>← Volver</button>
       </nav>
 
-      <div style={{ flex: 1, maxWidth: 880, width: "100%", paddingTop: 40, paddingBottom: 48 }}>
+      <div style={{ flex: 1, width: "100%", paddingTop: 40, paddingBottom: 48 }}>
         <p className="eyebrow">Gestión de proyecto</p>
         <h1 style={{ marginBottom: 28 }}>Mis proyectos en activo</h1>
 
@@ -3019,7 +3059,7 @@ function ActivarEvaluacionesProyectoPage({ token, user, onBack, onActivado }) {
         <button className="link-button" onClick={onBack}>← Volver</button>
       </nav>
 
-      <div style={{ flex: 1, maxWidth: 880, width: "100%", margin: "0 auto", paddingTop: 40, paddingBottom: 48 }}>
+      <div style={{ flex: 1, width: "100%", paddingTop: 40, paddingBottom: 48 }}>
         <p className="eyebrow">Gestión de proyecto</p>
         <h1>Activar evaluaciones</h1>
         <p className="fine" style={{ marginTop: 10, color: "rgba(0,0,0,.6)" }}>
@@ -3233,7 +3273,7 @@ function EvaluacionesProyectoPage({ token, user, proyectos, onBack, onNavigate, 
         <button className="link-button" onClick={onBack}>← Volver</button>
       </nav>
 
-      <div style={{ flex: 1, maxWidth: 980, width: "100%", paddingTop: 40, paddingBottom: 48 }}>
+      <div style={{ flex: 1, width: "100%", paddingTop: 40, paddingBottom: 48 }}>
         <p className="eyebrow">Evaluación de proyecto</p>
         <h1 style={{ marginBottom: 24 }}>{proyectoSeleccionado || "Evaluaciones por proyectos"}</h1>
 
@@ -3658,9 +3698,6 @@ function App() {
         onNavigate={navigate}
       />
     );
-  }
-  if (page?.type === "informes-advisee") {
-    return <InformesAdvisee token={token} advisee={page.advisee} onBack={backTo(page)} />;
   }
   if (page?.type === "mis-objetivos") {
     return <MisObjetivosPage token={token} persona={user?.persona || user?.username || ""} onBack={() => navigate(null)} />;

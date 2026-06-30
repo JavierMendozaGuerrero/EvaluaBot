@@ -68,6 +68,7 @@ from .ca_reviews import guardar_nota_ca_web, obtener_resumen_advisee_para_ca
 from .personal_eval import notificar_urgencia_personal_web
 from .reports import generar_archivo_trayectoria, generar_archivos_informe
 from .skill_informes_anual import generar_informe_anual, obtener_empleados_evaluacion_anual
+from . import eval_anual_sesion as eval_sesion
 from .skill_opiniones_ca import generar_resumen_opiniones_ca
 from .users import (
     autenticar_usuario,
@@ -143,6 +144,17 @@ class ApiHandler(BaseHTTPRequestHandler):
             return obtener_sesion_por_token(auth.split(" ", 1)[1].strip())
         token_query = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query).get("token", [""])[0]
         return obtener_sesion_por_token(token_query)
+
+    def _exigir_acceso_advisee(self, sesion, evaluado):
+        """Lanza PermissionError si el CA de la sesión no tutela a `evaluado` (admin pasa siempre)."""
+        if sesion.get("is_admin"):
+            return
+        advisees_ca = obtener_advisees(
+            sesion.get("persona", ""),
+            ca_aliases=[sesion.get("username", ""), sesion.get("email", "")],
+        )
+        if normalizar_nombre(evaluado) not in [normalizar_nombre(a) for a in advisees_ca]:
+            raise PermissionError("Solo el CA de esta persona (o un administrador) puede acceder.")
 
     def do_GET(self):
         parsed = urllib.parse.urlparse(self.path)
@@ -392,6 +404,32 @@ class ApiHandler(BaseHTTPRequestHandler):
                     return
                 estado = obtener_estado_evaluaciones_proyecto(proyecto)
                 self.responder_json({"estado": estado})
+                return
+            if ruta.startswith("/api/eval-anual/"):
+                sesion = self.sesion_actual()
+                if not sesion:
+                    raise PermissionError("Inicia sesión para acceder.")
+                qp = urllib.parse.parse_qs(parsed.query)
+                evaluado = qp.get("evaluado", [""])[0].strip()
+                if not evaluado:
+                    self.responder_json({"error": "Falta el parámetro evaluado."}, 400)
+                    return
+                self._exigir_acceso_advisee(sesion, evaluado)
+                if ruta == "/api/eval-anual/estado":
+                    self.responder_json(eval_sesion.estado_sesion(evaluado))
+                    return
+                if ruta == "/api/eval-anual/evidencia":
+                    bloque = int(qp.get("bloque", ["0"])[0] or 0)
+                    self.responder_json(eval_sesion.obtener_evidencia(evaluado, bloque))
+                    return
+                if ruta == "/api/eval-anual/dimension":
+                    clave = qp.get("clave", [""])[0].strip()
+                    self.responder_json(eval_sesion.obtener_dimension(evaluado, clave))
+                    return
+                if ruta == "/api/eval-anual/log":
+                    self.responder_json(eval_sesion.log_auditoria(evaluado))
+                    return
+                self.responder_json({"error": "Ruta no encontrada."}, 404)
                 return
             if ruta.startswith("/api/files/"):
                 self.servir_archivo_protegido(ruta.removeprefix("/api/files/"), parsed.query)
@@ -658,6 +696,39 @@ class ApiHandler(BaseHTTPRequestHandler):
                     "docxUrl": self.url_archivo(f"informe_anual_{slug}.docx", evaluado),
                     "htmlUrl": self.url_archivo(f"informe_anual_{slug}.html", evaluado),
                 })
+                return
+            if ruta.startswith("/api/eval-anual/"):
+                evaluado = (datos.get("evaluado", "") or "").strip()
+                if not evaluado:
+                    self.responder_json({"error": "Falta el campo evaluado."}, 400)
+                    return
+                self._exigir_acceso_advisee(sesion, evaluado)
+                if ruta == "/api/eval-anual/iniciar":
+                    self.responder_json(eval_sesion.iniciar_sesion(evaluado, cargo=datos.get("cargo", "").strip()))
+                    return
+                if ruta == "/api/eval-anual/confirmar-identidad":
+                    self.responder_json(eval_sesion.confirmar_identidad(evaluado))
+                    return
+                if ruta == "/api/eval-anual/responder":
+                    self.responder_json(eval_sesion.responder_dimension(
+                        evaluado, datos.get("clave", "").strip(), datos.get("texto", "")))
+                    return
+                if ruta == "/api/eval-anual/fusionar":
+                    self.responder_json(eval_sesion.sugerir_fusion(evaluado, datos.get("clave", "").strip()))
+                    return
+                if ruta == "/api/eval-anual/decidir":
+                    self.responder_json(eval_sesion.decidir_dimension(
+                        evaluado, datos.get("clave", "").strip(),
+                        datos.get("eleccion", "").strip(), datos.get("texto", "")))
+                    return
+                if ruta == "/api/eval-anual/finalizar":
+                    res = eval_sesion.finalizar_sesion(evaluado)
+                    slug_fin = slug_archivo(evaluado)
+                    res["htmlUrl"] = self.url_archivo(f"informe_anual_{slug_fin}.html", evaluado)
+                    res["docxUrl"] = self.url_archivo(f"informe_anual_{slug_fin}.docx", evaluado)
+                    self.responder_json(res)
+                    return
+                self.responder_json({"error": "Ruta no encontrada."}, 404)
                 return
             if ruta == "/api/acceso-advisees":
                 activo = datos.get("activo", False)

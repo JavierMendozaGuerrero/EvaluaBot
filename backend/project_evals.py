@@ -732,6 +732,66 @@ def obtener_evals_completadas_proyecto(evaluador: str, proyecto: str) -> list:
     return completadas
 
 
+def obtener_evaluaciones_proyecto_por_evaluado(evaluado: str) -> list[dict]:
+    """Devuelve TODAS las evaluaciones de proyecto recibidas por `evaluado`, de todos los proyectos.
+
+    Recorre la jerarquía "Evaluaciones por proyecto" → {proyecto} → {evaluado} → BD interna.
+    Cada elemento: {proyecto, evaluador, tipo, respuestas, fecha (YYYY-MM-DD), page_id, url}.
+    """
+    raiz_id = _obtener_o_crear_pagina_raiz_resultados()
+    if not raiz_id:
+        return []
+    objetivo = normalizar_nombre(evaluado)
+    resultado: list[dict] = []
+    try:
+        for proyecto_page in _listar_child_pages_proyecto(raiz_id):
+            proyecto = proyecto_page["title"]
+            persona_page_id = None
+            for persona_page in _listar_child_pages_proyecto(proyecto_page["id"]):
+                if normalizar_nombre(persona_page["title"]) == objetivo:
+                    persona_page_id = persona_page["id"]
+                    break
+            if not persona_page_id:
+                continue
+            db_id = _buscar_bbdd_en_pagina_id(persona_page_id, _NOMBRE_BBDD_EVALUACION)
+            if not db_id:
+                continue
+            cursor = None
+            while True:
+                kwargs: dict = {"page_size": 100}
+                if cursor:
+                    kwargs["start_cursor"] = cursor
+                resp = _query_bbdd(db_id, **kwargs)
+                for fila in resp.get("results", []):
+                    props = fila.get("properties", {})
+                    evaluador = "".join(
+                        p.get("plain_text", "") for p in (props.get("Evaluador") or {}).get("rich_text", [])
+                    ).strip()
+                    tipo = ((props.get("Tipo") or {}).get("select") or {}).get("name", "")
+                    respuestas = "".join(
+                        p.get("plain_text", "") for p in (props.get("Respuestas") or {}).get("rich_text", [])
+                    ).strip()
+                    fecha = ((props.get("Fecha") or {}).get("date") or {}).get("start", "")
+                    if not (respuestas or evaluador):
+                        continue
+                    resultado.append({
+                        "proyecto": proyecto,
+                        "evaluador": evaluador,
+                        "tipo": tipo,
+                        "respuestas": respuestas,
+                        "fecha": (fecha or "")[:10],
+                        "page_id": fila.get("id", ""),
+                        "url": fila.get("url", ""),
+                    })
+                if not resp.get("has_more"):
+                    break
+                cursor = resp.get("next_cursor")
+    except Exception:
+        logging.exception("Error leyendo evaluaciones de proyecto de '%s'", evaluado)
+    resultado.sort(key=lambda x: x.get("fecha", ""))
+    return resultado
+
+
 def obtener_proyectos_manager(manager_nombre: str) -> list:
     """Proyectos activos activados por este manager, con su equipo."""
     db_id = _obtener_o_crear_bbdd_activaciones()

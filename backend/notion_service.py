@@ -1226,6 +1226,132 @@ def guardar_barbecho_en_notion(nombre: str, area: str, labores: str) -> bool:
         return False
 
 
+def obtener_barbecho_por_empleado(nombre: str) -> list[dict]:
+    """Registros de barbecho (labores en periodo sin proyecto) de un empleado.
+
+    Cada elemento: {area, labores, fecha (YYYY-MM-DD), page_id, url}, ordenado por fecha.
+    """
+    if not nombre:
+        return []
+    objetivo = normalizar_nombre(nombre)
+    registros: list[dict] = []
+    try:
+        db_id = _obtener_o_crear_bbdd_continuas()
+        if not db_id:
+            return []
+        cursor = None
+        while True:
+            kwargs: dict = {"page_size": 100}
+            if cursor:
+                kwargs["start_cursor"] = cursor
+            resp = _query_bbdd(db_id, **kwargs)
+            for fila in resp.get("results", []):
+                props = fila.get("properties", {})
+                empleado = _texto_propiedad(props, "Empleado")
+                if normalizar_nombre(empleado) != objetivo:
+                    continue
+                labores = _texto_propiedad(props, "Labores")
+                area = _texto_propiedad(props, "Area")
+                fecha = ((props.get("Fecha") or {}).get("date") or {}).get("start", "")
+                if not labores:
+                    continue
+                registros.append({
+                    "area": area,
+                    "labores": labores,
+                    "fecha": (fecha or "")[:10],
+                    "page_id": fila.get("id", ""),
+                    "url": fila.get("url", ""),
+                })
+            if not resp.get("has_more"):
+                break
+            cursor = resp.get("next_cursor")
+    except Exception:
+        logging.exception("Error leyendo barbecho de '%s'", nombre)
+    registros.sort(key=lambda x: x.get("fecha", ""))
+    return registros
+
+
+_cache_bbdd_sesiones_anual: dict = {"db_id": None}
+
+
+def _obtener_o_crear_bbdd_sesiones_anual() -> str | None:
+    with lock:
+        db_id = _cache_bbdd_sesiones_anual["db_id"]
+    if db_id:
+        return db_id
+    parent = _parent_bbdd_referencia()
+    titulo = "Log evaluacion anual asistida"
+    try:
+        resultado = notion.search(query=titulo, filter={"value": _tipo_objeto_busqueda_bbdd(), "property": "object"}, page_size=50)
+        for bbdd in resultado.get("results", []):
+            if _extraer_titulo_bbdd(bbdd) == titulo and _coincide_parent_bbdd(bbdd, parent):
+                found_id = _data_source_id(bbdd)
+                with lock:
+                    _cache_bbdd_sesiones_anual["db_id"] = found_id
+                return found_id
+        props = {
+            "Name": {"title": {}},
+            "Advisee": {"rich_text": {}},
+            "CA": {"rich_text": {}},
+            "Anio": {"number": {}},
+            "Dimension": {"rich_text": {}},
+            "ValoracionCA": {"rich_text": {}},
+            "ValoracionIA": {"rich_text": {}},
+            "Eleccion": {"select": {}},
+            "Divergencia": {"checkbox": {}},
+            "TextoFinal": {"rich_text": {}},
+            "Fecha": {"date": {}},
+        }
+        if _usa_data_sources():
+            nueva = notion.databases.create(
+                parent=parent,
+                title=[{"type": "text", "text": {"content": titulo}}],
+                initial_data_source={"title": [{"type": "text", "text": {"content": titulo}}], "properties": props},
+            )
+            nueva = notion.databases.retrieve(database_id=nueva["id"])
+        else:
+            nueva = notion.databases.create(parent=parent, title=[{"type": "text", "text": {"content": titulo}}], properties=props)
+        new_id = _data_source_id(nueva)
+        with lock:
+            _cache_bbdd_sesiones_anual["db_id"] = new_id
+        logging.info("Base de datos '%s' creada", titulo)
+        return new_id
+    except Exception:
+        logging.exception("No se pudo obtener/crear la BD del log de evaluación anual")
+        return None
+
+
+def guardar_log_evaluacion_anual(advisee: str, ca: str, anio, entradas: list[dict]) -> bool:
+    """Escribe en Notion el log de auditoría (decisiones CA vs IA). Best-effort, no rompe el flujo."""
+    try:
+        db_id = _obtener_o_crear_bbdd_sesiones_anual()
+        if not db_id:
+            return False
+        fecha = datetime.now(timezone.utc).isoformat()
+
+        def _rt(texto):
+            return [{"type": "text", "text": {"content": (texto or "")[:2000]}}]
+
+        for e in entradas:
+            _crear_pagina_en_bbdd(db_id, {
+                "Name": {"title": [{"type": "text", "text": {"content": f"{advisee} · {e.get('etiqueta', '')}"[:200]}}]},
+                "Advisee": {"rich_text": _rt(advisee)},
+                "CA": {"rich_text": _rt(ca)},
+                "Anio": {"number": int(anio) if str(anio).isdigit() else None},
+                "Dimension": {"rich_text": _rt(e.get("etiqueta", ""))},
+                "ValoracionCA": {"rich_text": _rt(e.get("caTexto", ""))},
+                "ValoracionIA": {"rich_text": _rt(e.get("claudeTexto", ""))},
+                "Eleccion": {"select": {"name": e.get("eleccion", "") or "—"}},
+                "Divergencia": {"checkbox": bool(e.get("divergencia"))},
+                "TextoFinal": {"rich_text": _rt(e.get("textoFinal", ""))},
+                "Fecha": {"date": {"start": fecha}},
+            })
+        return True
+    except Exception:
+        logging.exception("No se pudo guardar el log de evaluación anual de '%s'", advisee)
+        return False
+
+
 def _texto_rich_text(propiedades, nombre_propiedad):
     items = propiedades.get(nombre_propiedad, {}).get("rich_text", [])
     return items[0]["text"]["content"] if items else ""
@@ -1913,6 +2039,8 @@ def obtener_evaluaciones_de_bbdd(database_id, evaluado):
                     "q2": q2_act,
                     "relacion": relacion,
                     "fecha": fecha,
+                    "page_id": pagina.get("id", ""),
+                    "url": pagina.get("url", ""),
                 })
             if resultado.get("has_more"):
                 cursor = resultado.get("next_cursor")
@@ -2172,7 +2300,8 @@ def obtener_opiniones_ca_por_advisee(ca_nombre: str, advisee: str, ca_aliases=No
                 fecha = (props.get("Fecha", {}).get("date") or {}).get("start", "")
                 if not any((fecha, ca_texto, opinion, resumen)):
                     continue
-                opiniones.append({"fecha": fecha, "ca": ca_texto, "opinion": opinion, "resumen_advisee": resumen})
+                opiniones.append({"fecha": fecha, "ca": ca_texto, "opinion": opinion, "resumen_advisee": resumen,
+                                  "page_id": fila.get("id", ""), "url": fila.get("url", "")})
             if not resp.get("has_more"):
                 break
             cursor = resp.get("next_cursor")
@@ -2197,7 +2326,8 @@ def obtener_opiniones_ca_por_advisee(ca_nombre: str, advisee: str, ca_aliases=No
                 ca_texto = texto_alias(props, ("CA", "Evaluador", "CA que le evalua", "CA que le evalúa"))
                 if not any((fecha, ca_texto, opinion, resumen)):
                     continue
-                opiniones.append({"fecha": fecha, "ca": ca_texto or ca_nombre, "opinion": opinion, "resumen_advisee": resumen})
+                opiniones.append({"fecha": fecha, "ca": ca_texto or ca_nombre, "opinion": opinion, "resumen_advisee": resumen,
+                                  "page_id": fila.get("id", ""), "url": fila.get("url", "")})
             if not resp.get("has_more"):
                 break
             cursor = resp.get("next_cursor")
@@ -3354,7 +3484,8 @@ def obtener_comentarios_personales(nombre: str) -> list[dict]:
                 fecha_prop = props.get("Fecha", {}).get("date") or {}
                 fecha = (fecha_prop.get("start") or "")[:10]
                 if normalizar_nombre(autor) == nombre_norm and comentario:
-                    resultados.append({"autor": autor, "fecha": fecha, "comentario": comentario})
+                    resultados.append({"autor": autor, "fecha": fecha, "comentario": comentario,
+                                       "page_id": fila.get("id", ""), "url": fila.get("url", "")})
             if not resp.get("has_more"):
                 break
             cursor = resp.get("next_cursor")

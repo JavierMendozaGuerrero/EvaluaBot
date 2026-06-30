@@ -11,13 +11,26 @@ description: >
 ## Qué hace este skill
 
 Genera automáticamente informes de evaluación anual en `.docx` (Word) y `.html` por empleado.
-**No requiere ninguna base de Notion adicional** — usa las bases ya existentes:
+**No requiere ninguna base de Notion adicional** — usa las bases ya existentes.
 
-| Base de Notion | Qué contiene |
-|----------------|-------------|
-| `Evaluaciones - {nombre}` | Evaluaciones mensuales del empleado |
-| `Opiniones - {nombre}` | Opiniones del CA sobre el advisee |
-| `Objetivos empleados` | Objetivos del empleado (también revela el nombre del CA) |
+### Las 5 fuentes (cada una con su prefijo de cita)
+
+| Fuente | Cita | Lectura | Notas |
+|--------|------|---------|-------|
+| Opiniones del CA | `[O#]` | `obtener_opiniones_ca_por_advisee` | Notas del CA + resúmenes del chatbot (campos `opinion` y `resumen_advisee`) |
+| Evaluaciones mensuales | `[E#]` | `obtener_evaluaciones_por_evaluado` | Con jerarquía líder/equipo/sin nivel |
+| Evaluaciones de proyecto | `[P#]` | `obtener_evaluaciones_proyecto_por_evaluado` (`project_evals.py`) | Todas las recibidas, de todos los proyectos |
+| Seguimiento personal | `[S#]` | `obtener_comentarios_personales` | Comentarios personales con autor y fecha |
+| Barbecho | `[B#]` | `obtener_barbecho_por_empleado` (`notion_service.py`) | Labores sin proyecto → **casi siempre `contribution_to_firm`** |
+
+`Objetivos empleados` (`obtener_objetivos_persona`) sigue revelando el nombre del CA y alimenta la sección de objetivos.
+
+### Evolución temporal
+
+El contexto va **en orden cronológico** y cada línea lleva su **mes** (`[E1] [feb 25]`). El prompt
+instruye a Claude a describir la **trayectoria, no la media** ("febrero ≠ noviembre"): más peso a lo
+reciente, citar ambos momentos cuando algo mejora/empeora, y distinguir entre proyectos. La ponderación
+la razona Claude (el código solo ordena y etiqueta), para no imponer un sesgo ciego.
 
 ---
 
@@ -29,20 +42,53 @@ Notion
   ├── "Opiniones - {nombre}"     → opiniones del CA (resumen + opinión por fecha)
   └── "Objetivos empleados"      → objetivos + nombre del CA
           ↓
-  obtener_datos_empleado_anual()
-  ├── obtener_evaluaciones_por_evaluado(nombre)
-  ├── obtener_objetivos(nombre)           ← también extrae el nombre del CA
-  ├── obtener_ca_de_empleado(nombre)      ← fallback si objetivos no lo tiene
-  └── obtener_opiniones_ca_por_advisee(ca, nombre)
+  obtener_datos_empleado_anual()          ← recopila las 5 fuentes
+  ├── obtener_evaluaciones_por_evaluado(nombre)          [E#]
+  ├── obtener_opiniones_ca_por_advisee(ca, nombre)       [O#]
+  ├── obtener_evaluaciones_proyecto_por_evaluado(nombre) [P#]
+  ├── obtener_comentarios_personales(nombre)             [S#]
+  ├── obtener_barbecho_por_empleado(nombre)              [B#]
+  └── obtener_objetivos_persona(nombre)   ← objetivos + nombre del CA
           ↓
   interpretar_evaluaciones_anual()        ← Claude API
-  ├── Formatea contexto: opiniones CA + evaluaciones agrupadas por jerarquía
-  └── Devuelve JSON con bullets por dimensión
+  ├── _formatear_contexto() → (texto, fuentes)   ← cada dato lleva un id citable [E3]/[O1]
+  ├── Claude devuelve JSON con bullets, cada uno citando su fuente [E3][E7]
+  ├── _validar_citas()      ← descarta por código bullets sin cita válida (anti-invención)
+  └── _verificar_soporte()  ← 2ª llamada (auditor): marca afirmaciones no respaldadas (avisa)
           ↓
-  guardar_informe_anual_word()            → informe_anual_{slug}.docx
-  guardar_informe_anual_html()            → informe_anual_{slug}.html
+  guardar_informe_anual_word()            → informe_anual_{slug}.docx   (citas = hyperlinks a Notion)
+  guardar_informe_anual_html()            → informe_anual_{slug}.html   (citas clicables + panel de revisión)
   _escribir_cache()                       → informe_anual_{slug}_cache.json
 ```
+
+### Trazabilidad y control (anti-invención)
+
+El sistema garantiza de forma **estructural** (no solo por prompt) que el informe no contenga
+afirmaciones inventadas, y deja siempre la última palabra al CA:
+
+1. **IDs citables**: cada evaluación/opinión del contexto se etiqueta `[E3]`/`[O1]` y se mapea a su
+   `url` de Notion (`fuentes`). Las evaluaciones y opiniones arrastran ahora `page_id` + `url`
+   desde `notion_service`.
+2. **Citas obligatorias**: el prompt exige que cada bullet termine con la(s) etiqueta(s) de la(s)
+   que proviene. `temperature=0` para imparcialidad/determinismo.
+3. **Validación por código** (`_validar_citas`): un bullet sin cita válida **se elimina**; las citas
+   a ids inexistentes se borran. Es un `if`, no confianza en el modelo → la invención no puede colar.
+   Lo eliminado se registra en `comentarios["_bullets_descartados"]`.
+4. **Pasada de verificación** (`_verificar_soporte`): una 2ª llamada audita si cada cita *realmente*
+   respalda la afirmación. Política: **avisar, no borrar** → los hallazgos van a
+   `comentarios["_avisos_verificacion"]`; el CA decide.
+5. **Citas clicables a evidencia interna (sin Notion)**: como el CA/advisee no tiene acceso a Notion,
+   cada cita enlaza a un **anexo "Fuentes / Evidencia"** dentro del propio informe que muestra el dato
+   en bruto (tipo, proyecto, evaluador, fecha, texto). En HTML es un ancla `#fuente-E3` (con resaltado
+   al saltar); en Word es un enlace interno a un **bookmark** del anexo. Todo autocontenido y offline.
+6. **Panel de revisión** (solo en el borrador HTML): lista avisos + bullets descartados para que el
+   CA los revise antes de publicar. No aparece en el `.docx`.
+
+### Estado borrador → publicado (ya existente)
+
+- `informe_anual_{slug}.*` = **borrador**: solo lo ven el CA y admin ([api_server.py] `servir_archivo_protegido`).
+- `informe_final_{slug}_{ts}.*` = **publicado**: el CA lo sube editado vía `/api/subir-informe-final`;
+  lo ve el advisee solo cuando el CA activa el acceso. El control del CA es por diseño.
 
 **Caché automática**: si los datos de Notion no han cambiado (misma huella SHA-256),
 se reutilizan los archivos ya generados sin llamar a Claude ni regenerar el documento.
@@ -84,6 +130,12 @@ _REQUIERE_LIDERAZGO = {"sr associate", "manager", "director"}
 
 Claude usa estos criterios para contextualizar el feedback según el cargo del empleado.
 Lo que es positivo para un Analyst puede ser lo mínimo esperado para un Manager.
+
+> ⚠️ **Los criterios se cargan en vivo desde Notion** (`obtener_criterios_evaluacion(grupo)`), así que
+> pueden cambiar según lo que haya en Notion. La lista de abajo y el diccionario `_CRITERIOS_DTI` del
+> código son solo **fallback/referencia** (grupo "Negocio") cuando Notion no devuelve criterios.
+> Los criterios **solo calibran** el feedback: **no** son fuentes citables — las citas `[E#]/[O#]`
+> siempre apuntan a evaluaciones/opiniones, nunca a un criterio.
 
 ### Gestión del proyecto
 
@@ -273,6 +325,8 @@ Lo que es positivo para un Analyst puede ser lo mínimo esperado para un Manager
     "satisfaccion":       4,                         # sobre 5
     "mejor_aspecto":      "Texto libre",
     "peor_aspecto":       "Texto libre",
+    "page_id":            "notion-page-id",          # para trazabilidad
+    "url":                "https://notion.so/...",   # destino de la cita clicable
 }
 ```
 
@@ -305,14 +359,15 @@ Las evaluaciones se agrupan por jerarquía al formatear el contexto para Claude:
 
 ## Claude API: formato de respuesta esperado
 
-Claude recibe el contexto formateado y devuelve **JSON puro** (sin bloques markdown):
+Claude recibe el contexto formateado (cada dato precedido de su id `[E3]`/`[O1]`) y devuelve
+**JSON puro** (sin bloques markdown). **Cada bullet debe terminar con su(s) cita(s)**:
 
 ```json
 {
   "gestion_proyecto": {
-    "lider":     "bullet sobre lo que dice su superior\nbullet 2",
-    "equipo":    "bullet sobre lo que dicen iguales/subordinados",
-    "sin_nivel": "bullet de evaluaciones sin jerarquía especificada"
+    "lider":     "entrega su trabajo a tiempo [E3]\nse responsabiliza de sus tareas [E7]",
+    "equipo":    "ayuda a sus compañeros [E4][E5]",
+    "sin_nivel": "bullet de evaluaciones sin jerarquía [E9]"
   },
   "calidad_tecnica":   { ... },
   "trabajo_en_equipo": { ... },
@@ -347,27 +402,25 @@ Sin nivel especificado:
 
 ---
 
-## Diseño del documento Word
+## Diseño del documento Word — réplica de la plantilla oficial PDF
 
-- **Márgenes**: 1.76 cm todos los lados
-- **Fuente**: Arial, 9pt por defecto
-- **Cabecera**: `IGENERIS — EVALUACIÓN ANUAL {año}` centrado, 14pt bold
-- **Tabla datos empleado**: 2 columnas (etiqueta | valor), bordes simples
-- **Tablas de dimensiones**: 3 columnas:
-  - Dimensión: 3.50 pulgadas
-  - Nota: 0.60 pulgadas (centrada, siempre `X`)
-  - Comentarios: resto del ancho (~2.78 pulgadas)
-- **Tabla Resultado**: 2 columnas — nota global (`X / 5`) | texto de valoración
-- **Sección Objetivos**: texto con bullets, con metadatos (CA que los definió + fecha)
+El `.docx` reproduce la plantilla "EVALUACIÓN ANUAL" de IGENERIS. Los campos que el sistema no
+tiene (NOTA por dimensión, CA '26, salarios, % variable, promoción, deadlines) se dejan **en blanco**
+para que el CA los rellene, igual que en la plantilla impresa.
 
-### Anchos de columna
+- **Márgenes**: 1.76 cm. **Fuente**: Arial (la marca usa otra tipografía; sin el `.ttf` se usa Arial).
+- **Año evaluado** = `año_generación − 1` (p. ej. genera en 2026 → evalúa 2025). HTML y Word usan el mismo criterio.
+- **Marca + título**: `.Igeneris` (22pt bold, centrado) + `EVALUACIÓN ANUAL` (13pt bold subrayado).
+- **Tabla datos (4 col)**: `Empleado | … | Fecha | …` · `CA '25 | … | Posición actual | …` · `CA '26 | (blanco) | Salario actual | (blanco)`.
+- **`CALIFICACIÓN {año}`** → tabla 3 col: **`PROYECTOS | NOTA | COMENTARIOS`**.
+  - PROYECTOS 1.6" · NOTA 0.6" (en blanco) · COMENTARIOS el resto (bullets de Claude con citas).
+  - Dimensiones con la etiqueta del PDF (`_DIMS_PDF`); Liderazgo se añade si el cargo lo requiere.
+- **Notas finales / retribución** (tabla 4 col): `Nota final Proyectos / Contrib. To the firm (10%) / Consecución Objetivos corp.` + columna `Variable (60/30%)` + `Total Variable '25 =`.
+- **`RESULTADO EVAL '25`** (tabla 5 col): `PROMOCIÓN | _ | POSICIÓN '26 | _ | Nuevo salario fijo =`.
+- **`OPORTUNIDADES DE MEJORA / OBJETIVOS '26`**: tabla 2 col con cabecera `Deadline`; filas numeradas 1-2-3 (prerrellena con objetivos de Notion si los hay).
 
-```python
-_CONTENT_W_IN = 9906 / 1440   # ~6.88 pulgadas (A4 con márgenes 1.76 cm)
-_W_DIM  = 3.50
-_W_NOTA = 0.60
-_W_COM  = _CONTENT_W_IN - _W_DIM - _W_NOTA   # ~2.78
-```
+> Las celdas NOTA y de retribución se dejan vacías a propósito (las completa el CA). Las citas `[E#]`
+> clicables **sí** se mantienen en el Word (es el borrador de trabajo del CA).
 
 ---
 
@@ -376,9 +429,11 @@ _W_COM  = _CONTENT_W_IN - _W_DIM - _W_NOTA   # ~2.78
 La caché evita rellamar a Claude y regenerar si los datos no han cambiado.
 
 ```python
-# Huella SHA-256 de: versión + opiniones_ca + evaluaciones
+# Huella SHA-256 de: versión + las 5 fuentes + cargo + criterios (Notion)
 huella = hashlib.sha256(
-    json.dumps({"v": 2, "opiniones": ..., "evaluaciones": ...}, sort_keys=True).encode()
+    json.dumps({"v": 4, "opiniones": ..., "evaluaciones": ..., "evals_proyecto": ...,
+                "seguimiento": ..., "barbecho": ..., "cargo": ..., "criterios": ...},
+               sort_keys=True).encode()
 ).hexdigest()
 
 # Archivos
@@ -388,8 +443,11 @@ informe_anual_{slug}_cache.json   # {"huella": "abc123..."}
 Si `huella == cache["huella"]` y existen `.docx` y `.html` → se reutilizan.
 Si no → se regenera todo y se actualiza la caché.
 
-> **Nota**: la caché solo cubre `opiniones_ca` y `evaluaciones`. Cambios en objetivos o cargo
-> no la invalidan — hay que borrar el `.json` de caché manualmente si se cambian esos campos.
+> **Nota (v4)**: la huella incluye las **5 fuentes** (`opiniones_ca`, `evaluaciones`, `evals_proyecto`,
+> `seguimiento`, `barbecho`), **`cargo`** y **`criterios`** (el texto DTI renderizado desde Notion, que
+> varía por grupo Negocio/MiddleOffice/Palantir). Por tanto, cambiar cualquier fuente, el cargo o los
+> criterios **regenera el informe automáticamente**. El texto de criterios se computa una sola vez en
+> `generar_informe_anual` y se reutiliza para la huella y el prompt. Solo cambios en **objetivos** siguen sin invalidar.
 
 ---
 
@@ -416,9 +474,14 @@ slug = generar_informe_anual(evaluado="Alonso Ballesteros", cargo="Analyst")
 | Función | Qué hace |
 |---------|----------|
 | `obtener_empleados_evaluacion_anual()` | Lista empleados con base "Evaluaciones - {nombre}" en Notion |
-| `obtener_datos_empleado_anual(nombre)` | Recopila evaluaciones, opiniones CA y objetivos desde Notion |
-| `_formatear_contexto(emp_data)` | Formatea los datos en texto estructurado para el prompt de Claude, agrupando por jerarquía |
-| `interpretar_evaluaciones_anual(emp_data, cargo)` | Llama a Claude API y parsea el JSON de respuesta |
+| `obtener_datos_empleado_anual(nombre)` | Recopila las **5 fuentes** + objetivos desde Notion |
+| `_mes_tag(fecha)` | `'2025-03-15' → 'mar 25'` para etiquetar la evolución temporal |
+| `_formatear_contexto(emp_data)` | Devuelve `(texto, fuentes)`: contexto cronológico con ids `[E/O/P/S/B#]` + mes, y mapa id→{url,label,texto} |
+| `_filtrar_bullets_citados(texto, fuentes, descartados)` | Conserva solo bullets con ≥1 cita válida; limpia citas inexistentes |
+| `_validar_citas(comentarios, fuentes)` | Aplica el filtro a todas las dimensiones; registra `_bullets_descartados` |
+| `_recolectar_afirmaciones(comentarios)` | Extrae cada bullet con sus citas para auditarlo |
+| `_verificar_soporte(comentarios, fuentes)` | 2ª llamada (auditor): devuelve avisos de afirmaciones no respaldadas |
+| `interpretar_evaluaciones_anual(emp_data, cargo)` | Orquesta: Claude → validación → verificación; adjunta `_fuentes` y avisos |
 | `guardar_informe_anual_word(emp_data, comentarios, cargo)` | Genera el `.docx` con python-docx |
 | `guardar_informe_anual_html(emp_data, comentarios, cargo)` | Genera el `.html` con estilos IGENERIS |
 | `generar_informe_anual(evaluado, cargo)` | Punto de entrada. Orquesta todo el flujo con caché |
@@ -432,6 +495,8 @@ slug = generar_informe_anual(evaluado="Alonso Ballesteros", cargo="Analyst")
 | `_dxb(cell)` | Aplica bordes simples negros a una celda |
 | `_dxw(cell, inches)` | Establece el ancho de una celda en pulgadas |
 | `_dxr(para, texto, ...)` | Añade un run de texto con estilo a un párrafo |
+| `_dx_hyperlink(para, url, texto, ...)` | Inserta un hyperlink real de Word (azul, subrayado) |
+| `_dxr_con_citas(para, texto, fuentes, ...)` | Renderiza texto convirtiendo los tokens `[E3]` en hyperlinks a Notion |
 | `_dxt(doc, texto)` | Añade un título de sección (bold, underline, 10pt) |
 | `_dx_bullets(cell, texto)` | Renderiza bullets planos en una celda |
 | `_dx_bullets_por_nivel(cell, contenido)` | Renderiza bullets agrupados por nivel jerárquico |
@@ -469,4 +534,5 @@ from . import config                 # config.CARPETA_WEB, config.IGENERIS_CSS
 | `RuntimeError: Falta ANTHROPIC_API_KEY` | API key no configurada o paquete no instalado | `pip install anthropic` + configurar `ANTHROPIC_API_KEY` |
 | `RuntimeError: Instala python-docx` | python-docx no instalado | `pip install python-docx` |
 | Claude devuelve bloques markdown | El modelo ignoró la instrucción | El código ya limpia ` ```json ` antes de parsear |
-| Caché no se invalida al cambiar cargo | La huella no incluye el cargo | Borrar manualmente `informe_anual_{slug}_cache.json` |
+| Bullet sin cita desaparece del informe | `_validar_citas` lo descartó por no citar fuente | Es el comportamiento esperado (anti-invención); aparece en el panel de revisión |
+| Caché no se invalida al cambiar objetivos | La huella no incluye objetivos | Borrar manualmente `informe_anual_{slug}_cache.json` (cargo y criterios sí se invalidan en v3) |

@@ -2759,6 +2759,12 @@ function AdviseeDetail({ token, advisee, advisees, onBack, onNavigate }) {
             </button>
             {gestionOpen && (
               <div className="advisee-gestion">
+                <button onClick={() => onNavigate({ type: "eval-anual", advisee, advisees, from: "advisee-detail" })}>
+                  Evaluación anual asistida
+                </button>
+                <button className="secondary" onClick={() => onNavigate({ type: "eval-anual-log", advisee, advisees, from: "advisee-detail" })}>
+                  Ver log de decisiones
+                </button>
                 <button className="secondary" onClick={descargarBorrador} disabled={generandoBorrador}>
                   {generandoBorrador ? "Generando borrador..." : "Descargar borrador de informe generado por Claude"}
                 </button>
@@ -3658,6 +3664,299 @@ function TopLoadingBar() {
   return null;
 }
 
+function EvaluacionAnualWizard({ token, advisee, onBack }) {
+  const nombre = (advisee && advisee.nombre) || advisee || "";
+  const [est, setEst] = useState(null);
+  const [step, setStep] = useState("loading"); // loading|identidad|evidencia|loop|resumen|hecho|error
+  const [error, setError] = useState("");
+  const [busy, setBusy] = useState(false);
+
+  const [bloqueIdx, setBloqueIdx] = useState(0);
+  const [evid, setEvid] = useState(null);
+
+  const [secIdx, setSecIdx] = useState(0);
+  const [dim, setDim] = useState(null);
+  const [caTexto, setCaTexto] = useState("");
+  const [fusionMode, setFusionMode] = useState(false);
+  const [fusionTexto, setFusionTexto] = useState("");
+  const [finUrls, setFinUrls] = useState(null);
+
+  // Iniciar / recuperar la sesión
+  useEffect(() => {
+    let alive = true;
+    apiRequest("/api/eval-anual/iniciar", { token, method: "POST", body: { evaluado: nombre } })
+      .then((data) => {
+        if (!alive) return;
+        setEst(data);
+        if (!data.identidadConfirmada) setStep("identidad");
+        else if (data.seccionesDecididas >= data.totalSecciones) setStep("resumen");
+        else {
+          const idx = data.secciones.findIndex((s) => !s.decidida);
+          setSecIdx(idx < 0 ? 0 : idx);
+          setStep("loop");
+        }
+      })
+      .catch((e) => { if (alive) { setError(e.message); setStep("error"); } });
+    return () => { alive = false; };
+  }, [token, nombre]);
+
+  // Cargar bloque de evidencia
+  useEffect(() => {
+    if (step !== "evidencia") return;
+    apiRequest(`/api/eval-anual/evidencia?evaluado=${encodeURIComponent(nombre)}&bloque=${bloqueIdx}`, { token })
+      .then(setEvid)
+      .catch((e) => setError(e.message));
+  }, [step, bloqueIdx, token, nombre]);
+
+  // Cargar la dimensión actual del loop
+  useEffect(() => {
+    if (step !== "loop" || !est) return;
+    const sec = est.secciones[secIdx];
+    if (!sec) return;
+    setDim(null); setCaTexto(""); setFusionMode(false); setFusionTexto(""); setError("");
+    apiRequest(`/api/eval-anual/dimension?evaluado=${encodeURIComponent(nombre)}&clave=${encodeURIComponent(sec.clave)}`, { token })
+      .then((d) => { setDim(d); setCaTexto(d.respuestaCa || ""); setFusionTexto(d.respuestaCa || d.claude || ""); })
+      .catch((e) => setError(e.message));
+  }, [step, secIdx, est, token, nombre]);
+
+  async function confirmarIdentidad() {
+    setBusy(true); setError("");
+    try {
+      await apiRequest("/api/eval-anual/confirmar-identidad", { token, method: "POST", body: { evaluado: nombre } });
+      setBloqueIdx(0); setStep("evidencia");
+    } catch (e) { setError(e.message); } finally { setBusy(false); }
+  }
+
+  async function responder() {
+    if (!caTexto.trim()) { setError("Escribe tu valoración antes de continuar."); return; }
+    setBusy(true); setError("");
+    try {
+      const d = await apiRequest("/api/eval-anual/responder", { token, method: "POST", body: { evaluado: nombre, clave: dim.clave, texto: caTexto } });
+      setDim(d); setFusionTexto(caTexto || d.claude || "");
+    } catch (e) { setError(e.message); } finally { setBusy(false); }
+  }
+
+  async function decidir(eleccion) {
+    setBusy(true); setError("");
+    try {
+      const body = { evaluado: nombre, clave: dim.clave, eleccion };
+      if (eleccion === "fusion") {
+        if (!fusionTexto.trim()) { setError("Escribe el texto de la fusión."); setBusy(false); return; }
+        body.texto = fusionTexto;
+      }
+      await apiRequest("/api/eval-anual/decidir", { token, method: "POST", body });
+      const e2 = await apiRequest(`/api/eval-anual/estado?evaluado=${encodeURIComponent(nombre)}`, { token });
+      setEst(e2);
+      const next = e2.secciones.findIndex((s) => !s.decidida);
+      if (next === -1) setStep("resumen"); else setSecIdx(next);
+    } catch (e) { setError(e.message); } finally { setBusy(false); }
+  }
+
+  async function finalizar() {
+    setBusy(true); setError("");
+    try {
+      const r = await apiRequest("/api/eval-anual/finalizar", { token, method: "POST", body: { evaluado: nombre } });
+      setFinUrls({ html: r.htmlUrl, docx: r.docxUrl });
+      setStep("hecho");
+    } catch (e) { setError(e.message); } finally { setBusy(false); }
+  }
+
+  async function sugerirFusion() {
+    setBusy(true); setError("");
+    try {
+      const r = await apiRequest("/api/eval-anual/fusionar", { token, method: "POST", body: { evaluado: nombre, clave: dim.clave } });
+      setFusionTexto(r.sugerencia || "");
+    } catch (e) { setError(e.message); } finally { setBusy(false); }
+  }
+
+  function abrirHtml(path) {
+    window.open(apiUrl(`${path}&token=${encodeURIComponent(token)}`), "_blank", "noopener,noreferrer");
+  }
+
+  const shell = (children) => (
+    <main className="page">
+      <nav className="nav">
+        <a className="brand" href="/"><img src="/src/logo.png" alt="igeneris" className="brand-logo" /></a>
+        <button className="link-button" onClick={onBack}>← Volver</button>
+      </nav>
+      <div style={{ flex: 1, paddingTop: 32, paddingBottom: 48, maxWidth: 860, margin: "0 auto", width: "100%" }}>
+        <p className="eyebrow">Evaluación anual asistida</p>
+        <h1 style={{ marginBottom: 6 }}>{nombre}</h1>
+        {est && <p className="fine" style={{ marginBottom: 24 }}>Año {est.anio} · {est.seccionesDecididas}/{est.totalSecciones} áreas completadas</p>}
+        {error && <p className="form-error">{error}</p>}
+        {children}
+      </div>
+    </main>
+  );
+
+  if (step === "loading") return shell(<p className="fine">Cargando…</p>);
+  if (step === "error") return shell(<p className="fine">No se pudo iniciar la evaluación.</p>);
+
+  // [0] Identidad
+  if (step === "identidad") {
+    return shell(
+      <section className="panel">
+        <h2 style={{ marginTop: 0 }}>¿Es esta la persona que vas a evaluar?</h2>
+        <p><strong>{nombre}</strong></p>
+        <p className="fine">Proyectos del año: {est.proyectos.length ? est.proyectos.join(", ") : "—"}</p>
+        <div className="actions" style={{ marginTop: 16 }}>
+          <button onClick={confirmarIdentidad} disabled={busy}>Sí, es correcto · empezar</button>
+          <button className="secondary" onClick={onBack}>No, volver</button>
+        </div>
+      </section>
+    );
+  }
+
+  // [1] Evidencia por bloques
+  if (step === "evidencia") {
+    if (!evid) return shell(<p className="fine">Cargando evidencia…</p>);
+    return shell(
+      <section className="panel">
+        <p className="eyebrow">Evidencia en bruto · {evid.etiqueta} ({evid.bloque + 1}/{evid.totalBloques})</p>
+        <p className="fine" style={{ marginBottom: 16 }}>Lee la evidencia de este periodo. Fíjate en la evolución: no es lo mismo el principio que el final del año.</p>
+        {evid.items.length === 0 && <p className="fine">Sin datos en este periodo.</p>}
+        {evid.items.map((it) => (
+          <div key={it.cid} className="card" style={{ marginBottom: 10 }}>
+            <p style={{ margin: 0 }}><strong>[{it.cid}]</strong> {it.label}{it.evaluador ? ` · ${it.evaluador}` : ""}</p>
+            <p className="fine" style={{ margin: "4px 0 0", whiteSpace: "pre-line" }}>{it.texto || "—"}</p>
+          </div>
+        ))}
+        <div className="actions" style={{ marginTop: 16 }}>
+          {evid.bloque > 0 && <button className="secondary" onClick={() => setBloqueIdx(bloqueIdx - 1)}>← Periodo anterior</button>}
+          {evid.hayMas
+            ? <button onClick={() => setBloqueIdx(bloqueIdx + 1)}>Siguiente periodo →</button>
+            : <button onClick={() => { const i = est.secciones.findIndex((s) => !s.decidida); setSecIdx(i < 0 ? 0 : i); setStep("loop"); }}>Empezar la evaluación →</button>}
+        </div>
+      </section>
+    );
+  }
+
+  // [2] Loop por dimensión
+  if (step === "loop") {
+    if (!dim) return shell(<p className="fine">Cargando área…</p>);
+    return shell(
+      <section className="panel">
+        <p className="eyebrow">Área {secIdx + 1}/{est.totalSecciones}</p>
+        <h2 style={{ marginTop: 0 }}>{dim.etiqueta}</h2>
+        {dim.criterios && dim.criterios.length > 0 && (
+          <details style={{ marginBottom: 16 }}>
+            <summary className="fine" style={{ cursor: "pointer" }}>Qué se espera en esta área (criterios)</summary>
+            <ul className="fine">{dim.criterios.map((c, i) => <li key={i}>{c}</li>)}</ul>
+          </details>
+        )}
+
+        {!dim.bloqueada ? (
+          <>
+            <p>{dim.pregunta}</p>
+            <textarea rows={5} style={{ width: "100%" }} value={caTexto} onChange={(e) => setCaTexto(e.target.value)} placeholder="Tu valoración…" />
+            <div className="actions" style={{ marginTop: 12 }}>
+              <button onClick={responder} disabled={busy}>{busy ? "Guardando…" : "Guardar mi valoración y ver la de la IA"}</button>
+            </div>
+            <p className="fine" style={{ marginTop: 8 }}>Tu respuesta se bloquea al guardar. Verás la valoración de la IA después, para no condicionarte.</p>
+          </>
+        ) : (
+          <>
+            <div className="card" style={{ marginBottom: 12 }}>
+              <p className="eyebrow" style={{ marginTop: 0 }}>Tu valoración (bloqueada)</p>
+              <p style={{ margin: 0, whiteSpace: "pre-line" }}>{dim.respuestaCa}</p>
+            </div>
+            <div className="card" style={{ marginBottom: 12 }}>
+              <p className="eyebrow" style={{ marginTop: 0 }}>Valoración de la IA</p>
+              <p style={{ margin: 0, whiteSpace: "pre-line" }}>{dim.claude || "Sin información suficiente"}</p>
+            </div>
+            <div className="actions">
+              <button onClick={() => decidir("mia")} disabled={busy}>Me quedo con la mía</button>
+              <button className="secondary" onClick={() => decidir("claude")} disabled={busy}>Me quedo con la de la IA</button>
+              <button className="secondary" onClick={() => setFusionMode((v) => !v)} disabled={busy}>Fusionar / editar</button>
+            </div>
+            {fusionMode && (
+              <div style={{ marginTop: 12 }}>
+                <div className="actions" style={{ marginBottom: 8 }}>
+                  <button className="secondary" onClick={sugerirFusion} disabled={busy}>{busy ? "Pensando…" : "Sugerir fusión con IA"}</button>
+                </div>
+                <textarea rows={6} style={{ width: "100%" }} value={fusionTexto} onChange={(e) => setFusionTexto(e.target.value)} />
+                <div className="actions" style={{ marginTop: 8 }}>
+                  <button onClick={() => decidir("fusion")} disabled={busy}>Guardar versión final</button>
+                </div>
+              </div>
+            )}
+          </>
+        )}
+      </section>
+    );
+  }
+
+  // [3] Resumen + publicar
+  if (step === "resumen") {
+    return shell(
+      <section className="panel">
+        <h2 style={{ marginTop: 0 }}>Todas las áreas completadas</h2>
+        <p className="fine">Has revisado las {est.totalSecciones} áreas. Al finalizar se genera el borrador con tus decisiones. Después podrás publicarlo desde "Subir informe final".</p>
+        <div className="actions" style={{ marginTop: 16 }}>
+          <button onClick={finalizar} disabled={busy}>{busy ? "Generando…" : "Finalizar y generar borrador"}</button>
+          <button className="secondary" onClick={() => { setSecIdx(0); setStep("loop"); }}>Revisar áreas otra vez</button>
+        </div>
+      </section>
+    );
+  }
+
+  // [4] Hecho
+  if (step === "hecho") {
+    return shell(
+      <section className="panel">
+        <h2 style={{ marginTop: 0 }}>Borrador generado ✓</h2>
+        <p className="fine">El borrador refleja tus decisiones. Ábrelo, revísalo y publícalo cuando estés conforme.</p>
+        <div className="actions" style={{ marginTop: 16 }}>
+          {finUrls?.html && <button onClick={() => abrirHtml(finUrls.html)}>Ver borrador</button>}
+          <button className="secondary" onClick={onBack}>Volver</button>
+        </div>
+      </section>
+    );
+  }
+
+  return shell(null);
+}
+
+function EvalAnualLogPage({ token, advisee, onBack }) {
+  const nombre = (advisee && advisee.nombre) || advisee || "";
+  const [log, setLog] = useState(null);
+  const [error, setError] = useState("");
+
+  useEffect(() => {
+    apiRequest(`/api/eval-anual/log?evaluado=${encodeURIComponent(nombre)}`, { token })
+      .then(setLog)
+      .catch((e) => setError(e.message));
+  }, [token, nombre]);
+
+  return (
+    <main className="page">
+      <nav className="nav">
+        <a className="brand" href="/"><img src="/src/logo.png" alt="igeneris" className="brand-logo" /></a>
+        <button className="link-button" onClick={onBack}>← Volver</button>
+      </nav>
+      <div style={{ flex: 1, paddingTop: 32, paddingBottom: 48, maxWidth: 860, margin: "0 auto", width: "100%" }}>
+        <p className="eyebrow">Log de la evaluación asistida</p>
+        <h1 style={{ marginBottom: 6 }}>{nombre}</h1>
+        <p className="fine" style={{ marginBottom: 24 }}>Registro interno (no lo ve el evaluado): tu valoración, la de la IA y qué decidiste.</p>
+        {error && <p className="form-error">{error}</p>}
+        {!log && !error && <p className="fine">Cargando…</p>}
+        {log && log.entradas.length === 0 && <p className="fine">Aún no hay decisiones registradas.</p>}
+        {log && log.entradas.map((e) => (
+          <div key={e.clave} className="panel" style={{ marginBottom: 14 }}>
+            <p className="eyebrow" style={{ marginTop: 0 }}>
+              {e.etiqueta} · {e.eleccion === "mia" ? "te quedaste con la tuya" : e.eleccion === "claude" ? "te quedaste con la IA" : "fusión"}
+              {e.divergencia ? " · divergencia" : ""}
+            </p>
+            <p style={{ margin: "0 0 6px" }}><strong>Tu valoración:</strong> <span style={{ whiteSpace: "pre-line" }}>{e.caTexto || "—"}</span></p>
+            <p style={{ margin: "0 0 6px" }}><strong>IA:</strong> <span style={{ whiteSpace: "pre-line" }}>{e.claudeTexto || "—"}</span></p>
+            <p style={{ margin: 0 }}><strong>Final:</strong> <span style={{ whiteSpace: "pre-line" }}>{e.textoFinal || "—"}</span></p>
+          </div>
+        ))}
+      </div>
+    </main>
+  );
+}
+
 function App() {
   const resetToken = getResetToken();
   const [token, setToken] = useState(localStorage.getItem("evaluabot_token") || sessionStorage.getItem("evaluabot_token") || "");
@@ -3754,6 +4053,12 @@ function App() {
   }
   if (page?.type === "subir-informe") {
     return <SubirInformePage token={token} advisee={page.advisee} onBack={backTo(page)} />;
+  }
+  if (page?.type === "eval-anual") {
+    return <EvaluacionAnualWizard token={token} advisee={page.advisee} onBack={backTo(page)} />;
+  }
+  if (page?.type === "eval-anual-log") {
+    return <EvalAnualLogPage token={token} advisee={page.advisee} onBack={backTo(page)} />;
   }
   if (page?.type === "activar-evaluaciones-proyecto") {
     return <ActivarEvaluacionesProyectoPage token={token} user={user} onBack={() => navigate(null)} onActivado={() => setProyectosVersion((v) => v + 1)} />;

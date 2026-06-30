@@ -2619,6 +2619,31 @@ function AdviseeDetail({ token, advisee, advisees, onBack, onNavigate }) {
     }
   }
 
+  // TODO: aquí se enchufará el skill que genera el documento de opiniones.
+  // Por ahora exporta a un .doc las opiniones/notas ya cargadas (sin backend).
+  function generarDocOpiniones() {
+    const lista = notas || [];
+    if (!lista.length) {
+      setNotaError("No hay opiniones registradas para generar el documento.");
+      return;
+    }
+    const filas = lista.map((nota) => {
+      const fecha = nota.fecha ? nota.fecha.slice(0, 10) : "Sin fecha";
+      const resumen = nota.resumen_advisee
+        ? `<p style="white-space:pre-wrap;color:#555;"><em>Evaluaciones incluidas:</em><br/>${nota.resumen_advisee}</p>`
+        : "";
+      return `<div style="margin-bottom:18px;"><p><strong>${fecha}</strong></p>${resumen}<p style="white-space:pre-wrap;">${nota.opinion || "—"}</p></div>`;
+    }).join("");
+    const html = `<html><head><meta charset="utf-8"></head><body><h1>Opiniones sobre ${advisee.nombre}</h1>${filas}</body></html>`;
+    const blob = new Blob([html], { type: "application/msword" });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = `opiniones_${advisee.nombre.replace(/\s+/g, "_")}.doc`;
+    link.click();
+    URL.revokeObjectURL(url);
+  }
+
   async function guardarNota(e) {
     e.preventDefault();
     const texto = nuevaNota.trim();
@@ -2674,6 +2699,9 @@ function AdviseeDetail({ token, advisee, advisees, onBack, onNavigate }) {
                 </button>
                 <button className="secondary" onClick={() => onNavigate({ type: "subir-informe", advisee, from: "advisee-detail", advisees })}>
                   Subir informe final
+                </button>
+                <button className="secondary" onClick={generarDocOpiniones} disabled={loadingNotas}>
+                  Generar documento de opiniones
                 </button>
                 <button
                   className={accesoIndividual ? "" : "secondary"}

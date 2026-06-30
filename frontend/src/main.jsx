@@ -2236,7 +2236,13 @@ function Dashboard({ token, user, onLogout, onNavigate, onBackToRoleSelect = nul
 
           {/* LEFT — To-do */}
           <div>
-            <p className="eyebrow" style={{ color: "var(--fg)", textAlign: "center", fontWeight: 500 }}>To-do</p>
+            <p className="eyebrow" style={{ color: "var(--fg)", textAlign: "center", fontWeight: 500, display: "flex", alignItems: "center", justifyContent: "center", gap: 6 }}>
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ width: 14, height: 14, flexShrink: 0 }}>
+                <path d="M9 11l3 3L20 4" />
+                <path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11" />
+              </svg>
+              To-do
+            </p>
             <hr style={DASH_DIVIDER} />
             <nav style={{ display: "flex", flexDirection: "column" }}>
               {!isAdmin && (
@@ -2293,7 +2299,13 @@ function Dashboard({ token, user, onLogout, onNavigate, onBackToRoleSelect = nul
 
           {/* RIGHT — To-see */}
           <aside className="profile-info">
-            <p className="eyebrow" style={{ color: "var(--fg)", textAlign: "center", fontWeight: 500 }}>To-see</p>
+            <p className="eyebrow" style={{ color: "var(--fg)", textAlign: "center", fontWeight: 500, display: "flex", alignItems: "center", justifyContent: "center", gap: 6 }}>
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ width: 14, height: 14, flexShrink: 0 }}>
+                <path d="M1 12s4-7 11-7 11 7 11 7-4 7-11 7-11-7-11-7z" />
+                <circle cx="12" cy="12" r="3" />
+              </svg>
+              To-see
+            </p>
             <hr style={{ ...DASH_DIVIDER, margin: 0 }} />
 
             <div>
@@ -2596,6 +2608,9 @@ function AdviseeDetail({ token, advisee, advisees, onBack, onNavigate }) {
   const [notaError, setNotaError] = useState("");
   const [generandoBorrador, setGenerandoBorrador] = useState(false);
   const [borradorError, setBorradorError] = useState("");
+  const [opinionesDocOpen, setOpinionesDocOpen] = useState(false);
+  const [generandoOpiniones, setGenerandoOpiniones] = useState(false);
+  const [opinionesDocError, setOpinionesDocError] = useState("");
 
   useEffect(() => {
     const apply = (data) => setAccesoIndividual(data.activo || false);
@@ -2658,29 +2673,40 @@ function AdviseeDetail({ token, advisee, advisees, onBack, onNavigate }) {
     }
   }
 
-  // TODO: aquí se enchufará el skill que genera el documento de opiniones.
-  // Por ahora exporta a un .doc las opiniones/notas ya cargadas (sin backend).
-  function generarDocOpiniones() {
-    const lista = notas || [];
-    if (!lista.length) {
-      setNotaError("No hay opiniones registradas para generar el documento.");
-      return;
+  // Genera el documento de opiniones del CA en el backend (skill eval-resumen-opiniones-ca)
+  // y abre la versión web (HTML) o descarga el Word (.docx) según el formato pedido.
+  async function generarOpiniones(formato) {
+    setGenerandoOpiniones(true);
+    setOpinionesDocError("");
+    try {
+      const data = await apiRequest("/api/generar-opiniones-ca", {
+        token,
+        method: "POST",
+        body: { evaluado: advisee.nombre },
+      });
+      const path = formato === "web" ? data.htmlUrl : data.pdfUrl;
+      if (!path) throw new Error("No se generó el documento.");
+      if (formato === "web") {
+        window.open(apiUrl(`${path}&token=${encodeURIComponent(token)}`), "_blank", "noopener,noreferrer");
+      } else {
+        const response = await fetch(apiUrl(path), { headers: { Authorization: `Bearer ${token}` } });
+        if (!response.ok) {
+          const d = await response.json().catch(() => ({}));
+          throw new Error(d.error || "No se pudo descargar el archivo.");
+        }
+        const blob = await response.blob();
+        const url = URL.createObjectURL(blob);
+        const link = document.createElement("a");
+        link.href = url;
+        link.download = `opiniones_${advisee.nombre.replace(/\s+/g, "_")}.pdf`;
+        link.click();
+        URL.revokeObjectURL(url);
+      }
+    } catch (err) {
+      setOpinionesDocError(err.message);
+    } finally {
+      setGenerandoOpiniones(false);
     }
-    const filas = lista.map((nota) => {
-      const fecha = nota.fecha ? nota.fecha.slice(0, 10) : "Sin fecha";
-      const resumen = nota.resumen_advisee
-        ? `<p style="white-space:pre-wrap;color:#555;"><em>Evaluaciones incluidas:</em><br/>${nota.resumen_advisee}</p>`
-        : "";
-      return `<div style="margin-bottom:18px;"><p><strong>${fecha}</strong></p>${resumen}<p style="white-space:pre-wrap;">${nota.opinion || "—"}</p></div>`;
-    }).join("");
-    const html = `<html><head><meta charset="utf-8"></head><body><h1>Opiniones sobre ${advisee.nombre}</h1>${filas}</body></html>`;
-    const blob = new Blob([html], { type: "application/msword" });
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement("a");
-    link.href = url;
-    link.download = `opiniones_${advisee.nombre.replace(/\s+/g, "_")}.doc`;
-    link.click();
-    URL.revokeObjectURL(url);
   }
 
   async function guardarNota(e) {
@@ -2740,9 +2766,30 @@ function AdviseeDetail({ token, advisee, advisees, onBack, onNavigate }) {
                 <button className="secondary" onClick={() => onNavigate({ type: "subir-informe", advisee, from: "advisee-detail", advisees })}>
                   Subir informe final
                 </button>
-                <button className="secondary" onClick={generarDocOpiniones} disabled={loadingNotas}>
-                  Generar documento de opiniones
+                <button className="secondary" onClick={() => setOpinionesDocOpen((v) => !v)}>
+                  {opinionesDocOpen ? "Cerrar PDF de opiniones" : "Generar PDF de opiniones"}
                 </button>
+                {opinionesDocOpen && (
+                  <div className="opiniones-doc-opciones">
+                    <button className="secondary" onClick={() => generarOpiniones("web")} disabled={generandoOpiniones}>
+                      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                        <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6" />
+                        <path d="M15 3h6v6" />
+                        <path d="M10 14 21 3" />
+                      </svg>
+                      {generandoOpiniones ? "Generando..." : "Ver en web"}
+                    </button>
+                    <button className="secondary" onClick={() => generarOpiniones("pdf")} disabled={generandoOpiniones}>
+                      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                        <path d="M12 3v12" />
+                        <path d="M7 11l5 5 5-5" />
+                        <path d="M5 21h14" />
+                      </svg>
+                      {generandoOpiniones ? "Generando..." : "Descargar PDF"}
+                    </button>
+                  </div>
+                )}
+                {opinionesDocError && <p className="form-error">{opinionesDocError}</p>}
                 <button
                   className={accesoIndividual ? "" : "secondary"}
                   onClick={toggleAccesoIndividual}

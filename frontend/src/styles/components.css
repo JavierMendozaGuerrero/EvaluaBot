@@ -68,7 +68,9 @@
   transition: opacity 0.15s;
   white-space: nowrap;
 }
-.btn-pill-primary:hover { opacity: 0.85; }
+/* Botón ya naranja: en hover el texto pasa a un naranja claro para que siga legible
+   sobre el fondo naranja (si no, la regla global lo pondría naranja sobre naranja). */
+.btn-pill-primary:hover { opacity: 1; color: #ffd2c2; }
 .btn-pill-primary:disabled {
   background: var(--border);
   color: var(--text-45);

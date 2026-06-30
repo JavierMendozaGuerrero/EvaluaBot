@@ -68,6 +68,7 @@ from .ca_reviews import guardar_nota_ca_web, obtener_resumen_advisee_para_ca
 from .personal_eval import notificar_urgencia_personal_web
 from .reports import generar_archivo_trayectoria, generar_archivos_informe
 from .skill_informes_anual import generar_informe_anual, obtener_empleados_evaluacion_anual
+from .skill_opiniones_ca import generar_resumen_opiniones_ca
 from .users import (
     autenticar_usuario,
     cambiar_password_con_token,
@@ -589,6 +590,24 @@ class ApiHandler(BaseHTTPRequestHandler):
                     raise RuntimeError("No se pudo generar ningún informe para esta persona. No ha recibido evaluaciones.")
                 self.responder_json(respuesta)
                 return
+            if ruta == "/api/generar-opiniones-ca":
+                evaluado = (datos.get("evaluado", "") or datos.get("advisee", "")).strip()
+                if not evaluado:
+                    self.responder_json({"error": "Selecciona un advisee."}, 400)
+                    return
+                advisees_ca = obtener_advisees(
+                    sesion.get("persona", ""),
+                    ca_aliases=[sesion.get("username", ""), sesion.get("email", "")],
+                )
+                if not sesion.get("is_admin") and normalizar_nombre(evaluado) not in [normalizar_nombre(a) for a in advisees_ca]:
+                    raise PermissionError("Solo el CA o un administrador pueden generar este documento.")
+                validar_acceso_sesion(sesion, evaluado, extra_permitidos=advisees_ca)
+                slug = generar_resumen_opiniones_ca(evaluado)
+                self.responder_json({
+                    "pdfUrl": self.url_archivo(f"opiniones_ca_{slug}.pdf", evaluado),
+                    "htmlUrl": self.url_archivo(f"opiniones_ca_{slug}.html", evaluado),
+                })
+                return
             if ruta == "/api/trayectoria":
                 evaluado = datos.get("evaluado", "")
                 advisees_ca = obtener_advisees(
@@ -873,10 +892,11 @@ class ApiHandler(BaseHTTPRequestHandler):
         )
         es_trayectoria = nombre_archivo.startswith(f"trayectoria_{slug}.")
         es_final = nombre_archivo.startswith(f"informe_final_{slug}_")
-        if not es_borrador and not es_trayectoria and not es_final:
+        es_opiniones = nombre_archivo.startswith(f"opiniones_ca_{slug}.")
+        if not es_borrador and not es_trayectoria and not es_final and not es_opiniones:
             raise PermissionError("El archivo solicitado no corresponde con la persona autorizada.")
-        if es_borrador and not es_admin and not es_ca:
-            raise PermissionError("Solo el CA o un administrador pueden ver los borradores generados.")
+        if (es_borrador or es_opiniones) and not es_admin and not es_ca:
+            raise PermissionError("Solo el CA o un administrador pueden ver los documentos generados.")
         if (es_trayectoria or es_final) and not es_admin and not es_ca:
             if es_propio:
                 ca_del_evaluado = obtener_ca_de_empleado(evaluado)
@@ -888,11 +908,12 @@ class ApiHandler(BaseHTTPRequestHandler):
         if not os.path.exists(ruta):
             self.responder_json({"error": "Archivo no encontrado"}, 404)
             return
-        content_type = (
-            "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
-            if nombre_archivo.endswith(".docx")
-            else "text/html; charset=utf-8"
-        )
+        if nombre_archivo.endswith(".docx"):
+            content_type = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+        elif nombre_archivo.endswith(".pdf"):
+            content_type = "application/pdf"
+        else:
+            content_type = "text/html; charset=utf-8"
         with open(ruta, "rb") as f:
             body = f.read()
         self.send_response(200)

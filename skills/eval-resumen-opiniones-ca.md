@@ -143,6 +143,18 @@ slug = generar_resumen_opiniones_ca("Álvaro García", ca_nombre="Laura Martíne
 
 ---
 
+## Tipografía y color (sistema de diseño Igeneris)
+
+Ambos documentos siguen los tokens de `frontend/src/styles/globals.css`:
+
+- **Naranja**: `#F23C14` (acento, fechas y regla de la sección extra)
+- **Texto**: negro puro `#000000`; texto secundario en negro al 55% (no gris)
+- **Bordes/divisores**: `#DBDBDE`
+- **Tipografía**: **Outfit** (cuerpo en ExtraLight 200 / Regular; títulos en Medium 500).
+  - PDF: las fuentes Outfit están en `backend/assets/fonts/` (`Outfit-ExtraLight.ttf`,
+    `Outfit-Regular.ttf`, `Outfit-Medium.ttf`); si faltan, el PDF cae a Helvetica.
+  - HTML: Outfit se carga vía Google Fonts. `TT Firs Neue` (display) cae a Outfit, igual que en la web.
+
 ## Logo del documento (opcional)
 
 El PDF incrusta un logo en la cabecera si existe el archivo:

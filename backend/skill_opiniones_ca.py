@@ -46,10 +46,41 @@ except ImportError:
 # Logo opcional: si existe este PNG se incrusta en la cabecera del PDF; si no, se omite.
 _LOGO_PATH = os.path.join(config.BASE_DIR, "assets", "igeneris_logo.png")
 
+# Fuentes Igeneris (Outfit). Si no están, el PDF cae a Helvetica.
+_FONTS_DIR = os.path.join(config.BASE_DIR, "assets", "fonts")
+_FONTS_REGISTRADAS: dict | None = None
+
 _MESES = [
     "ene", "feb", "mar", "abr", "may", "jun",
     "jul", "ago", "sep", "oct", "nov", "dic",
 ]
+
+
+def _registrar_fuentes() -> dict:
+    """Registra las fuentes Outfit en reportlab. Devuelve los nombres a usar (Outfit o Helvetica)."""
+    global _FONTS_REGISTRADAS
+    if _FONTS_REGISTRADAS is not None:
+        return _FONTS_REGISTRADAS
+
+    fonts = {"light": "Helvetica", "regular": "Helvetica", "medium": "Helvetica-Bold"}
+    try:
+        from reportlab.pdfbase.ttfonts import TTFont
+        from reportlab.pdfbase import pdfmetrics
+        archivos = {
+            "Outfit-ExtraLight": "Outfit-ExtraLight.ttf",
+            "Outfit":            "Outfit-Regular.ttf",
+            "Outfit-Medium":     "Outfit-Medium.ttf",
+        }
+        rutas = {n: os.path.join(_FONTS_DIR, f) for n, f in archivos.items()}
+        if all(os.path.exists(r) for r in rutas.values()):
+            for nombre, ruta in rutas.items():
+                pdfmetrics.registerFont(TTFont(nombre, ruta))
+            fonts = {"light": "Outfit-ExtraLight", "regular": "Outfit", "medium": "Outfit-Medium"}
+    except Exception:
+        logging.exception("No se pudieron registrar las fuentes Outfit; se usa Helvetica")
+
+    _FONTS_REGISTRADAS = fonts
+    return fonts
 
 
 # ── Lectura y preparación de datos ────────────────────────────────────────────
@@ -109,12 +140,11 @@ def obtener_datos_opiniones_ca(advisee: str, ca_nombre: str = "") -> dict:
 
 # ── PDF (reportlab) ───────────────────────────────────────────────────────────
 
-def _canvas_maker(advisee_name: str, ca_name: str):
+def _canvas_maker(advisee_name: str, ca_name: str, font: str = "Helvetica"):
     """Devuelve una subclase de Canvas que pinta cabecera/pie en todas las páginas menos la 1ª."""
-    ORANGE   = colors.HexColor('#F23C14')
-    BLACK    = colors.HexColor('#0D0D0D')
-    GREY_MID = colors.HexColor('#9CA3AF')
-    GREY_HR  = colors.HexColor('#E5E7EB')
+    BLACK    = colors.HexColor('#000000')
+    MUTED    = colors.Color(0, 0, 0, alpha=0.55)
+    BORDER   = colors.HexColor('#DBDBDE')
 
     class IGCanvas(pdfcanvas.Canvas):
         def __init__(self, *args, **kwargs):
@@ -136,15 +166,15 @@ def _canvas_maker(advisee_name: str, ca_name: str):
 
         def _draw_page(self, page, total):
             pw, ph = A4
-            self.setStrokeColor(GREY_HR)
+            self.setStrokeColor(BORDER)
             self.setLineWidth(0.5)
             self.line(2 * cm, ph - 1.3 * cm, pw - 2 * cm, ph - 1.3 * cm)
-            self.setFont('Helvetica', 7.5)
+            self.setFont(font, 7.5)
             self.setFillColor(BLACK)
             self.drawString(2 * cm, ph - 1.05 * cm, advisee_name)
-            self.setFillColor(GREY_MID)
+            self.setFillColor(MUTED)
             self.drawRightString(pw - 2 * cm, ph - 1.05 * cm, f"CA · {ca_name}")
-            self.setFillColor(GREY_MID)
+            self.setFillColor(MUTED)
             self.drawCentredString(pw / 2, 1 * cm, f"{page} / {total}")
 
     return IGCanvas
@@ -156,9 +186,12 @@ def generar_pdf_opiniones_ca(datos: dict) -> str:
         raise RuntimeError("Instala reportlab: pip install reportlab")
 
     ORANGE   = colors.HexColor('#F23C14')
-    BLACK    = colors.HexColor('#0D0D0D')
-    GREY_MID = colors.HexColor('#9CA3AF')
-    GREY_HR  = colors.HexColor('#E5E7EB')
+    BLACK    = colors.HexColor('#000000')
+    MUTED    = colors.Color(0, 0, 0, alpha=0.55)
+    BORDER   = colors.HexColor('#DBDBDE')
+
+    fonts = _registrar_fuentes()
+    F_LIGHT, F_REG, F_MED = fonts["light"], fonts["regular"], fonts["medium"]
 
     advisee_name = datos["advisee"]
     ca_name = datos.get("ca") or "—"
@@ -168,14 +201,14 @@ def generar_pdf_opiniones_ca(datos: dict) -> str:
     def sty(name, **kw):
         return ParagraphStyle(name, **kw)
 
-    s_meta      = sty('meta',   fontSize=8,   fontName='Helvetica',      textColor=GREY_MID, leading=12)
-    s_adv_cover = sty('advc',   fontSize=24,  fontName='Helvetica-Bold', textColor=BLACK,    leading=42, spaceAfter=6)
-    s_fecha     = sty('fecha',  fontSize=8,   fontName='Helvetica',      textColor=ORANGE,   leading=12, spaceAfter=10)
-    s_label     = sty('lbl',    fontSize=7,   fontName='Helvetica',      textColor=GREY_MID, leading=10, spaceAfter=5)
-    s_text      = sty('txt',    fontSize=9.5, fontName='Helvetica',      textColor=BLACK,    leading=15)
-    s_ap_texto  = sty('apx',    fontSize=9,   fontName='Helvetica',      textColor=BLACK,    leading=13, spaceAfter=8)
-    s_section_h = sty('sech',   fontSize=14,  fontName='Helvetica-Bold', textColor=BLACK,    leading=18, spaceAfter=4)
-    s_suelto    = sty('suelto', fontSize=9.5, fontName='Helvetica',      textColor=BLACK,    leading=15)
+    s_meta      = sty('meta',   fontSize=8.5, fontName=F_REG,   textColor=MUTED,  leading=13)
+    s_adv_cover = sty('advc',   fontSize=26,  fontName=F_MED,   textColor=BLACK,  leading=30, spaceAfter=6)
+    s_fecha     = sty('fecha',  fontSize=8,   fontName=F_REG,   textColor=ORANGE, leading=12, spaceAfter=10)
+    s_label     = sty('lbl',    fontSize=7,   fontName=F_REG,   textColor=MUTED,  leading=10, spaceAfter=5)
+    s_text      = sty('txt',    fontSize=9.5, fontName=F_LIGHT, textColor=BLACK,  leading=15)
+    s_ap_texto  = sty('apx',    fontSize=9,   fontName=F_LIGHT, textColor=BLACK,  leading=14, spaceAfter=8)
+    s_section_h = sty('sech',   fontSize=14,  fontName=F_MED,   textColor=BLACK,  leading=18, spaceAfter=4)
+    s_suelto    = sty('suelto', fontSize=9.5, fontName=F_LIGHT, textColor=BLACK,  leading=15)
 
     os.makedirs(config.CARPETA_WEB, exist_ok=True)
     slug = slug_archivo(advisee_name)
@@ -226,7 +259,7 @@ def generar_pdf_opiniones_ca(datos: dict) -> str:
     story.append(Paragraph(f"CA · {esc(ca_name)}", s_meta))
     story.append(Paragraph(datetime.now(config.ZONA_HORARIA_MADRID).strftime('%d · %m · %Y'), s_meta))
     story.append(Spacer(1, 0.8 * cm))
-    story.append(HRFlowable(width='100%', thickness=0.8, color=GREY_HR))
+    story.append(HRFlowable(width='100%', thickness=0.8, color=BORDER))
     story.append(Spacer(1, 0.8 * cm))
 
     # Entradas cronológicas: opinión CA (izq) | resumen sobre el que opinó (drch)
@@ -260,7 +293,7 @@ def generar_pdf_opiniones_ca(datos: dict) -> str:
             ('RIGHTPADDING',  (1, 0), (1, -1),  0),
             ('TOPPADDING',    (0, 0), (-1, -1), 0),
             ('BOTTOMPADDING', (0, 0), (-1, -1), 0),
-            ('LINEBEFORE',    (1, 0), (1, -1),  0.5, GREY_HR),
+            ('LINEBEFORE',    (1, 0), (1, -1),  0.5, BORDER),
         ]))
         block.append(content_row)
 
@@ -268,7 +301,7 @@ def generar_pdf_opiniones_ca(datos: dict) -> str:
         story.append(Spacer(1, 0.7 * cm))
 
         if i < len(entries) - 1:
-            story.append(HRFlowable(width='100%', thickness=0.5, color=GREY_HR))
+            story.append(HRFlowable(width='100%', thickness=0.5, color=BORDER))
             story.append(Spacer(1, 0.7 * cm))
 
     # Sección final: comentarios sueltos (filas sin resumen)
@@ -286,7 +319,7 @@ def generar_pdf_opiniones_ca(datos: dict) -> str:
     if not entries and not comentarios_sueltos:
         story.append(Paragraph("Sin opiniones registradas todavía.", s_text))
 
-    doc.build(story, canvasmaker=_canvas_maker(advisee_name, ca_name))
+    doc.build(story, canvasmaker=_canvas_maker(advisee_name, ca_name, F_REG))
     logging.info("PDF de opiniones CA guardado: %s", output_path)
     return output_path
 
@@ -339,8 +372,15 @@ def generar_html_opiniones_ca(datos: dict) -> str:
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Opiniones CA — {esc(advisee)}</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Outfit:wght@200;400;500&display=swap">
 <style>
 {config.IGENERIS_CSS}
+/* Tokens y tipografía del sistema de diseño Igeneris (sobreescriben IGENERIS_CSS) */
+:root {{ --ink: #000000; --muted: rgba(0,0,0,.55); --line: #DBDBDE; --paper: #FFFFFF; --soft: #F4F4F7; }}
+body {{ font-family: 'Outfit', system-ui, sans-serif; font-weight: 200; color: #000000; }}
+h1, h2, h3, .brand {{ font-family: 'TT Firs Neue', 'Outfit', system-ui, sans-serif; font-weight: 500; letter-spacing: -0.01em; line-height: 1.1; }}
 .shell {{ max-width: 960px; margin: 0 auto; padding-bottom: 60px; }}
 .top {{ padding-top: clamp(42px, 8vw, 92px); margin-bottom: 28px; display: flex; align-items: flex-end; justify-content: space-between; gap: 24px; }}
 .top h1 {{ font-size: clamp(34px, 6vw, 64px); }}

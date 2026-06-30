@@ -1,12 +1,12 @@
 import cgi
+import gzip
 import io
 import json
 import logging
 import os
 import time
 import urllib.parse
-from http.server import BaseHTTPRequestHandler
-from socketserver import TCPServer
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 try:
     import mammoth
@@ -81,8 +81,9 @@ from .users import (
 from .utils import normalizar_nombre, slug_archivo
 
 
-class ReusableTCPServer(TCPServer):
+class ReusableTCPServer(ThreadingHTTPServer):
     allow_reuse_address = True
+    daemon_threads = True
 
 
 class ApiHandler(BaseHTTPRequestHandler):
@@ -124,8 +125,14 @@ class ApiHandler(BaseHTTPRequestHandler):
 
     def responder_json(self, payload, status=200):
         body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+        usar_gzip = "gzip" in self.headers.get("Accept-Encoding", "") and len(body) > 1024
+        if usar_gzip:
+            body = gzip.compress(body, 5)
         self.send_response(status)
         self.send_header("Content-Type", "application/json; charset=utf-8")
+        if usar_gzip:
+            self.send_header("Content-Encoding", "gzip")
+            self.send_header("Vary", "Accept-Encoding")
         self.send_header("Content-Length", str(len(body)))
         self.end_headers()
         self.wfile.write(body)
@@ -914,11 +921,21 @@ class ApiHandler(BaseHTTPRequestHandler):
             content_type = "application/pdf"
         else:
             content_type = "text/html; charset=utf-8"
+        stat = os.stat(ruta)
+        etag = '"%x-%x"' % (int(stat.st_mtime), stat.st_size)
+        if self.headers.get("If-None-Match") == etag:
+            self.send_response(304)
+            self.send_header("ETag", etag)
+            self.send_header("Cache-Control", "private, max-age=300")
+            self.end_headers()
+            return
         with open(ruta, "rb") as f:
             body = f.read()
         self.send_response(200)
         self.send_header("Content-Type", content_type)
         self.send_header("Content-Length", str(len(body)))
+        self.send_header("Cache-Control", "private, max-age=300")
+        self.send_header("ETag", etag)
         self.end_headers()
         self.wfile.write(body)
 

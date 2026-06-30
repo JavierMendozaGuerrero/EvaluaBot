@@ -98,7 +98,7 @@ def _obtener_o_crear_bbdd_usuarios():
         page_size=100,
     )
     for bbdd in resultado.get("results", []):
-        if _extraer_titulo_bbdd(bbdd) == titulo:
+        if _extraer_titulo_bbdd(bbdd).strip().lower() == titulo.strip().lower():
             database_id = _data_source_id(bbdd)
             _asegurar_propiedades_usuarios(database_id)
             _cache_users_database_id = database_id

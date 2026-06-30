@@ -41,9 +41,11 @@ from .utils import normalizar_nombre
 # Constantes de nombres Notion
 # ---------------------------------------------------------------------------
 
-_NOMBRE_SUBPAGINA_EVAL_PROYECTOS = "Evaluaciones Proyectos"
+_NOMBRE_SUBPAGINA_EVAL_PROYECTOS = "Evaluacion al finalizar proyecto"
+_NOMBRE_SUBPAGINA_EVAL_PROYECTOS_ANTIGUO = "Evaluaciones Proyectos"
 _NOMBRE_PAGINA_RAIZ_RESULTADOS = "Evaluaciones por proyecto"
-_NOMBRE_BBDD_ACTIVACIONES = "Activaciones Evaluaciones Proyectos"
+_NOMBRE_BBDD_ACTIVACIONES = "Acceso Evaluaciones Proyecto"
+_NOMBRE_BBDD_ACTIVACIONES_ANTIGUO = "Activaciones Evaluaciones Proyectos"
 
 TIPOS_EVALUACION = {
     "autoevaluacion": "Autoevaluacion",
@@ -241,18 +243,33 @@ def _obtener_o_crear_subpagina_evaluaciones_proyectos() -> str | None:
     if cached:
         return cached
 
-    listas_parent = _parent_bbdd_en_pagina(config.NOTION_DATA_LISTS_PAGE_NAME, crear=True)
-    if listas_parent.get("type") != "page_id":
-        return None
-    listas_page_id = listas_parent["page_id"]
+    # Buscar en nueva ubicación (Datos opcionalmente modificables) primero, luego en antigua
+    page_id = None
+    for nombre_contenedor in (config.NOTION_DATA_MODIFICABLES_PAGE_NAME, config.NOTION_DATA_LISTS_PAGE_NAME):
+        contenedor_parent = _parent_bbdd_en_pagina(nombre_contenedor, crear=False)
+        if contenedor_parent.get("type") != "page_id":
+            continue
+        contenedor_id = contenedor_parent["page_id"]
+        # Buscar por nombre nuevo y antiguo
+        for nombre_sub in (_NOMBRE_SUBPAGINA_EVAL_PROYECTOS, _NOMBRE_SUBPAGINA_EVAL_PROYECTOS_ANTIGUO):
+            page_id = _page_or_database_link_by_name(contenedor_id, nombre_sub)
+            if page_id:
+                break
+        if page_id:
+            break
 
-    page_id = _page_or_database_link_by_name(listas_page_id, _NOMBRE_SUBPAGINA_EVAL_PROYECTOS)
     if not page_id:
-        try:
-            page_id = _crear_subpagina(listas_page_id, _NOMBRE_SUBPAGINA_EVAL_PROYECTOS)
-            logging.info("Sub-página '%s' creada en '%s'", _NOMBRE_SUBPAGINA_EVAL_PROYECTOS, config.NOTION_DATA_LISTS_PAGE_NAME)
-        except Exception:
-            logging.exception("Error creando sub-página '%s'", _NOMBRE_SUBPAGINA_EVAL_PROYECTOS)
+        # Crear bajo "Datos opcionalmente modificables" si existe, si no bajo Datos a Monitorizar
+        for nombre_crear_en in (config.NOTION_DATA_MODIFICABLES_PAGE_NAME, config.NOTION_DATA_LISTS_PAGE_NAME):
+            parent_crear = _parent_bbdd_en_pagina(nombre_crear_en, crear=True)
+            if parent_crear.get("type") == "page_id":
+                try:
+                    page_id = _crear_subpagina(parent_crear["page_id"], _NOMBRE_SUBPAGINA_EVAL_PROYECTOS)
+                    logging.info("Sub-página '%s' creada en '%s'", _NOMBRE_SUBPAGINA_EVAL_PROYECTOS, nombre_crear_en)
+                    break
+                except Exception:
+                    logging.exception("Error creando sub-página '%s'", _NOMBRE_SUBPAGINA_EVAL_PROYECTOS)
+        if not page_id:
             return None
 
     with _lock_subpagina:
@@ -297,14 +314,35 @@ def _obtener_o_crear_bbdd_activaciones() -> str | None:
     if cached:
         return cached
 
-    subpagina_id = _obtener_o_crear_subpagina_evaluaciones_proyectos()
-    if not subpagina_id:
-        return None
+    db_id = None
+    # 1. Buscar en "Activaciones de permisos" (nueva ubicación)
+    activaciones_parent = _parent_bbdd_en_pagina(config.NOTION_ACTIVACIONES_PERMISOS_PAGE_NAME, crear=False)
+    if activaciones_parent.get("type") == "page_id":
+        for nombre_db in (_NOMBRE_BBDD_ACTIVACIONES, _NOMBRE_BBDD_ACTIVACIONES_ANTIGUO):
+            db_id = _buscar_bbdd_en_pagina_id(activaciones_parent["page_id"], nombre_db)
+            if db_id:
+                break
 
-    db_id = _buscar_bbdd_en_pagina_id(subpagina_id, _NOMBRE_BBDD_ACTIVACIONES)
+    # 2. Buscar en subpágina de evaluaciones proyectos (ubicación antigua)
     if not db_id:
+        subpagina_id = _obtener_o_crear_subpagina_evaluaciones_proyectos()
+        if subpagina_id:
+            for nombre_db in (_NOMBRE_BBDD_ACTIVACIONES, _NOMBRE_BBDD_ACTIVACIONES_ANTIGUO):
+                db_id = _buscar_bbdd_en_pagina_id(subpagina_id, nombre_db)
+                if db_id:
+                    break
+
+    # 3. Crear si no existe
+    if not db_id:
+        # Crear bajo "Activaciones de permisos" si existe, si no bajo subpágina proyectos
+        if activaciones_parent.get("type") == "page_id":
+            parent_crear = activaciones_parent["page_id"]
+        else:
+            parent_crear = _obtener_o_crear_subpagina_evaluaciones_proyectos()
+        if not parent_crear:
+            return None
         try:
-            db_id = _crear_bbdd(subpagina_id, _NOMBRE_BBDD_ACTIVACIONES, _props_bbdd_activaciones())
+            db_id = _crear_bbdd(parent_crear, _NOMBRE_BBDD_ACTIVACIONES, _props_bbdd_activaciones())
             logging.info("BD '%s' creada en Notion", _NOMBRE_BBDD_ACTIVACIONES)
         except Exception:
             logging.exception("Error creando BD '%s'", _NOMBRE_BBDD_ACTIVACIONES)
@@ -748,7 +786,6 @@ def obtener_estado_evaluaciones_proyecto(proyecto: str) -> list:
                 for fila in resp.get("results", []):
                     props = fila.get("properties", {})
                     ev = "".join(p.get("plain_text", "") for p in props.get("Evaluador", {}).get("rich_text", [])).strip()
-                    tipo = "".join(p.get("plain_text", "") for p in (props.get("Tipo") or {}).get("select", {}).get("name", "")).strip() if isinstance((props.get("Tipo") or {}).get("select"), dict) else ""
                     tipo = ((props.get("Tipo") or {}).get("select") or {}).get("name", "")
                     if normalizar_nombre(ev) == normalizar_nombre(miembro):
                         autoevaluacion_hecha = True

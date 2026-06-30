@@ -425,9 +425,33 @@ def aplicar_estetica_notion():
             _parent_bbdd_en_pagina(nombre_pagina, crear=True)
 
 
+def _buscar_pagina_en_jerarquia(nombre_pagina: str, root_id: str) -> str | None:
+    """Busca una página por nombre en root y hasta 2 niveles bajo TO-DO/TO-SEE."""
+    # Nivel 0: directamente bajo root
+    page_id = _page_or_database_link_by_name(root_id, nombre_pagina)
+    if page_id:
+        return page_id
+    # Niveles 1-2: dentro de TO-DO y TO-SEE y sus hijos directos
+    for l1_nombre in (config.NOTION_TODO_PAGE_NAME, config.NOTION_TOSEE_PAGE_NAME):
+        l1_id = _page_or_database_link_by_name(root_id, l1_nombre)
+        if not l1_id:
+            continue
+        page_id = _page_or_database_link_by_name(l1_id, nombre_pagina)
+        if page_id:
+            return page_id
+        for bloque in _iter_blocks(l1_id):
+            if bloque.get("type") not in ("child_page",):
+                continue
+            l2_id = bloque["id"]
+            page_id = _page_or_database_link_by_name(l2_id, nombre_pagina)
+            if page_id:
+                return page_id
+    return None
+
+
 def _parent_bbdd_en_pagina(nombre_pagina, crear=False):
     parent_raiz = _parent_bbdd_referencia()
-    page_id = _page_or_database_link_by_name(parent_raiz["page_id"], nombre_pagina)
+    page_id = _buscar_pagina_en_jerarquia(nombre_pagina, parent_raiz["page_id"])
     if page_id:
         _decorar_pagina_notion(page_id, nombre_pagina)
         return {"type": "page_id", "page_id": page_id}
@@ -494,32 +518,64 @@ def _buscar_bbdd_en_pagina_id(pagina_id: str, titulo_bbdd: str) -> str | None:
 
 
 _NOMBRE_SUBPAGINA_PREGUNTAS = "Preguntas"
+_NOMBRE_SUBPAGINA_PREGUNTAS_NUEVO = "Preguntas evaluación mensual"
 _cache_pagina_preguntas: dict = {"page_id": None}
 _lock_pagina_preguntas = threading.Lock()
 
 
 def _obtener_o_crear_pagina_preguntas_id() -> str | None:
-    """Devuelve el page_id de la sub-página 'Preguntas' dentro de 'Listas de datos'."""
+    """Devuelve el page_id de la sub-página de preguntas de evaluación mensual.
+
+    Busca en nueva estructura (Preguntas Chatbot) y en antigua (Listas de datos).
+    """
     with _lock_pagina_preguntas:
         cached = _cache_pagina_preguntas["page_id"]
     if cached:
         return cached
-    listas_parent = _parent_bbdd_en_pagina(config.NOTION_DATA_LISTS_PAGE_NAME, crear=True)
-    if listas_parent.get("type") != "page_id":
+
+    # Nueva estructura: buscar dentro de "Preguntas Chatbot"
+    chatbot_parent = _parent_bbdd_en_pagina(config.NOTION_PREGUNTAS_CHATBOT_PAGE_NAME, crear=False)
+    if chatbot_parent.get("type") == "page_id":
+        chatbot_id = chatbot_parent["page_id"]
+        page_id = _page_or_database_link_by_name(chatbot_id, _NOMBRE_SUBPAGINA_PREGUNTAS_NUEVO)
+        if not page_id:
+            page_id = _page_or_database_link_by_name(chatbot_id, _NOMBRE_SUBPAGINA_PREGUNTAS)
+        if page_id:
+            with _lock_pagina_preguntas:
+                _cache_pagina_preguntas["page_id"] = page_id
+            return page_id
+
+    # Fallback: estructura antigua — buscar "Preguntas" dentro de la página de listas
+    for nombre_listas in (config.NOTION_DATA_LISTS_PAGE_NAME, config.NOTION_DATA_MODIFICABLES_PAGE_NAME, "Listas de datos"):
+        listas_parent = _parent_bbdd_en_pagina(nombre_listas, crear=False)
+        if listas_parent.get("type") != "page_id":
+            continue
+        listas_page_id = listas_parent["page_id"]
+        page_id = _page_or_database_link_by_name(listas_page_id, _NOMBRE_SUBPAGINA_PREGUNTAS)
+        if page_id:
+            with _lock_pagina_preguntas:
+                _cache_pagina_preguntas["page_id"] = page_id
+            return page_id
+
+    # Crear bajo "Preguntas Chatbot" si existe, si no bajo la página de listas
+    parent_crear = _parent_bbdd_en_pagina(config.NOTION_PREGUNTAS_CHATBOT_PAGE_NAME, crear=False)
+    if parent_crear.get("type") != "page_id":
+        parent_crear = _parent_bbdd_en_pagina(config.NOTION_DATA_MODIFICABLES_PAGE_NAME, crear=True)
+    if parent_crear.get("type") != "page_id":
+        parent_crear = _parent_bbdd_en_pagina(config.NOTION_DATA_LISTS_PAGE_NAME, crear=True)
+    if parent_crear.get("type") != "page_id":
         return None
-    listas_page_id = listas_parent["page_id"]
-    page_id = _page_or_database_link_by_name(listas_page_id, _NOMBRE_SUBPAGINA_PREGUNTAS)
-    if not page_id:
-        try:
-            nueva = notion.pages.create(
-                parent={"type": "page_id", "page_id": listas_page_id},
-                properties={"title": {"title": [{"type": "text", "text": {"content": _NOMBRE_SUBPAGINA_PREGUNTAS}}]}},
-            )
-            page_id = nueva["id"]
-            logging.info("Sub-página '%s' creada en '%s'", _NOMBRE_SUBPAGINA_PREGUNTAS, config.NOTION_DATA_LISTS_PAGE_NAME)
-        except Exception:
-            logging.exception("Error creando sub-página '%s'", _NOMBRE_SUBPAGINA_PREGUNTAS)
-            return None
+    try:
+        nombre_crear = _NOMBRE_SUBPAGINA_PREGUNTAS_NUEVO
+        nueva = notion.pages.create(
+            parent={"type": "page_id", "page_id": parent_crear["page_id"]},
+            properties={"title": {"title": [{"type": "text", "text": {"content": nombre_crear}}]}},
+        )
+        page_id = nueva["id"]
+        logging.info("Sub-página '%s' creada", nombre_crear)
+    except Exception:
+        logging.exception("Error creando sub-página de preguntas")
+        return None
     with _lock_pagina_preguntas:
         _cache_pagina_preguntas["page_id"] = page_id
     return page_id
@@ -1104,20 +1160,29 @@ def actualizar_en_notion(page_id: str, nombre: str, respuestas: dict, relacion: 
 _cache_bbdd_continuas: dict = {"db_id": None}
 
 
+_TITULO_BBDD_BARBECHO_NUEVO = "Resultados Barbecho"
+_TITULO_BBDD_BARBECHO_ANTIGUO = "Registros barbecho"
+
+
 def _obtener_o_crear_bbdd_continuas() -> str:
     with lock:
         db_id = _cache_bbdd_continuas["db_id"]
     if db_id:
         return db_id
-    parent = _parent_bbdd_referencia()
-    titulo = "Registros barbecho"
-    resultado = notion.search(query=titulo, filter={"value": _tipo_objeto_busqueda_bbdd(), "property": "object"}, page_size=50)
-    for bbdd in resultado.get("results", []):
-        if _extraer_titulo_bbdd(bbdd) == titulo and _coincide_parent_bbdd(bbdd, parent):
-            found_id = _data_source_id(bbdd)
-            with lock:
-                _cache_bbdd_continuas["db_id"] = found_id
-            return found_id
+    # Buscar por nombre nuevo o antiguo, sin restricción de parent (puede estar en nueva ubicación)
+    for titulo_buscar in (_TITULO_BBDD_BARBECHO_NUEVO, _TITULO_BBDD_BARBECHO_ANTIGUO):
+        resultado = notion.search(query=titulo_buscar, filter={"value": _tipo_objeto_busqueda_bbdd(), "property": "object"}, page_size=50)
+        for bbdd in resultado.get("results", []):
+            titulo_bbdd = _extraer_titulo_bbdd(bbdd)
+            if titulo_bbdd in (_TITULO_BBDD_BARBECHO_NUEVO, _TITULO_BBDD_BARBECHO_ANTIGUO):
+                found_id = _data_source_id(bbdd)
+                with lock:
+                    _cache_bbdd_continuas["db_id"] = found_id
+                return found_id
+    # Crear bajo "Resultados Evaluaciones" si existe, si no bajo root
+    titulo = _TITULO_BBDD_BARBECHO_NUEVO
+    parent_resultados = _parent_bbdd_en_pagina(config.NOTION_RESULTADOS_EVAL_PAGE_NAME, crear=False)
+    parent = parent_resultados if parent_resultados.get("type") == "page_id" else _parent_bbdd_referencia()
     props = {
         "Name": {"title": {}},
         "Empleado": {"rich_text": {}},
@@ -1137,7 +1202,7 @@ def _obtener_o_crear_bbdd_continuas() -> str:
     new_id = _data_source_id(nueva)
     with lock:
         _cache_bbdd_continuas["db_id"] = new_id
-    logging.info("Base de datos 'Registros barbecho' creada en Evaluaciones Continuas")
+    logging.info("Base de datos '%s' creada", titulo)
     return new_id
 
 
@@ -1372,16 +1437,20 @@ def _obtener_db_criterios(grupo: str) -> str | None:
             return _criterios_db_ids.get(grupo)
 
     try:
-        # Navegar Listas de datos → Criterios de evaluaciones (mismo patrón que el resto del código)
-        parent = _parent_bbdd_en_pagina(config.NOTION_DATA_LISTS_PAGE_NAME, crear=False)
+        # Buscar "Criterios de evaluaciones": nueva ubicación (Datos opcionalmente modificables)
+        # y ubicación antigua (Datos a Monitorizar / Listas de datos) como fallback
         criterios_page_id = None
-        if parent.get("type") == "page_id":
-            criterios_page_id = _page_or_database_link_by_name(parent["page_id"], _NOMBRE_PAGINA_CRITERIOS)
-        # Fallback: búsqueda global
+        for nombre_contenedor in (config.NOTION_DATA_MODIFICABLES_PAGE_NAME, config.NOTION_DATA_LISTS_PAGE_NAME):
+            parent = _parent_bbdd_en_pagina(nombre_contenedor, crear=False)
+            if parent.get("type") == "page_id":
+                criterios_page_id = _page_or_database_link_by_name(parent["page_id"], _NOMBRE_PAGINA_CRITERIOS)
+                if criterios_page_id:
+                    break
+        # Fallback: búsqueda global por nombre
         if not criterios_page_id:
             criterios_page_id = _buscar_objeto_notion_por_nombre(_NOMBRE_PAGINA_CRITERIOS)
         if not criterios_page_id:
-            logging.warning("[criterios] No se encontró la página '%s' en '%s'", _NOMBRE_PAGINA_CRITERIOS, config.NOTION_DATA_LISTS_PAGE_NAME)
+            logging.warning("[criterios] No se encontró la página '%s'", _NOMBRE_PAGINA_CRITERIOS)
             return None
         ids: dict[str, str] = {}
         for bloque in _iter_blocks(criterios_page_id):
@@ -1476,7 +1545,8 @@ def obtener_criterios_evaluacion(grupo: str) -> dict:
 # Ejemplos de guía (Ejemplos de guia en Listas de datos)
 # ---------------------------------------------------------------------------
 
-_NOMBRE_PAGINA_EJEMPLOS = "Ejemplos de guia"
+_NOMBRE_PAGINA_EJEMPLOS = "Ejemplos de Guia para bot"
+_NOMBRES_PAGINA_EJEMPLOS_FALLBACK = ("Ejemplos de guia", "Ejemplos de guía")
 _cache_ejemplos: dict | None = None
 _cache_ejemplos_ts: float = 0.0
 _ejemplos_db_id: str | None = None
@@ -1492,12 +1562,24 @@ def _obtener_db_ejemplos() -> str | None:
         if _ejemplos_db_id and (ahora - _ejemplos_db_id_ts) < _EJEMPLOS_CACHE_TTL:
             return _ejemplos_db_id
     try:
-        parent = _parent_bbdd_en_pagina(config.NOTION_DATA_LISTS_PAGE_NAME, crear=False)
+        # Buscar en nueva ubicación (Datos opcionalmente modificables) primero, luego en antigua
         encontrado_id = None
-        if parent.get("type") == "page_id":
-            encontrado_id = _page_or_database_link_by_name(parent["page_id"], _NOMBRE_PAGINA_EJEMPLOS)
+        nombres_buscar = (_NOMBRE_PAGINA_EJEMPLOS,) + _NOMBRES_PAGINA_EJEMPLOS_FALLBACK
+        for nombre_contenedor in (config.NOTION_DATA_MODIFICABLES_PAGE_NAME, config.NOTION_DATA_LISTS_PAGE_NAME):
+            parent = _parent_bbdd_en_pagina(nombre_contenedor, crear=False)
+            if parent.get("type") != "page_id":
+                continue
+            for nombre_ej in nombres_buscar:
+                encontrado_id = _page_or_database_link_by_name(parent["page_id"], nombre_ej)
+                if encontrado_id:
+                    break
+            if encontrado_id:
+                break
         if not encontrado_id:
-            encontrado_id = _buscar_objeto_notion_por_nombre(_NOMBRE_PAGINA_EJEMPLOS)
+            for nombre_ej in nombres_buscar:
+                encontrado_id = _buscar_objeto_notion_por_nombre(nombre_ej)
+                if encontrado_id:
+                    break
         if not encontrado_id:
             logging.warning("[ejemplos] No se encontró '%s'", _NOMBRE_PAGINA_EJEMPLOS)
             return None
@@ -1947,13 +2029,13 @@ def obtener_advisees(ca_nombre: str, ca_aliases=None) -> list[str]:
                 titulo = _extraer_titulo_bbdd(bbdd)
                 titulos_encontrados.append(titulo)
                 titulo_norm = normalizar_nombre(titulo)
-                if titulo_norm == "lista ca":
+                if titulo_norm in ("lista ca", "lista de cas"):
                     db_id = _data_source_id(bbdd)
                     logging.info(f"[advisees] Base de datos CA encontrada (exacto): '{titulo}' (id: {db_id})")
                     with lock:
                         _cache_lista_ca["db_id"] = db_id
                     break
-                if titulo_norm.startswith("lista ca"):
+                if titulo_norm.startswith("lista ca") or titulo_norm.startswith("lista de ca"):
                     candidatos.append((titulo, _data_source_id(bbdd)))
             if not db_id and candidatos:
                 titulo, db_id = candidatos[0]
@@ -2476,7 +2558,7 @@ def _obtener_db_id_lista_ca() -> str | None:
         )
         for bbdd in resultado.get("results", []):
             titulo = normalizar_nombre(_extraer_titulo_bbdd(bbdd))
-            if titulo == "lista ca" or titulo.startswith("lista ca"):
+            if titulo in ("lista ca", "lista de cas") or titulo.startswith("lista ca") or titulo.startswith("lista de ca"):
                 db_id = _data_source_id(bbdd)
                 with lock:
                     _cache_lista_ca["db_id"] = db_id
@@ -2943,20 +3025,56 @@ def _migrar_mensaje_inicial(db_id: str) -> None:
         logging.exception("Error migrando mensaje_inicial personal")
 
 
+_NOMBRE_PREGUNTAS_EVAL_PERSONAL = "Preguntas evaluación personal"
+_NOMBRE_RESPUESTAS_SEGUIMIENTO = "Resultados Seguimiento personal"
+
+# Mapa: nombre DB antiguo → (nombre nuevo, función que devuelve el parent dict de la nueva ubicación)
+_PERSONAL_DB_NUEVA_UBICACION: dict = {
+    "Preguntas": (
+        _NOMBRE_PREGUNTAS_EVAL_PERSONAL,
+        lambda: _parent_bbdd_en_pagina(config.NOTION_PREGUNTAS_CHATBOT_PAGE_NAME, crear=True),
+    ),
+    "Respuestas": (
+        _NOMBRE_RESPUESTAS_SEGUIMIENTO,
+        lambda: _parent_bbdd_en_pagina(config.NOTION_RESULTADOS_EVAL_PAGE_NAME, crear=True),
+    ),
+}
+
+
 def _obtener_o_crear_pagina_personales() -> str | None:
     with lock:
         page_id = _cache_personales_page_id["page_id"]
     if page_id:
         return page_id
 
-    ref = _parent_bbdd_en_pagina("Evaluaciones Personales", crear=True)
-    if ref.get("type") != "page_id":
-        logging.warning("No se pudo localizar/crear la página 'Evaluaciones Personales'")
-        return None
+    # Intentar encontrar la página antigua "Evaluaciones Personales" (aún puede existir)
+    ref = _parent_bbdd_en_pagina("Evaluaciones Personales", crear=False)
+    if ref.get("type") == "page_id":
+        with lock:
+            _cache_personales_page_id["page_id"] = ref["page_id"]
+        return ref["page_id"]
+    return None
 
-    with lock:
-        _cache_personales_page_id["page_id"] = ref["page_id"]
-    return ref["page_id"]
+
+def _buscar_bbdd_personal_en_nueva_ubicacion(titulo_db: str) -> str | None:
+    """Busca la BD de evaluaciones personales en su nueva ubicación post-migración."""
+    nueva_info = _PERSONAL_DB_NUEVA_UBICACION.get(titulo_db)
+    if not nueva_info:
+        return None
+    nombre_nuevo, obtener_parent = nueva_info
+    parent = obtener_parent()
+    if parent.get("type") != "page_id":
+        return None
+    # Buscar la BD con nombre nuevo
+    for nombre_buscar in (nombre_nuevo, titulo_db):
+        objetivo = normalizar_nombre(nombre_buscar)
+        for bloque in _iter_blocks(parent["page_id"]):
+            if bloque.get("type") == "child_database" and normalizar_nombre(_titulo_child_database(bloque)) == objetivo:
+                try:
+                    return _data_source_id(notion.databases.retrieve(database_id=bloque["id"]))
+                except Exception:
+                    return bloque["id"]
+    return None
 
 
 def _buscar_o_crear_bbdd_en_personales(titulo_db: str, props: dict, cache: dict, poblar=None) -> str | None:
@@ -2965,45 +3083,59 @@ def _buscar_o_crear_bbdd_en_personales(titulo_db: str, props: dict, cache: dict,
     if db_id:
         return db_id
 
-    personales_id = _obtener_o_crear_pagina_personales()
-    if not personales_id:
-        return None
+    # 1. Buscar en nueva ubicación post-migración
+    db_id = _buscar_bbdd_personal_en_nueva_ubicacion(titulo_db)
+    if db_id:
+        with lock:
+            cache["db_id"] = db_id
+        return db_id
 
-    objetivo = normalizar_nombre(titulo_db)
-    for bloque in _iter_blocks(personales_id):
-        if bloque.get("type") == "child_database" and normalizar_nombre(_titulo_child_database(bloque)) == objetivo:
-            try:
-                db_id = _data_source_id(notion.databases.retrieve(database_id=bloque["id"]))
-            except Exception:
-                db_id = bloque["id"]
-            with lock:
-                cache["db_id"] = db_id
-            return db_id
+    # 2. Buscar en ubicación antigua "Evaluaciones Personales"
+    personales_id = _obtener_o_crear_pagina_personales()
+    if personales_id:
+        objetivo = normalizar_nombre(titulo_db)
+        for bloque in _iter_blocks(personales_id):
+            if bloque.get("type") == "child_database" and normalizar_nombre(_titulo_child_database(bloque)) == objetivo:
+                try:
+                    db_id = _data_source_id(notion.databases.retrieve(database_id=bloque["id"]))
+                except Exception:
+                    db_id = bloque["id"]
+                with lock:
+                    cache["db_id"] = db_id
+                return db_id
+
+    # 3. Crear en nueva ubicación si está disponible, si no en root
+    nueva_info = _PERSONAL_DB_NUEVA_UBICACION.get(titulo_db)
+    if nueva_info:
+        titulo_crear, obtener_parent = nueva_info
+        parent_crear = obtener_parent()
+    else:
+        titulo_crear = titulo_db
+        parent_crear = _parent_bbdd_referencia()
 
     try:
-        parent_personales = {"type": "page_id", "page_id": personales_id}
         if _usa_data_sources():
             nueva = notion.databases.create(
-                parent=parent_personales,
-                title=[{"type": "text", "text": {"content": titulo_db}}],
-                initial_data_source={"title": [{"type": "text", "text": {"content": titulo_db}}], "properties": props},
+                parent=parent_crear,
+                title=[{"type": "text", "text": {"content": titulo_crear}}],
+                initial_data_source={"title": [{"type": "text", "text": {"content": titulo_crear}}], "properties": props},
             )
             nueva = notion.databases.retrieve(database_id=nueva["id"])
         else:
             nueva = notion.databases.create(
-                parent=parent_personales,
-                title=[{"type": "text", "text": {"content": titulo_db}}],
+                parent=parent_crear,
+                title=[{"type": "text", "text": {"content": titulo_crear}}],
                 properties=props,
             )
         db_id = _data_source_id(nueva)
         with lock:
             cache["db_id"] = db_id
-        logging.info("BD '%s' creada bajo 'Evaluaciones Personales'", titulo_db)
+        logging.info("BD '%s' creada", titulo_crear)
         if poblar:
             poblar(db_id)
         return db_id
     except Exception:
-        logging.exception("Error creando BD '%s' para evaluaciones personales", titulo_db)
+        logging.exception("Error creando BD '%s'", titulo_crear)
         return None
 
 

@@ -30,6 +30,7 @@ from .notion_service import (
     obtener_advisees,
     obtener_comentarios_personales,
     obtener_config_calendario,
+    obtener_ejemplos_guia,
     obtener_evaluaciones_por_evaluado,
     obtener_nombre_por_id_usuario,
     obtener_objetivos_persona,
@@ -509,12 +510,37 @@ def enviar_pregunta_inicial_ca() -> None:
                 dm_channel = resp_dm["channel"]["id"]
                 resp = slack_app.client.chat_postMessage(
                     channel=dm_channel,
-                    text=(
-                        "📋 *CA: Tienes evaluación de advisees pendiente*\n\n"
-                        "_Esta evaluación es totalmente privada, solo podrás verla tú._\n"
-                        "_Si en algún momento quieres cancelar, escribe SOS en el hilo._\n\n"
-                        "> 👉 *Envía cualquier mensaje en el hilo para comenzar la evaluación*"
-                    ),
+                    text="📋 CA: Tienes evaluación de advisees pendiente",
+                    blocks=[
+                        {
+                            "type": "section",
+                            "text": {
+                                "type": "mrkdwn",
+                                "text": (
+                                    "📋 *CA: Tienes evaluación de advisees pendiente*\n\n"
+                                    "_Esta evaluación es totalmente privada, solo podrás verla tú._\n"
+                                    "_Si en algún momento quieres cancelar, escribe SOS en el hilo._"
+                                ),
+                            },
+                        },
+                        {
+                            "type": "section",
+                            "text": {"type": "mrkdwn", "text": ":point_right: Ejemplo:"},
+                            "accessory": {
+                                "type": "button",
+                                "text": {"type": "plain_text", "text": "Ver ejemplo"},
+                                "action_id": "ca_ver_ejemplo",
+                            },
+                        },
+                        {
+                            "type": "section",
+                            "text": {
+                                "type": "mrkdwn",
+                                "text": ":point_right: *Envía cualquier mensaje en el hilo para comenzar la evaluación*",
+                            },
+                        },
+                        {"type": "divider"},
+                    ],
                 )
                 with _lock:
                     ca_dm_activas.add(user_id)
@@ -1010,6 +1036,44 @@ def obtener_resumen_advisee_para_ca(ca_nombre: str, advisee: str) -> tuple[str, 
     resumen = _resumen_advisee(advisee, desde_fecha)
     sin_novedades = "no hay evaluaciones nuevas" in resumen or "No hay evaluaciones registradas" in resumen
     return resumen, sin_novedades
+
+
+# ---------------------------------------------------------------------------
+# Ejemplo de guía — modal CA
+# ---------------------------------------------------------------------------
+
+def _build_ejemplo_ca_view() -> dict:
+    ejemplos = obtener_ejemplos_guia()
+    ejemplo = ejemplos.get("CA", "_No hay ejemplo disponible_")
+    return {
+        "type": "modal",
+        "callback_id": "ejemplo_ca_ver",
+        "title": {"type": "plain_text", "text": "Ejemplo de guía"},
+        "close": {"type": "plain_text", "text": "Cerrar"},
+        "blocks": [
+            {
+                "type": "section",
+                "text": {"type": "mrkdwn", "text": "💡 *Ejemplo de guía — Evaluación CA*"},
+            },
+            {"type": "divider"},
+            {
+                "type": "section",
+                "text": {"type": "mrkdwn", "text": ejemplo[:3000] if ejemplo else "_No hay ejemplo disponible_"},
+            },
+        ],
+    }
+
+
+@slack_app.action("ca_ver_ejemplo")
+def _handle_ca_ver_ejemplo(ack, body, logger):
+    ack()
+    trigger_id = body.get("trigger_id")
+    if not trigger_id:
+        return
+    try:
+        slack_app.client.views_open(trigger_id=trigger_id, view=_build_ejemplo_ca_view())
+    except Exception:
+        logger.exception("Error abriendo modal de ejemplo CA")
 
 
 def ciclo_envio_ca() -> None:

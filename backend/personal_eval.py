@@ -12,8 +12,9 @@ from .notion_service import (
     obtener_ca_de_empleado,
     obtener_config_calendario,
     obtener_criterios_evaluacion,
+    obtener_ejemplos_guia,
     obtener_nombre_por_id_usuario,
-    obtener_objetivos,
+    obtener_objetivos_persona,
     obtener_slack_id_por_nombre,
     obtener_slack_ids_empleados,
     siguiente_envio_calendario,
@@ -146,11 +147,27 @@ def enviar_pregunta_inicial_personal() -> None:
                     "text": (
                         "📝 *Tienes opción de seguimiento personal pendiente*\n\n"
                         "_Esta evaluación es totalmente privada, solo podrá verla tu CA._\n"
-                        "_Si en algún momento quieres cancelar, escribe SOS en el hilo._\n\n"
-                        "👉 *Envía cualquier mensaje en el hilo para comenzar la evaluación*"
+                        "_Si en algún momento quieres cancelar, escribe SOS en el hilo._"
                     ),
                 },
             },
+            {
+                "type": "section",
+                "text": {"type": "mrkdwn", "text": ":point_right: Ejemplo:"},
+                "accessory": {
+                    "type": "button",
+                    "text": {"type": "plain_text", "text": "Ver ejemplo"},
+                    "action_id": "personal_ver_ejemplo",
+                },
+            },
+            {
+                "type": "section",
+                "text": {
+                    "type": "mrkdwn",
+                    "text": ":point_right: *Envía cualquier mensaje en el hilo para comenzar la evaluación*",
+                },
+            },
+            {"type": "divider"},
         ]
 
         for user_id in slack_ids:
@@ -583,10 +600,17 @@ def _handle_personal_ver_objetivos(ack, body, logger):
             except Exception:
                 nombre = user_id
 
-        objetivos = obtener_objetivos(nombre) if nombre else []
+        objetivos = obtener_objetivos_persona(nombre) if nombre else []
         if objetivos:
-            texto_obj = objetivos[0]["objetivos"]
-            msg_obj = f"📌 *Tus objetivos actuales:*\n\n{texto_obj}"
+            lineas = []
+            for obj in objetivos:
+                linea = f"• *{obj['titulo']}*"
+                if obj.get("kpis"):
+                    linea += f"\n  _KPIs:_ {obj['kpis']}"
+                if obj.get("descripcion"):
+                    linea += f"\n  {obj['descripcion']}"
+                lineas.append(linea)
+            msg_obj = "📌 *Tus objetivos actuales:*\n\n" + "\n\n".join(lineas)
         else:
             msg_obj = "📌 No tienes objetivos registrados actualmente."
 
@@ -865,6 +889,106 @@ def _handle_criterios_toggle(ack, body, logger):
         )
     except Exception:
         logger.exception("Error actualizando criterios para subárea '%s'", subarea)
+
+
+# ---------------------------------------------------------------------------
+# Ejemplos de guía — modal interactivo (Personal)
+# ---------------------------------------------------------------------------
+
+def _build_ejemplos_personal_view(ejemplos: dict, expanded: set) -> dict:
+    # Filtrar entradas de Notion cuyo tipo contenga "personal" (case-insensitive)
+    personales = {k: v for k, v in ejemplos.items() if "personal" in k.lower()}
+
+    blocks: list = [
+        {
+            "type": "section",
+            "text": {
+                "type": "mrkdwn",
+                "text": "💡 *Ejemplos de guía — Seguimiento personal*\nPulsa *Ver* en cada apartado para expandirlo:",
+            },
+        },
+        {"type": "divider"},
+    ]
+    for tipo, ejemplo in personales.items():
+        is_expanded = tipo in expanded
+        # Mostrar nombre limpio: quitar prefijo "Personal - " o "Personal-" si existe
+        nombre = tipo
+        for prefijo in ("Personal - ", "Personal-", "personal - ", "personal-"):
+            if nombre.startswith(prefijo):
+                nombre = nombre[len(prefijo):].strip()
+                break
+        blocks.append({
+            "type": "section",
+            "text": {"type": "mrkdwn", "text": f"*{nombre}*"},
+            "accessory": {
+                "type": "button",
+                "text": {"type": "plain_text", "text": "▼ Ocultar" if is_expanded else "▶ Ver"},
+                "action_id": "ejemplo_personal_toggle",
+                "value": tipo,  # clave exacta de Notion para el toggle
+            },
+        })
+        if is_expanded:
+            blocks.append({
+                "type": "section",
+                "text": {"type": "mrkdwn", "text": ejemplo[:3000] if ejemplo else "_No hay ejemplo disponible_"},
+            })
+            blocks.append({"type": "divider"})
+
+    if not personales:
+        blocks.append({
+            "type": "section",
+            "text": {"type": "mrkdwn", "text": "_No hay ejemplos personales disponibles_"},
+        })
+
+    return {
+        "type": "modal",
+        "callback_id": "ejemplo_personal_ver",
+        "private_metadata": json.dumps({"expanded": list(expanded)}),
+        "title": {"type": "plain_text", "text": "Ejemplos de guía"},
+        "close": {"type": "plain_text", "text": "Cerrar"},
+        "blocks": blocks[:100],
+    }
+
+
+@slack_app.action("personal_ver_ejemplo")
+def _handle_personal_ver_ejemplo(ack, body, logger):
+    ack()
+    trigger_id = body.get("trigger_id")
+    if not trigger_id:
+        return
+    try:
+        ejemplos = obtener_ejemplos_guia()
+        slack_app.client.views_open(
+            trigger_id=trigger_id,
+            view=_build_ejemplos_personal_view(ejemplos, set()),
+        )
+    except Exception:
+        logger.exception("Error abriendo modal de ejemplos personal")
+
+
+@slack_app.action("ejemplo_personal_toggle")
+def _handle_ejemplo_personal_toggle(ack, body, logger):
+    ack()
+    view = body.get("view", {})
+    try:
+        metadata = json.loads(view.get("private_metadata", "{}"))
+    except Exception:
+        metadata = {}
+    expanded = set(metadata.get("expanded", []))
+    action = (body.get("actions") or [{}])[0]
+    tipo = action.get("value", "")
+    if tipo in expanded:
+        expanded.discard(tipo)
+    else:
+        expanded.add(tipo)
+    try:
+        ejemplos = obtener_ejemplos_guia()
+        slack_app.client.views_update(
+            view_id=view["id"],
+            view=_build_ejemplos_personal_view(ejemplos, expanded),
+        )
+    except Exception:
+        logger.exception("Error actualizando ejemplos personal para tipo '%s'", tipo)
 
 
 def ciclo_envio_personal() -> None:

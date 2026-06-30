@@ -1372,8 +1372,16 @@ def _obtener_db_criterios(grupo: str) -> str | None:
             return _criterios_db_ids.get(grupo)
 
     try:
-        criterios_page_id = _buscar_objeto_notion_por_nombre(_NOMBRE_PAGINA_CRITERIOS)
+        # Navegar Listas de datos → Criterios de evaluaciones (mismo patrón que el resto del código)
+        parent = _parent_bbdd_en_pagina(config.NOTION_DATA_LISTS_PAGE_NAME, crear=False)
+        criterios_page_id = None
+        if parent.get("type") == "page_id":
+            criterios_page_id = _page_or_database_link_by_name(parent["page_id"], _NOMBRE_PAGINA_CRITERIOS)
+        # Fallback: búsqueda global
         if not criterios_page_id:
+            criterios_page_id = _buscar_objeto_notion_por_nombre(_NOMBRE_PAGINA_CRITERIOS)
+        if not criterios_page_id:
+            logging.warning("[criterios] No se encontró la página '%s' en '%s'", _NOMBRE_PAGINA_CRITERIOS, config.NOTION_DATA_LISTS_PAGE_NAME)
             return None
         ids: dict[str, str] = {}
         for bloque in _iter_blocks(criterios_page_id):
@@ -1461,6 +1469,127 @@ def obtener_criterios_evaluacion(grupo: str) -> dict:
 
     with _lock_criterios:
         _cache_criterios[grupo] = (resultado, time.time())
+    return resultado
+
+
+# ---------------------------------------------------------------------------
+# Ejemplos de guía (Ejemplos de guia en Listas de datos)
+# ---------------------------------------------------------------------------
+
+_NOMBRE_PAGINA_EJEMPLOS = "Ejemplos de guia"
+_cache_ejemplos: dict | None = None
+_cache_ejemplos_ts: float = 0.0
+_ejemplos_db_id: str | None = None
+_ejemplos_db_id_ts: float = 0.0
+_lock_ejemplos = threading.Lock()
+_EJEMPLOS_CACHE_TTL = 300  # 5 minutos
+
+
+def _obtener_db_ejemplos() -> str | None:
+    global _ejemplos_db_id, _ejemplos_db_id_ts
+    ahora = time.time()
+    with _lock_ejemplos:
+        if _ejemplos_db_id and (ahora - _ejemplos_db_id_ts) < _EJEMPLOS_CACHE_TTL:
+            return _ejemplos_db_id
+    try:
+        parent = _parent_bbdd_en_pagina(config.NOTION_DATA_LISTS_PAGE_NAME, crear=False)
+        encontrado_id = None
+        if parent.get("type") == "page_id":
+            encontrado_id = _page_or_database_link_by_name(parent["page_id"], _NOMBRE_PAGINA_EJEMPLOS)
+        if not encontrado_id:
+            encontrado_id = _buscar_objeto_notion_por_nombre(_NOMBRE_PAGINA_EJEMPLOS)
+        if not encontrado_id:
+            logging.warning("[ejemplos] No se encontró '%s'", _NOMBRE_PAGINA_EJEMPLOS)
+            return None
+
+        # Caso 1: el ID encontrado ya ES la base de datos directamente
+        try:
+            db = notion.databases.retrieve(database_id=encontrado_id)
+            db_id = _data_source_id(db)
+            logging.info("[ejemplos] BD de ejemplos encontrada directamente: %s", db_id)
+            with _lock_ejemplos:
+                _ejemplos_db_id = db_id
+                _ejemplos_db_id_ts = time.time()
+            return db_id
+        except Exception:
+            pass
+
+        # Caso 2: el ID es una página que contiene una child_database
+        for bloque in _iter_blocks(encontrado_id):
+            if bloque.get("type") == "child_database":
+                try:
+                    db = notion.databases.retrieve(database_id=bloque["id"])
+                    db_id = _data_source_id(db)
+                except Exception:
+                    db_id = bloque["id"]
+                logging.info("[ejemplos] BD de ejemplos encontrada como child_database: %s", db_id)
+                with _lock_ejemplos:
+                    _ejemplos_db_id = db_id
+                    _ejemplos_db_id_ts = time.time()
+                return db_id
+    except Exception:
+        logging.exception("[ejemplos] Error buscando BD de ejemplos de guía")
+    return None
+
+
+def obtener_ejemplos_guia() -> dict:
+    """
+    Devuelve {tipo: texto_ejemplo} leyendo la BD 'Ejemplos de guia' en 'Listas de datos'.
+    La BD debe tener columna 'Tipo' (title) y una columna rich_text con el ejemplo.
+    Cachea 5 min.
+    """
+    global _cache_ejemplos, _cache_ejemplos_ts
+    ahora = time.time()
+    with _lock_ejemplos:
+        if _cache_ejemplos is not None and (ahora - _cache_ejemplos_ts) < _EJEMPLOS_CACHE_TTL:
+            return _cache_ejemplos
+
+    db_id = _obtener_db_ejemplos()
+    if not db_id:
+        return {}
+
+    def _rt(prop):
+        return "".join(t.get("plain_text", "") for t in (prop or {}).get("rich_text", [])).strip()
+
+    resultado: dict = {}
+    try:
+        cursor = None
+        while True:
+            kwargs: dict = {"page_size": 100}
+            if cursor:
+                kwargs["start_cursor"] = cursor
+            resp = _query_bbdd(db_id, **kwargs)
+            for row in resp.get("results", []):
+                props = row.get("properties", {})
+                # Detectar la columna título genéricamente (sea cual sea su nombre)
+                tipo = ""
+                tipo_key = None
+                for key, val in props.items():
+                    if (val or {}).get("type") == "title":
+                        tipo = "".join(t.get("plain_text", "") for t in (val or {}).get("title", [])).strip()
+                        tipo_key = key
+                        break
+                if not tipo:
+                    continue
+                # Primera columna rich_text como texto del ejemplo
+                ejemplo = ""
+                for key, val in props.items():
+                    if key != tipo_key and (val or {}).get("type") == "rich_text":
+                        texto = _rt(val)
+                        if texto:
+                            ejemplo = texto
+                            break
+                resultado[tipo] = ejemplo
+            if not resp.get("has_more"):
+                break
+            cursor = resp.get("next_cursor")
+    except Exception:
+        logging.exception("[ejemplos] Error leyendo BD de ejemplos de guía")
+        return {}
+
+    with _lock_ejemplos:
+        _cache_ejemplos = resultado
+        _cache_ejemplos_ts = time.time()
     return resultado
 
 

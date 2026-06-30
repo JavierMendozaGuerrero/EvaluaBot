@@ -23,6 +23,7 @@ from .notion_service import (
     guardar_en_notion,
     obtener_cargo_por_slack_id,
     obtener_config_calendario,
+    obtener_ejemplos_guia,
     obtener_evaluados_middleoffice,
     obtener_nombre_por_id_usuario,
     obtener_preguntas_desde_notion,
@@ -64,12 +65,37 @@ def enviar_una_evaluacion():
                 dm_channel = resp_dm["channel"]["id"]
                 resp = slack_app.client.chat_postMessage(
                     channel=dm_channel,
-                    text=(
-                        "📍 *Tienes una evaluación mensual pendiente.*\n\n"
-                        "_Esta evaluación es totalmente privada, solo podrá verla el CA de la persona evaluada._\n"
-                        "_Si en algún momento quieres cancelar, escribe SOS en el hilo._\n\n"
-                        "> 👉 *Envía cualquier mensaje en el hilo para comenzar la evaluación*"
-                    ),
+                    text="📍 Tienes una evaluación mensual pendiente",
+                    blocks=[
+                        {
+                            "type": "section",
+                            "text": {
+                                "type": "mrkdwn",
+                                "text": (
+                                    "📍 *Tienes una evaluación mensual pendiente.*\n\n"
+                                    "_Esta evaluación es totalmente privada, solo podrá verla el CA de la persona evaluada._\n"
+                                    "_Si en algún momento quieres cancelar, escribe SOS en el hilo._"
+                                ),
+                            },
+                        },
+                        {
+                            "type": "section",
+                            "text": {"type": "mrkdwn", "text": ":point_right: Ejemplo:"},
+                            "accessory": {
+                                "type": "button",
+                                "text": {"type": "plain_text", "text": "Ver ejemplo"},
+                                "action_id": "mensual_ver_ejemplo",
+                            },
+                        },
+                        {
+                            "type": "section",
+                            "text": {
+                                "type": "mrkdwn",
+                                "text": ":point_right: *Envía cualquier mensaje en el hilo para comenzar la evaluación*",
+                            },
+                        },
+                        {"type": "divider"},
+                    ],
                 )
                 with lock:
                     evaluaciones_dm_activas.add(user_id)
@@ -1918,6 +1944,44 @@ def handle_proyecto_modificar(ack, body, logger):
 
 
 _RECORDATORIO_PROYECTO_SEGUNDOS = 7 * 24 * 60 * 60  # 1 semana
+
+
+# ---------------------------------------------------------------------------
+# Ejemplo de guía — modal Mensual
+# ---------------------------------------------------------------------------
+
+def _build_ejemplo_mensual_view() -> dict:
+    ejemplos = obtener_ejemplos_guia()
+    ejemplo = ejemplos.get("Mensual", "_No hay ejemplo disponible_")
+    return {
+        "type": "modal",
+        "callback_id": "ejemplo_mensual_ver",
+        "title": {"type": "plain_text", "text": "Ejemplo de guía"},
+        "close": {"type": "plain_text", "text": "Cerrar"},
+        "blocks": [
+            {
+                "type": "section",
+                "text": {"type": "mrkdwn", "text": "💡 *Ejemplo de guía — Evaluación Mensual*"},
+            },
+            {"type": "divider"},
+            {
+                "type": "section",
+                "text": {"type": "mrkdwn", "text": ejemplo[:3000] if ejemplo else "_No hay ejemplo disponible_"},
+            },
+        ],
+    }
+
+
+@slack_app.action("mensual_ver_ejemplo")
+def _handle_mensual_ver_ejemplo(ack, body, logger):
+    ack()
+    trigger_id = body.get("trigger_id")
+    if not trigger_id:
+        return
+    try:
+        slack_app.client.views_open(trigger_id=trigger_id, view=_build_ejemplo_mensual_view())
+    except Exception:
+        logger.exception("Error abriendo modal de ejemplo mensual")
 
 
 def ciclo_recordatorios_proyecto():

@@ -352,6 +352,17 @@ def _texto_menu_modificacion_ca() -> str:
     )
 
 
+def _bloques_menu_modificacion_ca() -> list:
+    """Menú '¿Qué respuesta quieres modificar?' (CA) como botones."""
+    return [
+        {"type": "section", "text": {"type": "mrkdwn", "text": "*¿Qué respuesta quieres modificar?*"}},
+        {"type": "actions", "elements": [
+            {"type": "button", "text": {"type": "plain_text", "text": "Advisee"}, "value": "1", "action_id": "mod_ca_1"},
+            {"type": "button", "text": {"type": "plain_text", "text": "Opinión"}, "value": "2", "action_id": "mod_ca_2"},
+        ]},
+    ]
+
+
 def _clave_modificacion_ca(texto: str) -> str | None:
     return _OPCIONES_MODIFICACION_CA.get(normalizar_nombre(texto))
 
@@ -709,6 +720,13 @@ def manejar_mensaje_ca(event, logger) -> None:
         guardados = estado.get("advisees_guardados", set())
         advisees_l = [a for a in advisees_l if a not in guardados]
         estado["lista_advisees"] = advisees_l
+        # Si ya has opinado sobre todos tus advisees, cierra la evaluación con el mensaje de siempre.
+        if not advisees_l and guardados:
+            with _lock:
+                if conv_key in conversaciones_ca:
+                    conversaciones_ca[conv_key]["modo"] = "terminado"
+            reply(f"{prefijo}Ya has opinado sobre todos tus advisees. ¡Perfecto, gracias por tu tiempo! 🎉")
+            return
         texto_header = f"{prefijo}¿De qué advisee te gustaría hacer seguimiento?"
         if advisees_l:
             elementos = [
@@ -841,7 +859,11 @@ def manejar_mensaje_ca(event, logger) -> None:
         )
 
     elif accion == "pedir_modificacion_ca":
-        reply(_texto_menu_modificacion_ca())
+        slack_app.client.chat_postMessage(
+            channel=channel, thread_ts=thread_ts,
+            text="¿Qué respuesta quieres modificar?",
+            blocks=_bloques_menu_modificacion_ca(),
+        )
 
     elif accion == "pedir_valor_modificacion_ca":
         campo = estado.get("campo_modificando")
@@ -1139,6 +1161,25 @@ def _handle_ca_modificar(ack, body, logger):
         manejar_mensaje_ca(evento, logger)
     except Exception:
         logger.exception("Error procesando modificación CA interactiva")
+
+
+@slack_app.action(re.compile(r"^mod_ca_\d+$"))
+def _handle_mod_ca_opcion(ack, body, logger):
+    """Botón del menú '¿Qué respuesta quieres modificar?' (CA): reinyecta el número."""
+    ack()
+    try:
+        val = ""
+        for a in body.get("actions", []):
+            val = a.get("value", "") or val
+        evento = {
+            "user": body["user"]["id"],
+            "channel": body["channel"]["id"],
+            "thread_ts": body["message"].get("thread_ts") or body["message"]["ts"],
+            "text": val,
+        }
+        manejar_mensaje_ca(evento, logger)
+    except Exception:
+        logger.exception("Error procesando opción de modificación CA")
 
 
 @slack_app.action(re.compile(r"^permiso_claude_(si|no)$"))

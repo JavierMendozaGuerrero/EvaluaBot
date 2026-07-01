@@ -70,6 +70,12 @@ from .reports import generar_archivo_trayectoria, generar_archivos_informe
 from .skill_informes_anual import generar_informe_anual, obtener_empleados_evaluacion_anual
 from . import eval_anual_sesion as eval_sesion
 from .skill_opiniones_ca import generar_resumen_opiniones_ca
+from .skill_pdfs_fuentes import (
+    generar_pdf_evals_proyecto,
+    generar_pdf_seguimiento_personal,
+    generar_pdf_evals_mensuales,
+    generar_pdf_completo,
+)
 from .users import (
     autenticar_usuario,
     cambiar_password_con_token,
@@ -418,16 +424,9 @@ class ApiHandler(BaseHTTPRequestHandler):
                 if ruta == "/api/eval-anual/estado":
                     self.responder_json(eval_sesion.estado_sesion(evaluado))
                     return
-                if ruta == "/api/eval-anual/evidencia":
-                    bloque = int(qp.get("bloque", ["0"])[0] or 0)
-                    self.responder_json(eval_sesion.obtener_evidencia(evaluado, bloque))
-                    return
-                if ruta == "/api/eval-anual/dimension":
+                if ruta == "/api/eval-anual/area":
                     clave = qp.get("clave", [""])[0].strip()
-                    self.responder_json(eval_sesion.obtener_dimension(evaluado, clave))
-                    return
-                if ruta == "/api/eval-anual/log":
-                    self.responder_json(eval_sesion.log_auditoria(evaluado))
+                    self.responder_json(eval_sesion.obtener_area(evaluado, clave))
                     return
                 self.responder_json({"error": "Ruta no encontrada."}, 404)
                 return
@@ -653,6 +652,22 @@ class ApiHandler(BaseHTTPRequestHandler):
                     "htmlUrl": self.url_archivo(f"opiniones_ca_{slug}.html", evaluado),
                 })
                 return
+            if ruta in ("/api/generar-pdf-evals-proyecto", "/api/generar-pdf-seguimiento", "/api/generar-pdf-evals-mensuales", "/api/generar-pdf-completo"):
+                evaluado = (datos.get("evaluado", "") or datos.get("advisee", "")).strip()
+                if not evaluado:
+                    self.responder_json({"error": "Selecciona un advisee."}, 400)
+                    return
+                self._exigir_acceso_advisee(sesion, evaluado)
+                _GEN = {
+                    "/api/generar-pdf-evals-proyecto": (generar_pdf_evals_proyecto, "evals_proyecto"),
+                    "/api/generar-pdf-seguimiento": (generar_pdf_seguimiento_personal, "seguimiento_personal"),
+                    "/api/generar-pdf-evals-mensuales": (generar_pdf_evals_mensuales, "evals_mensuales"),
+                    "/api/generar-pdf-completo": (generar_pdf_completo, "info_completa"),
+                }
+                generador, prefijo = _GEN[ruta]
+                slug = generador(evaluado)
+                self.responder_json({"pdfUrl": self.url_archivo(f"{prefijo}_{slug}.pdf", evaluado)})
+                return
             if ruta == "/api/trayectoria":
                 evaluado = datos.get("evaluado", "")
                 advisees_ca = obtener_advisees(
@@ -709,17 +724,13 @@ class ApiHandler(BaseHTTPRequestHandler):
                 if ruta == "/api/eval-anual/confirmar-identidad":
                     self.responder_json(eval_sesion.confirmar_identidad(evaluado))
                     return
-                if ruta == "/api/eval-anual/responder":
-                    self.responder_json(eval_sesion.responder_dimension(
+                if ruta == "/api/eval-anual/responder-area":
+                    self.responder_json(eval_sesion.responder_area(
                         evaluado, datos.get("clave", "").strip(), datos.get("texto", "")))
                     return
-                if ruta == "/api/eval-anual/fusionar":
-                    self.responder_json(eval_sesion.sugerir_fusion(evaluado, datos.get("clave", "").strip()))
-                    return
-                if ruta == "/api/eval-anual/decidir":
-                    self.responder_json(eval_sesion.decidir_dimension(
-                        evaluado, datos.get("clave", "").strip(),
-                        datos.get("eleccion", "").strip(), datos.get("texto", "")))
+                if ruta == "/api/eval-anual/confirmar-area":
+                    self.responder_json(eval_sesion.confirmar_area(
+                        evaluado, datos.get("clave", "").strip()))
                     return
                 if ruta == "/api/eval-anual/finalizar":
                     res = eval_sesion.finalizar_sesion(evaluado)
@@ -971,9 +982,11 @@ class ApiHandler(BaseHTTPRequestHandler):
         es_trayectoria = nombre_archivo.startswith(f"trayectoria_{slug}.")
         es_final = nombre_archivo.startswith(f"informe_final_{slug}_")
         es_opiniones = nombre_archivo.startswith(f"opiniones_ca_{slug}.")
-        if not es_borrador and not es_trayectoria and not es_final and not es_opiniones:
+        es_fuente_pdf = any(nombre_archivo.startswith(f"{p}_{slug}.") for p in (
+            "evals_proyecto", "seguimiento_personal", "evals_mensuales", "info_completa"))
+        if not es_borrador and not es_trayectoria and not es_final and not es_opiniones and not es_fuente_pdf:
             raise PermissionError("El archivo solicitado no corresponde con la persona autorizada.")
-        if (es_borrador or es_opiniones) and not es_admin and not es_ca:
+        if (es_borrador or es_opiniones or es_fuente_pdf) and not es_admin and not es_ca:
             raise PermissionError("Solo el CA o un administrador pueden ver los documentos generados.")
         if (es_trayectoria or es_final) and not es_admin and not es_ca:
             if es_propio:

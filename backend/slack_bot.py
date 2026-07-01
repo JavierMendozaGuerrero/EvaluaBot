@@ -149,11 +149,17 @@ def enviar_evaluaciones_programadas():
         enviar_una_evaluacion()
 
 
-def resumen_respuestas(respuestas, area="negocio", preguntas_area=None):
-    _sufijo = (
-        "\n\n¿Estás satisfecho con tus respuestas?\n"
-        "Responde o haz click en sí para guardar en Notion o modificar para cambiar una respuesta concreta."
-    )
+def resumen_respuestas(respuestas, area="negocio", preguntas_area=None, tras_modificacion=False):
+    if tras_modificacion:
+        _sufijo = (
+            "\n\n✅ Respuesta actualizada. ¿Quieres cambiar algo más o sigo?\n"
+            "Haz click en *Modificar* para cambiar otra respuesta o en *Sí, guardar* para continuar."
+        )
+    else:
+        _sufijo = (
+            "\n\n¿Estás satisfecho con tus respuestas?\n"
+            "Responde o haz click en sí para guardar en Notion o modificar para cambiar una respuesta concreta."
+        )
     lineas = ["*Resumen de tus respuestas:*"]
     lineas.append(f"- *Persona evaluada*: {respuestas.get('evaluado', '')}")
     if respuestas.get("proyecto"):
@@ -175,6 +181,32 @@ def _texto_menu_modificacion_area(estado):
         lineas.append(f"{i}. {q['texto'].split(chr(10))[0][:55]}")
     lineas.append("\nResponde con el número.")
     return "\n".join(lineas)
+
+
+def _bloques_menu_modificacion_area(estado):
+    """Menú '¿Qué respuesta quieres modificar?' como botones (value = número de opción)."""
+    preguntas_area = estado.get("preguntas_area", [])
+    opciones = [("1", "Persona evaluada"), ("2", "Proyecto")]
+    for i, q in enumerate(preguntas_area, start=3):
+        opciones.append((str(i), q["texto"].split(chr(10))[0][:70]))
+    bloques = [{"type": "section", "text": {"type": "mrkdwn", "text": "*¿Qué respuesta quieres modificar?*"}}]
+    fila = []
+    for val, label in opciones:
+        fila.append({"type": "button", "text": {"type": "plain_text", "text": label[:74]},
+                     "value": val, "action_id": f"mod_area_{val}"})
+        if len(fila) == 5:  # máximo 5 botones por bloque de acciones en Slack
+            bloques.append({"type": "actions", "elements": fila}); fila = []
+    if fila:
+        bloques.append({"type": "actions", "elements": fila})
+    return bloques
+
+
+def _enviar_menu_modificacion_area(dm_channel, thread_ts, estado):
+    slack_app.client.chat_postMessage(
+        channel=dm_channel, thread_ts=thread_ts,
+        text="¿Qué respuesta quieres modificar?",
+        blocks=_bloques_menu_modificacion_area(estado),
+    )
 
 
 def _clave_modificacion_area(texto, estado):
@@ -287,9 +319,28 @@ def _aplicar_respuesta_valoracion(user_id: str, valor: str):
     """Aplica la valoración al estado y devuelve (accion, texto_siguiente)."""
     with lock:
         estado = conversaciones.get(user_id)
-        if not estado or estado.get("modo") != "preguntando_area_secuencial":
+        if not estado:
             return None, None
+        modo = estado.get("modo")
         todas = estado.get("preguntas_area", [])
+
+        # Modificación puntual de una valoración desde el menú de "modificar"
+        if modo == "modificando_respuesta_area":
+            campo = estado.get("campo_modificando")
+            if campo not in _VALORACION_CLAVES:
+                return None, None
+            estado["respuestas"][campo] = valor
+            estado.pop("campo_modificando", None)
+            estado["modo"] = "confirmacion"
+            return "mostrar_resumen", resumen_respuestas(
+                estado["respuestas"],
+                area=estado.get("area", "negocio"),
+                preguntas_area=todas,
+                tras_modificacion=True,
+            )
+
+        if modo != "preguntando_area_secuencial":
+            return None, None
         idx = estado.get("pregunta_actual", 0)
         if idx >= len(todas) or todas[idx]["clave"] not in _VALORACION_CLAVES:
             return None, None
@@ -325,7 +376,9 @@ def _handle_valoracion_interactiva(ack, body, client, logger):
         except Exception:
             logger.warning("No se pudo actualizar el mensaje de valoración interactiva")
         accion, texto = _aplicar_respuesta_valoracion(user_id, valor)
-        if accion and texto:
+        if accion == "mostrar_resumen" and texto:
+            _enviar_resumen_con_botones(channel, thread_ts, texto)
+        elif accion and texto:
             client.chat_postMessage(channel=channel, thread_ts=thread_ts, text=texto)
     except Exception:
         logger.exception("Error procesando valoración interactiva")
@@ -1289,6 +1342,7 @@ def handle_message_events(event, logger):
                             estado["respuestas"],
                             area=estado.get("area", "negocio"),
                             preguntas_area=estado.get("preguntas_area"),
+                            tras_modificacion=True,
                         )
                 else:
                     estado["respuestas"][campo] = texto
@@ -1301,6 +1355,7 @@ def handle_message_events(event, logger):
                         estado["respuestas"],
                         area=estado.get("area", "negocio"),
                         preguntas_area=estado.get("preguntas_area"),
+                        tras_modificacion=True,
                     )
             else:
                 accion = "pedir_valor_modificacion"
@@ -1347,6 +1402,7 @@ def handle_message_events(event, logger):
                             estado["respuestas"],
                             area=estado.get("area", "negocio"),
                             preguntas_area=estado.get("preguntas_area"),
+                            tras_modificacion=True,
                         )
                 else:
                     estado["respuestas"][campo] = texto
@@ -1359,6 +1415,7 @@ def handle_message_events(event, logger):
                         estado["respuestas"],
                         area=estado.get("area", "negocio"),
                         preguntas_area=estado.get("preguntas_area"),
+                        tras_modificacion=True,
                     )
             else:
                 accion = "pedir_valor_modificacion"
@@ -1436,7 +1493,7 @@ def handle_message_events(event, logger):
         "preguntar",
         "pedir_persona", "pedir_persona_mismo_proyecto",
         "pedir_proyecto",
-        "pedir_modificacion", "pedir_valor_modificacion", "pedir_mas_personas",
+        "pedir_valor_modificacion", "pedir_mas_personas",
     }
     if accion == "pedir_situacion":
         slack_app.client.chat_postMessage(
@@ -1508,6 +1565,9 @@ def handle_message_events(event, logger):
             )
         else:
             reply(pregunta if pregunta else "")
+        return
+    if accion == "pedir_modificacion":
+        _enviar_menu_modificacion_area(dm_channel, thread_ts, estado)
         return
     if accion in _ACCIONES_PREGUNTA:
         reply(pregunta if pregunta else "")
@@ -1940,7 +2000,25 @@ def handle_proyecto_modificar(ack, body, logger):
             return
         estado["modo"] = "seleccionando_modificacion_area"
 
-    reply(_texto_menu_modificacion_area(estado))
+    _enviar_menu_modificacion_area(dm_channel, thread_ts, estado)
+
+
+@slack_app.action(re.compile(r"^mod_area_\d+$"))
+def _handle_mod_area_opcion(ack, body, logger):
+    """Botón del menú '¿Qué respuesta quieres modificar?': reinyecta el número en el flujo normal."""
+    ack()
+    uid = body.get("user", {}).get("id", "")
+    val = ""
+    for a in body.get("actions", []):
+        val = a.get("value", "") or val
+    thread_ts = evaluacion_dm_ts.get(uid)
+    channel = body.get("channel", {}).get("id", "") or evaluacion_dm_canal.get(uid, "")
+    if not uid or not thread_ts or not channel or not val:
+        return
+    # Sintetiza el mensaje de texto equivalente → reutiliza todo el state-machine
+    handle_message_events(
+        {"channel": channel, "thread_ts": thread_ts, "user": uid, "text": val}, logger
+    )
 
 
 _RECORDATORIO_PROYECTO_SEGUNDOS = 7 * 24 * 60 * 60  # 1 semana

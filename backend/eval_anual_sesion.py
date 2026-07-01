@@ -1,16 +1,17 @@
 """
-Sesión de evaluación anual asistida (preguntas previas al CA) — Fase 1.
+Sesión de evaluación anual asistida — flujo conversacional por área.
 
-Flujo (ver docs/plan-preguntas-previas-ca.md):
-  1. Confirmación de identidad.
-  2. Lectura de la evidencia en bruto POR BLOQUES (cuatrimestres), sin sobrecargar.
-  3. Loop por dimensión (las 5 + liderazgo si aplica + contribution + resultado):
-       a. El CA escribe su valoración → SE BLOQUEA (anti-anclaje).
-       b. Solo entonces se revela lo que redactó Claude.
-       c. El CA decide: su versión / la de Claude / fusión → queda registrado.
-  4. Publicar (exige completar el loop).
+Flujo:
+  1. Confirmación de identidad (¿evalúas a X?).
+  2. Por cada área (gestión de proyecto, calidad, ... + liderazgo si aplica + contribution + resultado):
+       a. Se muestra la EVIDENCIA que Claude consideró de esa área (las fuentes que citó).
+       b. El CA escribe sus puntos / su opinión (pregunta abierta).
+       c. Claude compara con lo que él pondría y responde conversacionalmente
+          ("yo pondría esto [bullets con citas], ¿qué opinas?"). Se puede seguir hablando.
+       d. El CA confirma el área → se fija el texto final acordado.
+  3. Finalizar → genera el borrador con los huecos; Claude rellena las áreas con lo acordado.
 
-Persistencia: JSON local junto al informe (`sesion_anual_{slug}.json`). Migrable a Notion en Fase 2.
+Persistencia: JSON local junto al informe (`sesion_anual_{slug}.json`).
 """
 
 import json
@@ -25,31 +26,16 @@ from .utils import slug_archivo
 from . import skill_informes_anual as sk
 
 
-# ── Definición de secciones del loop ──────────────────────────────────────────
+# ── Secciones del recorrido ───────────────────────────────────────────────────
 
 def _secciones(cargo: str) -> list[tuple[str, str]]:
-    """Dimensiones por las que pasa el CA, en orden. Todas (no solo las de proyecto)."""
+    """Áreas por las que pasa el CA, en orden. Todas."""
     secs = list(sk._DIMS_PROYECTOS)
     if any(c in cargo.strip().lower() for c in sk._REQUIERE_LIDERAZGO):
         secs += list(sk._DIMS_LIDERAZGO)
     secs.append(("contribution_to_firm", "Contribution to the firm"))
     secs.append(("resultado", "Resultado global"))
     return secs
-
-
-def _criterios_dimension(cargo: str, clave: str) -> list[str]:
-    """Criterios DTI de esa área para el cargo y superiores (la 'lente' del CA)."""
-    dim_crit = sk._CRITERIOS_DTI.get(clave, {})
-    if not dim_crit:
-        return []
-    nivel = sk._nivel_cargo(cargo)
-    if not nivel or nivel not in sk._ORDEN_CARGO:
-        return list(dim_crit.get("analyst", []))
-    idx = sk._ORDEN_CARGO.index(nivel)
-    out: list[str] = []
-    for lvl in sk._ORDEN_CARGO[max(0, idx - 1):]:
-        out.extend(dim_crit.get(lvl, []))
-    return out
 
 
 # ── Persistencia (JSON local) ─────────────────────────────────────────────────
@@ -105,39 +91,6 @@ def _claude_texto(comentarios: dict, clave: str) -> str:
     return val or ""
 
 
-_BLOQUES = [(1, 4, "Enero – Abril"), (5, 8, "Mayo – Agosto"), (9, 12, "Septiembre – Diciembre")]
-
-
-def _indice_bloque(fecha: str) -> int:
-    try:
-        mes = int(fecha[5:7])
-        for i, (ini, fin, _) in enumerate(_BLOQUES):
-            if ini <= mes <= fin:
-                return i
-    except Exception:
-        pass
-    return len(_BLOQUES)  # sin fecha → bloque final
-
-
-def _bloques_evidencia(fuentes: dict) -> list[dict]:
-    """Agrupa la evidencia en bloques cronológicos (cuatrimestres). Omite bloques vacíos."""
-    grupos: dict[int, list] = {}
-    for cid, src in fuentes.items():
-        idx = _indice_bloque(src.get("fecha", ""))
-        item = {
-            "cid": cid, "tipo": src.get("tipo", ""), "label": src.get("label", ""),
-            "evaluador": src.get("evaluador", ""), "texto": src.get("texto", ""),
-            "fecha": src.get("fecha", ""),
-        }
-        grupos.setdefault(idx, []).append(item)
-    bloques = []
-    etiquetas = [e for _, _, e in _BLOQUES] + ["Sin fecha"]
-    for idx in sorted(grupos):
-        items = sorted(grupos[idx], key=lambda x: x["fecha"] or "9999")
-        bloques.append({"etiqueta": etiquetas[idx], "items": items})
-    return bloques
-
-
 def _emp_y_fuentes(sesion: dict) -> tuple[dict, dict]:
     emp_data = sesion["emp_data"]
     _, fuentes = sk._formatear_contexto(emp_data)
@@ -152,6 +105,32 @@ def _asegurar_comentarios(slug: str, sesion: dict) -> dict:
     sesion["comentarios"] = comentarios
     _guardar(slug, sesion)
     return comentarios
+
+
+def _evidencia_de_area(comentarios: dict, fuentes: dict, clave: str) -> list[dict]:
+    """Evidencia que Claude consideró para un área = las fuentes que citó en sus bullets."""
+    val = comentarios.get(clave)
+    textos = list(val.values()) if isinstance(val, dict) else ([val] if isinstance(val, str) else [])
+    ids = []
+    for t in textos:
+        ids += sk._CITE_RE.findall(t or "")
+    vistos, items = set(), []
+    for cid in ids:
+        if cid in vistos or cid not in fuentes:
+            continue
+        vistos.add(cid)
+        s = fuentes[cid]
+        items.append({
+            "cid": cid, "tipo": s.get("tipo", ""), "label": s.get("label", ""),
+            "evaluador": s.get("evaluador", ""), "texto": s.get("texto", ""), "fecha": s.get("fecha", ""),
+        })
+    items.sort(key=lambda x: x["fecha"] or "")
+    return items
+
+
+def _pregunta_area(etiqueta: str) -> str:
+    return (f"¿Qué puntos principales quieres que salgan en el informe sobre «{etiqueta}»? "
+            f"Cuéntame tu opinión y qué destacarías.")
 
 
 # ── API del módulo ────────────────────────────────────────────────────────────
@@ -174,8 +153,7 @@ def iniciar_sesion(advisee: str, cargo: str = "") -> dict:
             "estado": "en_progreso",
             "identidad_confirmada": False,
             "emp_data": emp_data,
-            "respuestas_ca": {},      # {clave: {texto, bloqueada_en}}
-            "decisiones": {},         # {clave: {eleccion, texto_final, claude_texto, en}}
+            "areas": {},          # {clave: {conversacion:[{rol,texto}], propuesta, confirmada, texto_final}}
             "comentarios": None,
             "creada_en": _ahora(),
         }
@@ -189,7 +167,8 @@ def iniciar_sesion(advisee: str, cargo: str = "") -> dict:
 
 def _resumen_estado(sesion: dict) -> dict:
     secciones = _secciones(sesion.get("cargo", ""))
-    completadas = sum(1 for c, _ in secciones if c in sesion.get("decisiones", {}))
+    areas = sesion.get("areas", {})
+    confirmadas = sum(1 for c, _ in secciones if areas.get(c, {}).get("confirmada"))
     return {
         "advisee": sesion["advisee"],
         "ca": sesion.get("ca", ""),
@@ -198,13 +177,10 @@ def _resumen_estado(sesion: dict) -> dict:
         "estado": sesion.get("estado"),
         "identidadConfirmada": sesion.get("identidad_confirmada", False),
         "proyectos": _proyectos_de(sesion["emp_data"]),
-        "secciones": [{"clave": c, "etiqueta": e,
-                       "respondida": c in sesion.get("respuestas_ca", {}),
-                       "decidida": c in sesion.get("decisiones", {})}
+        "secciones": [{"clave": c, "etiqueta": e, "confirmada": bool(areas.get(c, {}).get("confirmada"))}
                       for c, e in secciones],
         "totalSecciones": len(secciones),
-        "seccionesDecididas": completadas,
-        "nBloquesEvidencia": len(_bloques_evidencia(_emp_y_fuentes(sesion)[1])),
+        "seccionesConfirmadas": confirmadas,
     }
 
 
@@ -218,26 +194,8 @@ def confirmar_identidad(advisee: str) -> dict:
     return {"ok": True}
 
 
-def obtener_evidencia(advisee: str, bloque: int = 0) -> dict:
-    slug = slug_archivo(advisee)
-    sesion = _leer(slug)
-    if not sesion:
-        raise ValueError("No hay sesión iniciada.")
-    _, fuentes = _emp_y_fuentes(sesion)
-    bloques = _bloques_evidencia(fuentes)
-    if not bloques:
-        return {"bloque": 0, "totalBloques": 0, "etiqueta": "", "items": [], "hayMas": False}
-    bloque = max(0, min(bloque, len(bloques) - 1))
-    return {
-        "bloque": bloque,
-        "totalBloques": len(bloques),
-        "etiqueta": bloques[bloque]["etiqueta"],
-        "items": bloques[bloque]["items"],
-        "hayMas": bloque < len(bloques) - 1,
-    }
-
-
-def obtener_dimension(advisee: str, clave: str) -> dict:
+def obtener_area(advisee: str, clave: str) -> dict:
+    """Datos de un área: evidencia que Claude consideró + pregunta abierta + conversación."""
     slug = slug_archivo(advisee)
     sesion = _leer(slug)
     if not sesion:
@@ -245,119 +203,101 @@ def obtener_dimension(advisee: str, clave: str) -> dict:
     secciones = dict(_secciones(sesion.get("cargo", "")))
     if clave not in secciones:
         raise ValueError(f"Sección desconocida: {clave}")
-
-    respuesta = sesion.get("respuestas_ca", {}).get(clave)
-    bloqueada = respuesta is not None
-    out = {
+    comentarios = _asegurar_comentarios(slug, sesion)
+    _, fuentes = _emp_y_fuentes(sesion)
+    area = sesion.get("areas", {}).get(clave, {})
+    return {
         "clave": clave,
         "etiqueta": secciones[clave],
-        "criterios": _criterios_dimension(sesion.get("cargo", ""), clave),
-        "pregunta": _pregunta_dimension(secciones[clave], sesion["advisee"]),
-        "respuestaCa": respuesta.get("texto", "") if respuesta else "",
-        "bloqueada": bloqueada,
-        "decision": sesion.get("decisiones", {}).get(clave),
+        "evidencia": _evidencia_de_area(comentarios, fuentes, clave),
+        "pregunta": _pregunta_area(secciones[clave]),
+        "conversacion": area.get("conversacion", []),
+        "propuesta": area.get("propuesta", ""),
+        "confirmada": area.get("confirmada", False),
     }
-    # Solo se revela a Claude DESPUÉS de que el CA haya bloqueado su respuesta (anti-anclaje)
-    if bloqueada:
-        comentarios = _asegurar_comentarios(slug, sesion)
-        out["claude"] = _claude_texto(comentarios, clave)
-    else:
-        out["claude"] = None
-    return out
 
 
-def _pregunta_dimension(etiqueta: str, nombre: str) -> str:
-    return (f"¿Cómo valoras a {nombre} en «{etiqueta}» este año? "
-            f"Ten en cuenta la EVOLUCIÓN a lo largo del año (no es lo mismo el principio que el final) "
-            f"y entre proyectos. Escribe tu valoración antes de ver la de la IA.")
-
-
-def responder_dimension(advisee: str, clave: str, texto: str) -> dict:
-    """Bloquea la respuesta del CA para una dimensión. A partir de aquí ya puede ver a Claude."""
-    slug = slug_archivo(advisee)
-    sesion = _leer(slug)
-    if not sesion:
-        raise ValueError("No hay sesión iniciada.")
-    if clave not in dict(_secciones(sesion.get("cargo", ""))):
-        raise ValueError(f"Sección desconocida: {clave}")
-    if not (texto or "").strip():
-        raise ValueError("Escribe tu valoración antes de continuar.")
-    sesion.setdefault("respuestas_ca", {})[clave] = {
-        "texto": texto.strip(), "bloqueada_en": _ahora(),
-    }
-    _guardar(slug, sesion)
-    # Devuelve ya la versión de Claude para comparar
-    return obtener_dimension(advisee, clave)
-
-
-def decidir_dimension(advisee: str, clave: str, eleccion: str, texto_final: str = "") -> dict:
-    """Registra la decisión del CA tras comparar con Claude: 'mia' | 'claude' | 'fusion'."""
-    slug = slug_archivo(advisee)
-    sesion = _leer(slug)
-    if not sesion:
-        raise ValueError("No hay sesión iniciada.")
-    if eleccion not in ("mia", "claude", "fusion"):
-        raise ValueError("Elección no válida.")
-    respuesta = sesion.get("respuestas_ca", {}).get(clave)
-    if not respuesta:
-        raise ValueError("Primero responde y bloquea tu valoración.")
-    comentarios = _asegurar_comentarios(slug, sesion)
-    claude_texto = _claude_texto(comentarios, clave)
-
-    if eleccion == "mia":
-        final = respuesta["texto"]
-    elif eleccion == "claude":
-        final = claude_texto
-    else:  # fusion
-        final = (texto_final or "").strip()
-        if not final:
-            raise ValueError("Escribe el texto de la fusión.")
-
-    sesion.setdefault("decisiones", {})[clave] = {
-        "eleccion": eleccion, "texto_final": final,
-        "ca_texto": respuesta["texto"], "claude_texto": claude_texto,
-        "divergencia": eleccion != "claude",
-        "en": _ahora(),
-    }
-    _guardar(slug, sesion)
-    return {"ok": True}
-
-
-def sugerir_fusion(advisee: str, clave: str) -> dict:
-    """Fase 2: Claude propone una fusión de la valoración del CA + la suya (respetando la del CA)."""
-    slug = slug_archivo(advisee)
-    sesion = _leer(slug)
-    if not sesion:
-        raise ValueError("No hay sesión iniciada.")
-    respuesta = sesion.get("respuestas_ca", {}).get(clave)
-    if not respuesta:
-        raise ValueError("Primero responde y bloquea tu valoración.")
-    comentarios = _asegurar_comentarios(slug, sesion)
-    claude_texto = _claude_texto(comentarios, clave)
+def _claude_conversa_area(etiqueta: str, evidencia: list, claude_bullets: str, conversacion: list) -> dict:
+    """Llama a Claude para reaccionar a los puntos del CA y proponer los bullets del área."""
+    ev_txt = "\n".join(f"[{e['cid']}] {e['label']} — {e['texto']}" for e in evidencia) or "(sin evidencia)"
+    conv_txt = "\n".join(f"{'CA' if m['rol'] == 'ca' else 'IA'}: {m['texto']}" for m in conversacion)
     if not anthropic_client:
-        # Sin IA disponible: fusión trivial (texto del CA + el de la IA)
-        return {"sugerencia": (respuesta["texto"] + "\n" + claude_texto).strip()}
-
+        return {"mensaje": "(IA no disponible) Tomo nota de tus puntos.", "propuesta": claude_bullets}
     system = (
-        "Eres editor de informes de RRHH. Te doy la VALORACIÓN DEL CA (su juicio, que manda) y la "
-        "VALORACIÓN DE LA IA (basada en datos, con citas tipo [E3]). Redacta una versión final en "
-        "bullets que RESPETE el criterio del CA e incorpore los matices y citas de la IA que lo "
-        "apoyen. Mantén las citas [X#] que ya existan; NO inventes citas ni afirmaciones nuevas. "
-        "Devuelve solo el texto final, sin preámbulos."
+        f"Eres el director de RRHH de IGENERIS. Estás co-redactando con el CA el área «{etiqueta}» del "
+        "informe anual. Tienes la EVIDENCIA (con citas [E3]/[O1]/[P2]/[S1]/[B1]) y TU VALORACIÓN basada "
+        "en ella. El CA te da sus puntos. Responde de forma conversacional y BREVE: di qué pondrías tú, "
+        "señala dónde coincides o difieres con el CA, y pregúntale su opinión para cerrar el área. "
+        "NO inventes: cada afirmación de la propuesta debe llevar su cita [X#] de la evidencia. "
+        'Devuelve SOLO un JSON válido: {"mensaje": "tu respuesta conversacional", '
+        '"propuesta": "los bullets finales del área, uno por línea, cada uno con su cita"}.'
+    )
+    user = (
+        f"ÁREA: {etiqueta}\n\nEVIDENCIA:\n{ev_txt}\n\n"
+        f"TU VALORACIÓN INICIAL:\n{claude_bullets or '(sin información)'}\n\n"
+        f"CONVERSACIÓN:\n{conv_txt}"
     )
     try:
         resp = anthropic_client.messages.create(
-            model="claude-sonnet-4-6", max_tokens=1200, temperature=0, system=system,
-            messages=[{"role": "user", "content": (
-                f"VALORACIÓN DEL CA:\n{respuesta['texto']}\n\n"
-                f"VALORACIÓN DE LA IA:\n{claude_texto or '(sin información)'}"
-            )}],
+            model="claude-sonnet-4-6", max_tokens=1500, temperature=0, system=system,
+            messages=[{"role": "user", "content": user}],
         )
-        sugerencia = "".join(b.text for b in resp.content if b.type == "text").strip()
+        t = "".join(b.text for b in resp.content if b.type == "text").strip()
+        if t.startswith("```"):
+            t = t.split("```", 2)[1]
+            if t.startswith("json"):
+                t = t[4:]
+            t = t.rsplit("```", 1)[0]
+        data = json.loads(t.strip())
+        return {"mensaje": (data.get("mensaje") or "").strip(),
+                "propuesta": (data.get("propuesta") or "").strip()}
     except Exception:
-        logging.exception("Fallo al sugerir fusión")
-        sugerencia = (respuesta["texto"] + "\n" + claude_texto).strip()
-    return {"sugerencia": sugerencia}
+        logging.exception("Fallo en la conversación del área")
+        return {"mensaje": "He tenido un problema al responder; reformula o reinténtalo.",
+                "propuesta": claude_bullets}
+
+
+def responder_area(advisee: str, clave: str, texto: str) -> dict:
+    """El CA aporta sus puntos; Claude compara con su versión y responde conversacionalmente."""
+    slug = slug_archivo(advisee)
+    sesion = _leer(slug)
+    if not sesion:
+        raise ValueError("No hay sesión iniciada.")
+    secciones = dict(_secciones(sesion.get("cargo", "")))
+    if clave not in secciones:
+        raise ValueError(f"Sección desconocida: {clave}")
+    if not (texto or "").strip():
+        raise ValueError("Escribe tus puntos antes de enviar.")
+
+    comentarios = _asegurar_comentarios(slug, sesion)
+    _, fuentes = _emp_y_fuentes(sesion)
+    claude_bullets = _claude_texto(comentarios, clave)
+    evidencia = _evidencia_de_area(comentarios, fuentes, clave)
+
+    area = sesion.setdefault("areas", {}).setdefault(
+        clave, {"conversacion": [], "propuesta": "", "confirmada": False})
+    area["conversacion"].append({"rol": "ca", "texto": texto.strip()})
+
+    res = _claude_conversa_area(secciones[clave], evidencia, claude_bullets, area["conversacion"])
+    area["conversacion"].append({"rol": "ia", "texto": res["mensaje"]})
+    area["propuesta"] = res["propuesta"] or area.get("propuesta", "")
+    _guardar(slug, sesion)
+    return {"mensaje": res["mensaje"], "propuesta": area["propuesta"], "conversacion": area["conversacion"]}
+
+
+def confirmar_area(advisee: str, clave: str) -> dict:
+    """Cierra un área: fija el texto final = la propuesta acordada."""
+    slug = slug_archivo(advisee)
+    sesion = _leer(slug)
+    if not sesion:
+        raise ValueError("No hay sesión iniciada.")
+    area = sesion.get("areas", {}).get(clave)
+    if not area or not area.get("conversacion"):
+        raise ValueError("Primero conversa con la IA sobre esta área.")
+    area["confirmada"] = True
+    area["texto_final"] = area.get("propuesta", "")
+    _guardar(slug, sesion)
+    return _resumen_estado(sesion)
 
 
 def estado_sesion(advisee: str) -> dict:
@@ -369,21 +309,21 @@ def estado_sesion(advisee: str) -> dict:
 
 
 def finalizar_sesion(advisee: str) -> dict:
-    """Exige el loop completo. Genera el borrador con las decisiones del CA y marca completada."""
+    """Exige todas las áreas confirmadas. Genera el borrador con lo acordado (huecos en blanco)."""
     slug = slug_archivo(advisee)
     sesion = _leer(slug)
     if not sesion:
         raise ValueError("No hay sesión iniciada.")
     secciones = _secciones(sesion.get("cargo", ""))
-    faltan = [e for c, e in secciones if c not in sesion.get("decisiones", {})]
+    areas = sesion.get("areas", {})
+    faltan = [e for c, e in secciones if not areas.get(c, {}).get("confirmada")]
     if faltan:
-        raise ValueError("Faltan secciones por decidir: " + ", ".join(faltan))
+        raise ValueError("Faltan áreas por confirmar: " + ", ".join(faltan))
 
     _, fuentes = _emp_y_fuentes(sesion)
-    # Comentarios reconciliados: el texto final de cada sección es la decisión del CA
     comentarios_final: dict = {"_fuentes": fuentes, "_avisos_verificacion": [], "_bullets_descartados": []}
     for clave, _ in secciones:
-        comentarios_final[clave] = sesion["decisiones"][clave]["texto_final"]
+        comentarios_final[clave] = areas[clave].get("texto_final", "")
 
     emp_data = sesion["emp_data"]
     cargo = sesion.get("cargo", "")
@@ -394,32 +334,28 @@ def finalizar_sesion(advisee: str) -> dict:
     sesion["completada_en"] = _ahora()
     _guardar(slug, sesion)
 
-    # Fase 2: persistir el log de auditoría en Notion (best-effort, no rompe el flujo)
+    # Log de auditoría en Notion (best-effort)
     try:
-        entradas = log_auditoria(advisee).get("entradas", [])
-        guardar_log_evaluacion_anual(advisee, sesion.get("ca", ""), sesion.get("anio"), entradas)
+        guardar_log_evaluacion_anual(advisee, sesion.get("ca", ""), sesion.get("anio"),
+                                     _entradas_log(sesion, secciones))
     except Exception:
         logging.exception("No se pudo persistir el log de evaluación anual en Notion")
 
     return {"ok": True, "estado": "completada"}
 
 
-def log_auditoria(advisee: str) -> dict:
-    """Log interno (CA/admin): respuestas del CA vs Claude y decisiones. No lo ve el advisee."""
-    slug = slug_archivo(advisee)
-    sesion = _leer(slug)
-    if not sesion:
-        raise ValueError("No hay sesión iniciada.")
-    secciones = _secciones(sesion.get("cargo", ""))
-    entradas = []
+def _entradas_log(sesion: dict, secciones: list) -> list[dict]:
+    areas = sesion.get("areas", {})
+    out = []
     for clave, etiqueta in secciones:
-        d = sesion.get("decisiones", {}).get(clave)
-        if not d:
+        a = areas.get(clave)
+        if not a:
             continue
-        entradas.append({
+        ca_msgs = "\n".join(m["texto"] for m in a.get("conversacion", []) if m["rol"] == "ca")
+        out.append({
             "clave": clave, "etiqueta": etiqueta,
-            "caTexto": d.get("ca_texto", ""), "claudeTexto": d.get("claude_texto", ""),
-            "eleccion": d.get("eleccion"), "textoFinal": d.get("texto_final", ""),
-            "divergencia": d.get("divergencia", False), "en": d.get("en"),
+            "caTexto": ca_msgs, "claudeTexto": a.get("propuesta", ""),
+            "eleccion": "acordado", "textoFinal": a.get("texto_final", ""),
+            "divergencia": False, "en": _ahora(),
         })
-    return {"advisee": advisee, "entradas": entradas}
+    return out

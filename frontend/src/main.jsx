@@ -278,12 +278,47 @@ function AdminPanel({ token, onBack }) {
   const [selected, setSelected] = useState(null);
   const [informeFinal, setInformeFinal] = useState(null);
   const [statusMsg, setStatusMsg] = useState("");
+  const [anonimato, setAnonimato] = useState(null);
+  const [anonLoading, setAnonLoading] = useState(false);
+  const [generandoFuente, setGenerandoFuente] = useState("");
+  const [fuenteError, setFuenteError] = useState("");
 
   useEffect(() => {
     apiRequest("/api/evaluados", { token })
       .then((data) => setEvaluados(data.evaluados || []))
       .catch(() => {});
+    apiRequest("/api/anonimato-evaluadores", { token })
+      .then((data) => setAnonimato(data))
+      .catch(() => {});
   }, [token]);
+
+  async function toggleGlobalAnonimo() {
+    if (!anonimato || anonLoading) return;
+    setAnonLoading(true);
+    try {
+      const data = await apiRequest("/api/anonimato-evaluadores", {
+        token, method: "POST", body: { global_anonimo: !anonimato.global_anonimo },
+      });
+      setAnonimato(data);
+    } catch {}
+    setAnonLoading(false);
+  }
+
+  async function toggleEvaluadoRevelado(nombre) {
+    if (!anonimato || anonLoading) return;
+    setAnonLoading(true);
+    try {
+      const revelados = anonimato.advisees_revelados || [];
+      const nuevos = revelados.includes(nombre)
+        ? revelados.filter((n) => n !== nombre)
+        : [...revelados, nombre];
+      const data = await apiRequest("/api/anonimato-evaluadores", {
+        token, method: "POST", body: { advisees_revelados: nuevos },
+      });
+      setAnonimato(data);
+    } catch {}
+    setAnonLoading(false);
+  }
 
   useEffect(() => {
     if (!selected) return;
@@ -323,6 +358,32 @@ function AdminPanel({ token, onBack }) {
     }
   }
 
+  async function descargarFuentePdf(endpoint, etiqueta) {
+    setGenerandoFuente(endpoint);
+    setFuenteError("");
+    try {
+      const data = await apiRequest(endpoint, { token, method: "POST", body: { evaluado: selected.nombre } });
+      const path = data.pdfUrl;
+      if (!path) throw new Error("No se generó el documento.");
+      const response = await fetch(apiUrl(path), { headers: { Authorization: `Bearer ${token}` } });
+      if (!response.ok) {
+        const d = await response.json().catch(() => ({}));
+        throw new Error(d.error || "No se pudo descargar el archivo.");
+      }
+      const blob = await response.blob();
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = `${etiqueta}_${selected.nombre.replace(/\s+/g, "_")}.pdf`;
+      link.click();
+      URL.revokeObjectURL(url);
+    } catch (err) {
+      setFuenteError(err.message);
+    } finally {
+      setGenerandoFuente("");
+    }
+  }
+
   const filtrados = evaluados.filter((e) =>
     e.label.toLowerCase().includes(search.toLowerCase())
   );
@@ -332,7 +393,7 @@ function AdminPanel({ token, onBack }) {
       <main className="page">
         <nav className="nav">
           <a className="brand" href="/"><img src="/src/logo.png" alt="igeneris" className="brand-logo" /></a>
-          <button className="link-button" onClick={() => { setSelected(null); setInformeFinal(null); setStatusMsg(""); }}>← Volver</button>
+          <button className="link-button" onClick={() => { setSelected(null); setInformeFinal(null); setStatusMsg(""); setFuenteError(""); }}>← Volver</button>
         </nav>
         <div className="admin-employee-wrap">
           <div className="admin-employee-layout">
@@ -364,6 +425,42 @@ function AdminPanel({ token, onBack }) {
               ) : (
                 <p className="fine">{informeFinal?.mensaje || "Sin informe final disponible."}</p>
               )}
+              <div style={{ marginTop: 20 }}>
+                <p className="kicker">Información disponible</p>
+                <button className="secondary" disabled={!!generandoFuente}
+                  onClick={() => descargarFuentePdf("/api/generar-pdf-evals-mensuales", "evals_mensuales")}>
+                  {generandoFuente === "/api/generar-pdf-evals-mensuales" ? "Generando..." : "Evaluaciones mensuales"}
+                </button>
+                <button className="secondary" disabled={!!generandoFuente} style={{ marginTop: 8 }}
+                  onClick={() => descargarFuentePdf("/api/generar-pdf-evals-proyecto", "evals_proyecto")}>
+                  {generandoFuente === "/api/generar-pdf-evals-proyecto" ? "Generando..." : "Evaluaciones de proyecto"}
+                </button>
+                <button className="secondary" disabled={!!generandoFuente} style={{ marginTop: 8 }}
+                  onClick={() => descargarFuentePdf("/api/generar-pdf-seguimiento", "seguimiento_personal")}>
+                  {generandoFuente === "/api/generar-pdf-seguimiento" ? "Generando..." : "Seguimiento personal"}
+                </button>
+                {fuenteError && <p className="fine error" style={{ marginTop: 8 }}>{fuenteError}</p>}
+              </div>
+              {anonimato && (
+                <div style={{ marginTop: 20 }}>
+                  <p className="kicker">Evaluadores</p>
+                  {(() => {
+                    const globalRevelado = !anonimato.global_anonimo;
+                    const individualRevelado = (anonimato.advisees_revelados || []).includes(selected.nombre);
+                    const visible = globalRevelado || individualRevelado;
+                    return (
+                      <button
+                        className="secondary"
+                        disabled={anonLoading || globalRevelado}
+                        onClick={() => toggleEvaluadoRevelado(selected.nombre)}
+                        title={globalRevelado ? "Revelado globalmente" : undefined}
+                      >
+                        {visible ? "Ocultar evaluadores a su CA" : "Revelar evaluadores a su CA"}
+                      </button>
+                    );
+                  })()}
+                </div>
+              )}
               {statusMsg && (
                 <p className="fine error">{statusMsg}</p>
               )}
@@ -379,7 +476,19 @@ function AdminPanel({ token, onBack }) {
     <main className="page">
       <nav className="nav">
         <a className="brand" href="/"><img src="/src/logo.png" alt="igeneris" className="brand-logo" /></a>
-        <button className="link-button" onClick={onBack}>← Volver</button>
+        {anonimato && (
+          <button
+            className="link-button"
+            disabled={anonLoading}
+            onClick={toggleGlobalAnonimo}
+            style={{ color: "var(--accent)" }}
+            onMouseEnter={(e) => e.currentTarget.style.color = "#0a0a0a"}
+            onMouseLeave={(e) => e.currentTarget.style.color = "var(--accent)"}
+          >
+            › {anonimato.global_anonimo ? "Revelar todos los evaluadores" : "Ocultar todos los evaluadores"}
+          </button>
+        )}
+        <button className="link-button" onClick={onBack} style={{ marginLeft: "auto" }}>← Volver</button>
       </nav>
       <div className="admin-search-wrap">
         <p className="kicker">Administrador</p>
@@ -3011,11 +3120,12 @@ function MisProyectosActivosPage({ token, user, onBack }) {
                       </thead>
                       <tbody>
                         {estado.map((m) => {
-                          const tot = m.n_evaluaciones + m.pendientes.length;
-                          const completo = m.pendientes.length === 0;
+                          const nPendientes = m.n_pendientes ?? m.pendientes.length;
+                          const tot = m.n_evaluaciones + nPendientes;
+                          const completo = nPendientes === 0;
                           const pendienteTitle = completo
                             ? (m.evaluadores.length ? `Evaluado por: ${m.evaluadores.join(", ")}` : "")
-                            : `Pendiente de: ${m.pendientes.join(", ")}`;
+                            : (m.pendientes.length ? `Pendiente de: ${m.pendientes.join(", ")}` : `Pendiente de ${nPendientes} persona${nPendientes !== 1 ? "s" : ""}`);
                           return (
                             <tr key={m.nombre}>
                               <td>{m.nombre}</td>
@@ -3937,7 +4047,26 @@ function App() {
     return () => window.removeEventListener("hashchange", onHash);
   }, []);
 
+  // Registra el estado inicial en el historial del navegador
+  useEffect(() => {
+    window.history.replaceState({ page: null, adminMode: null }, "");
+  }, []);
+
+  // Escucha el botón de atrás del navegador
+  useEffect(() => {
+    const onPopState = (e) => {
+      if (e.state && "page" in e.state) {
+        setPage(e.state.page);
+        setAdminMode(e.state.adminMode ?? null);
+      }
+    };
+    window.addEventListener("popstate", onPopState);
+    return () => window.removeEventListener("popstate", onPopState);
+  }, []);
+
   function navigate(newPage, newAdminModeOverride) {
+    // Guarda el estado actual en el historial antes de cambiar de página
+    window.history.pushState({ page, adminMode }, "");
     setPage(newPage);
     if (newAdminModeOverride !== undefined) setAdminMode(newAdminModeOverride);
   }

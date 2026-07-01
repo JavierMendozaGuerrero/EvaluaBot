@@ -127,12 +127,16 @@ def _ca_de(advisee: str) -> str:
         return ""
 
 
-def generar_pdf_evals_proyecto(advisee: str) -> str:
+def generar_pdf_evals_proyecto(advisee: str, anonimo: bool = True) -> str:
     datos = obtener_evaluaciones_proyecto_por_evaluado(advisee)
     datos = sorted(datos, key=lambda x: x.get("fecha", ""))
     entradas = [{
         "header": d.get("proyecto") or "Sin proyecto",
-        "meta": " · ".join(p for p in [d.get("evaluador"), d.get("tipo"), _fecha_es(d.get("fecha", ""))] if p),
+        "meta": " · ".join(p for p in [
+            None if anonimo else d.get("evaluador"),
+            d.get("tipo"),
+            _fecha_es(d.get("fecha", "")),
+        ] if p),
         "cuerpo": d.get("respuestas", ""),
     } for d in datos]
     slug = slug_archivo(advisee)
@@ -140,12 +144,12 @@ def generar_pdf_evals_proyecto(advisee: str) -> str:
     return slug
 
 
-def generar_pdf_seguimiento_personal(advisee: str) -> str:
+def generar_pdf_seguimiento_personal(advisee: str, anonimo: bool = True) -> str:
     datos = obtener_comentarios_personales(advisee)
     datos = sorted(datos, key=lambda x: x.get("fecha", ""))
     entradas = [{
         "header": _fecha_es(d.get("fecha", "")),
-        "meta": d.get("autor", ""),
+        "meta": "" if anonimo else d.get("autor", ""),
         "cuerpo": d.get("comentario", ""),
     } for d in datos]
     slug = slug_archivo(advisee)
@@ -153,7 +157,7 @@ def generar_pdf_seguimiento_personal(advisee: str) -> str:
     return slug
 
 
-def generar_pdf_evals_mensuales(advisee: str) -> str:
+def generar_pdf_evals_mensuales(advisee: str, anonimo: bool = True) -> str:
     datos = obtener_evaluaciones_por_evaluado(advisee)
     datos = sorted(datos, key=lambda x: x.get("fecha", ""))
     _REL = {"superior": "líder", "igual": "igual", "inferior": "subordinado", "": "sin nivel"}
@@ -167,7 +171,7 @@ def generar_pdf_evals_mensuales(advisee: str) -> str:
         entradas.append({
             "header": d.get("proyecto") or "Sin proyecto",
             "meta": " · ".join(p for p in [
-                d.get("persona_que_evalua") or d.get("nombre"),
+                None if anonimo else (d.get("persona_que_evalua") or d.get("nombre")),
                 _REL.get(d.get("relacion", ""), d.get("relacion", "")),
                 _fecha_es(d.get("fecha", "")),
             ] if p),
@@ -180,22 +184,26 @@ def generar_pdf_evals_mensuales(advisee: str) -> str:
 
 # ── PDF combinado: toda la información recibida ────────────────────────────────
 
-def _entradas_evals_proyecto(advisee):
+def _entradas_evals_proyecto(advisee, anonimo):
     datos = sorted(obtener_evaluaciones_proyecto_por_evaluado(advisee), key=lambda x: x.get("fecha", ""))
     return [{
         "header": d.get("proyecto") or "Sin proyecto",
-        "meta": " · ".join(p for p in [d.get("evaluador"), d.get("tipo"), _fecha_es(d.get("fecha", ""))] if p),
+        "meta": " · ".join(p for p in [
+            None if anonimo else d.get("evaluador"),
+            d.get("tipo"),
+            _fecha_es(d.get("fecha", "")),
+        ] if p),
         "cuerpo": d.get("respuestas", ""),
     } for d in datos]
 
 
-def _entradas_seguimiento(advisee):
+def _entradas_seguimiento(advisee, anonimo):
     datos = sorted(obtener_comentarios_personales(advisee), key=lambda x: x.get("fecha", ""))
-    return [{"header": _fecha_es(d.get("fecha", "")), "meta": d.get("autor", ""),
+    return [{"header": _fecha_es(d.get("fecha", "")), "meta": "" if anonimo else d.get("autor", ""),
              "cuerpo": d.get("comentario", "")} for d in datos]
 
 
-def _entradas_evals_mensuales(advisee):
+def _entradas_evals_mensuales(advisee, anonimo):
     _REL = {"superior": "líder", "igual": "igual", "inferior": "subordinado", "": "sin nivel"}
     datos = sorted(obtener_evaluaciones_por_evaluado(advisee), key=lambda x: x.get("fecha", ""))
     out = []
@@ -208,7 +216,7 @@ def _entradas_evals_mensuales(advisee):
         out.append({
             "header": d.get("proyecto") or "Sin proyecto",
             "meta": " · ".join(p for p in [
-                d.get("persona_que_evalua") or d.get("nombre"),
+                None if anonimo else (d.get("persona_que_evalua") or d.get("nombre")),
                 _REL.get(d.get("relacion", ""), d.get("relacion", "")),
                 _fecha_es(d.get("fecha", "")),
             ] if p),
@@ -217,7 +225,7 @@ def _entradas_evals_mensuales(advisee):
     return out
 
 
-def _entradas_opiniones(advisee, ca):
+def _entradas_opiniones(advisee, ca, anonimo=True):
     try:
         datos = obtener_opiniones_ca_por_advisee(ca, advisee)
     except Exception:
@@ -228,7 +236,7 @@ def _entradas_opiniones(advisee, ca):
         cuerpo = []
         if d.get("opinion"):
             cuerpo.append(f"Nota del CA: {d['opinion']}")
-        if d.get("resumen_advisee"):
+        if not anonimo and d.get("resumen_advisee"):
             cuerpo.append(f"Resumen: {d['resumen_advisee']}")
         out.append({"header": _fecha_es(d.get("fecha", "")), "meta": "Opinión CA", "cuerpo": "\n".join(cuerpo)})
     return out
@@ -281,14 +289,14 @@ def _construir_pdf_secciones(titulo, advisee, ca, secciones, nombre_archivo):
     return ruta
 
 
-def generar_pdf_completo(advisee: str) -> str:
+def generar_pdf_completo(advisee: str, anonimo: bool = True) -> str:
     """Un solo PDF con TODA la información recibida por la persona (las 4 fuentes)."""
     ca = _ca_de(advisee)
     secciones = [
-        ("Opiniones del CA", _entradas_opiniones(advisee, ca)),
-        ("Evaluaciones mensuales", _entradas_evals_mensuales(advisee)),
-        ("Evaluaciones de proyecto", _entradas_evals_proyecto(advisee)),
-        ("Seguimiento personal", _entradas_seguimiento(advisee)),
+        ("Opiniones del CA", _entradas_opiniones(advisee, ca, anonimo=anonimo)),
+        ("Evaluaciones mensuales", _entradas_evals_mensuales(advisee, anonimo)),
+        ("Evaluaciones de proyecto", _entradas_evals_proyecto(advisee, anonimo=False)),
+        ("Seguimiento personal", _entradas_seguimiento(advisee, anonimo)),
     ]
     slug = slug_archivo(advisee)
     _construir_pdf_secciones("Información completa recibida", advisee, ca, secciones, f"info_completa_{slug}.pdf")

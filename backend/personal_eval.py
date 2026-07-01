@@ -15,6 +15,7 @@ from .notion_service import (
     obtener_ejemplos_guia,
     obtener_nombre_por_id_usuario,
     obtener_objetivos_persona,
+    obtener_preguntas_personales,
     obtener_slack_id_por_nombre,
     obtener_slack_ids_empleados,
     siguiente_envio_calendario,
@@ -33,97 +34,25 @@ conversaciones_personal: dict = {}
 _RECORDATORIO_SEGUNDOS = 7 * 24 * 60 * 60  # 1 semana
 
 
-_BLOQUES_OPORTUNIDAD_SIN_URGENCIA = [
-    {
-        "type": "section",
-        "text": {"type": "mrkdwn", "text": "*Esta es tu oportunidad para:*"},
-    },
-    {
-        "type": "section",
-        "text": {
-            "type": "mrkdwn",
-            "text": '*1.* Explicar cómo estás ayudando en _"Contribution to the firm"_',
-        },
-    },
-    {
-        "type": "section",
-        "text": {
-            "type": "mrkdwn",
-            "text": "*2.* Cómo te estás acercando a tus objetivos",
-        },
-        "accessory": {
-            "type": "button",
-            "text": {"type": "plain_text", "text": "📋 Ver mis objetivos"},
-            "action_id": "personal_ver_objetivos",
-        },
-    },
-    {
-        "type": "section",
-        "text": {
-            "type": "mrkdwn",
-            "text": "*3.* Señalar limitaciones o aspectos relevantes respecto al cumplimiento de los criterios de evaluación",
-        },
-        "accessory": {
-            "type": "button",
-            "text": {"type": "plain_text", "text": "📊 Ver criterios"},
-            "action_id": "personal_ver_criterios",
-        },
-    },
-]
-
-_BLOQUES_OPORTUNIDAD = [
-    {
-        "type": "section",
-        "text": {"type": "mrkdwn", "text": "*Esta es tu oportunidad para:*"},
-    },
-    {
-        "type": "section",
-        "text": {
-            "type": "mrkdwn",
-            "text": '*1.* Explicar cómo estás ayudando en _"Contribution to the firm"_',
-        },
-    },
-    {
-        "type": "section",
-        "text": {
-            "type": "mrkdwn",
-            "text": "*2.* Cómo te estás acercando a tus objetivos",
-        },
-        "accessory": {
-            "type": "button",
-            "text": {"type": "plain_text", "text": "📋 Ver mis objetivos"},
-            "action_id": "personal_ver_objetivos",
-        },
-    },
-    {
-        "type": "section",
-        "text": {
-            "type": "mrkdwn",
-            "text": "*3.* Señalar limitaciones o aspectos relevantes respecto al cumplimiento de los criterios de evaluación",
-        },
-        "accessory": {
-            "type": "button",
-            "text": {"type": "plain_text", "text": "📊 Ver criterios"},
-            "action_id": "personal_ver_criterios",
-        },
-    },
-    {
-        "type": "section",
-        "text": {
-            "type": "mrkdwn",
-            "text": (
-                "*4.* Si necesitas ayuda con algún tema o has tenido alguna dificultad que quieras comentar\n"
-                "_El botón de urgencia notifica a tu CA por Slack. Si no lo pulsas, el problema no se notifica automáticamente y solo quedará registrado._"
-            ),
-        },
-        "accessory": {
-            "type": "button",
-            "text": {"type": "plain_text", "text": "🚨 Urgencia"},
-            "style": "danger",
-            "action_id": "personal_urgencia",
-        },
-    },
-]
+def _obtener_bloques_oportunidad(urgencia: bool = True) -> list:
+    preguntas = obtener_preguntas_personales()
+    items = [
+        ("item_1", None),
+        ("item_2", {"type": "button", "text": {"type": "plain_text", "text": "📋 Ver mis objetivos"}, "action_id": "personal_ver_objetivos"}),
+        ("item_3", {"type": "button", "text": {"type": "plain_text", "text": "📊 Ver criterios"}, "action_id": "personal_ver_criterios"}),
+    ]
+    if urgencia:
+        items.append(("item_4", {"type": "button", "text": {"type": "plain_text", "text": "🚨 Urgencia"}, "style": "danger", "action_id": "personal_urgencia"}))
+    bloques = [{"type": "section", "text": {"type": "mrkdwn", "text": "*Esta es tu oportunidad para:*"}}]
+    for i, (clave, accessory) in enumerate(items, 1):
+        texto = preguntas.get(clave, f"Punto {i}")
+        if clave == "item_4":
+            texto += "\n_El botón de urgencia notifica a tu CA por Slack. Si no lo pulsas, el problema no se notifica automáticamente y solo quedará registrado._"
+        bloque: dict = {"type": "section", "text": {"type": "mrkdwn", "text": f"*{i}.* {texto}"}}
+        if accessory:
+            bloque["accessory"] = accessory
+        bloques.append(bloque)
+    return bloques
 
 
 def enviar_pregunta_inicial_personal() -> None:
@@ -414,7 +343,7 @@ def manejar_mensaje_personal(event, logger) -> None:
             channel=dm_channel,
             thread_ts=thread_ts,
             text="Esta es tu oportunidad para compartir tu progreso",
-            blocks=_BLOQUES_OPORTUNIDAD,
+            blocks=_obtener_bloques_oportunidad(urgencia=True),
         )
         return
 
@@ -446,7 +375,7 @@ def manejar_mensaje_personal(event, logger) -> None:
             channel=dm_channel,
             thread_ts=thread_ts,
             text="Esta es tu oportunidad para compartir tu progreso",
-            blocks=_BLOQUES_OPORTUNIDAD_SIN_URGENCIA,
+            blocks=_obtener_bloques_oportunidad(urgencia=False),
         )
         return
 
@@ -701,7 +630,7 @@ def _handle_personal_urgencia_enviar(ack, body, logger):
             channel=dm_channel,
             thread_ts=thread_ts,
             text="Esta es tu oportunidad para compartir tu progreso",
-            blocks=_BLOQUES_OPORTUNIDAD_SIN_URGENCIA,
+            blocks=_obtener_bloques_oportunidad(urgencia=False),
         )
     except Exception:
         logger.exception("Error procesando personal_urgencia_enviar")

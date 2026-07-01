@@ -556,6 +556,7 @@ button:disabled, .button:disabled { opacity: .45; cursor: not-allowed; }
 .role-card:not(.secondary) .role-card-desc { color: rgba(255, 255, 255, .6); }
 /* Hover on both cards → orange */
 .role-card:hover { opacity: 1; background: var(--accent); border-color: var(--accent); color: #fff; }
+button.role-card.secondary:hover { color: #fff; }
 .role-card:hover .role-card-desc { color: rgba(255, 255, 255, .85); }
 .role-card-title { font-family: var(--font-display); font-size: clamp(18px, 2.5vw, 22px); font-weight: 500; line-height: 1.1; }
 .role-card-desc { font-size: 13px; font-weight: 200; line-height: 1.6; color: var(--text-55); }

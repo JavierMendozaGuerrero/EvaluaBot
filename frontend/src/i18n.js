@@ -1,0 +1,451 @@
+// ---------------------------------------------------------------------------
+// i18n de la web. El idioma sale de /api/me (columna Idioma de Notion).
+// Por defecto "es". El contenido escrito en Notion NO se traduce aqui.
+// Catalogo STRINGS: clave -> { es, en }. Placeholders con {nombre}.
+// Para anadir un idioma nuevo: sumar su codigo aqui y su traduccion en cada clave.
+// ---------------------------------------------------------------------------
+
+const LANG_KEY = "evaluabot_lang";
+
+let _lang = "es";
+const _langListeners = new Set();
+
+// Al cargar: si hay elección manual guardada, tiene prioridad sobre el idioma de Notion.
+try {
+  const guardado = localStorage.getItem(LANG_KEY);
+  if (guardado === "en" || guardado === "es") _lang = guardado;
+} catch {}
+
+function _notifyLang() {
+  for (const fn of _langListeners) { try { fn(_lang); } catch {} }
+}
+
+// Suscripción para forzar re-render al cambiar de idioma. Devuelve función para desuscribir.
+export function subscribeLang(fn) { _langListeners.add(fn); return () => _langListeners.delete(fn); }
+
+// ¿El usuario ha elegido idioma manualmente (con el selector)?
+export function hasManualLang() {
+  try { return localStorage.getItem(LANG_KEY) != null; } catch { return false; }
+}
+
+// Fija el idioma SIN persistir (usado por /api/me con el idioma de Notion).
+export function setLang(l) {
+  const nl = l === "en" ? "en" : "es";
+  if (nl === _lang) return;
+  _lang = nl;
+  _notifyLang();
+}
+
+// Elección manual del selector: fija, persiste y notifica.
+export function setLangManual(l) {
+  const nl = l === "en" ? "en" : "es";
+  try { localStorage.setItem(LANG_KEY, nl); } catch {}
+  if (nl !== _lang) { _lang = nl; }
+  _notifyLang();
+}
+
+export function getLang() { return _lang; }
+
+const MESES = {
+  es: ["Enero", "Febrero", "Marzo", "Abril", "Mayo", "Junio", "Julio", "Agosto", "Septiembre", "Octubre", "Noviembre", "Diciembre"],
+  en: ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"],
+};
+export function nombreMes(idx) {
+  const arr = MESES[_lang] || MESES.es;
+  return arr[idx] || "";
+}
+
+export function t(clave, vars) {
+  const entrada = STRINGS[clave];
+  if (!entrada) return clave;
+  let s = entrada[_lang] || entrada.es || clave;
+  if (vars) for (const k in vars) s = s.split(`{${k}}`).join(vars[k]);
+  return s;
+}
+
+export const STRINGS = {
+  // --- Comunes / reutilizados ---
+  "common.back": { es: "← Volver", en: "← Back" },
+  "common.logout": { es: "Cerrar sesión", en: "Log out" },
+  "common.close": { es: "Cerrar", en: "Close" },
+  "common.cancel": { es: "Cancelar", en: "Cancel" },
+  "common.save": { es: "Guardar", en: "Save" },
+  "common.send": { es: "Enviar", en: "Send" },
+  "common.loading": { es: "Cargando…", en: "Loading…" },
+  "pw.show": { es: "Mostrar contraseña", en: "Show password" },
+  "pw.hide": { es: "Ocultar contraseña", en: "Hide password" },
+  "common.no_date": { es: "Sin fecha", en: "No date" },
+  "common.err_generic": { es: "No se pudo completar la acción.", en: "The action could not be completed." },
+
+  // --- Panel admin ---
+  "admin.reports": { es: "Informes", en: "Reports" },
+  "admin.view_final_report": { es: "Ver informe final", en: "View final report" },
+  "admin.download_word": { es: "Descargar Word", en: "Download Word" },
+  "admin.no_final_report": { es: "Sin informe final disponible.", en: "No final report available." },
+  "admin.search_employee": { es: "Buscar empleado", en: "Search employee" },
+  "admin.search_placeholder": { es: "Escribe un nombre...", en: "Type a name..." },
+  "admin.no_results": { es: "No hay resultados para “{q}”.", en: "No results for “{q}”." },
+  "admin.err_load_report": { es: "No se pudo cargar el informe.", en: "Could not load the report." },
+  "admin.err_download": { es: "No se pudo descargar el archivo.", en: "Could not download the file." },
+
+  // --- Objetivos ---
+  "obj.personal_dev": { es: "Desarrollo personal", en: "Personal development" },
+  "obj.my_goals_title": { es: "Mis objetivos.", en: "My goals." },
+  "obj.kpis_label": { es: "KPIs:", en: "KPIs:" },
+  "obj.none_yet": { es: "Todavía no tienes objetivos registrados.", en: "You don’t have any goals recorded yet." },
+
+  // --- Objetivos: alta/edicion (CA) ---
+  "common.saving": { es: "Guardando...", en: "Saving..." },
+  "common.delete": { es: "Eliminar", en: "Delete" },
+  "common.deleting": { es: "Eliminando...", en: "Deleting..." },
+  "goals.saved_one": { es: "Objetivo guardado correctamente.", en: "Goal saved successfully." },
+  "goals.saved_many": { es: "{n} objetivos guardados correctamente.", en: "{n} goals saved successfully." },
+  "goals.confirm_delete": { es: "¿Eliminar este objetivo?", en: "Delete this goal?" },
+  "goals.kicker": { es: "Objetivos", en: "Goals" },
+  "goals.new": { es: "Nuevo objetivo", en: "New goal" },
+  "goals.remove_aria": { es: "Quitar objetivo", en: "Remove goal" },
+  "goals.title_label": { es: "Título *", en: "Title *" },
+  "goals.title_ph": { es: "Ej: Mejorar habilidades de presentación", en: "e.g. Improve presentation skills" },
+  "goals.type_label": { es: "Tipo", en: "Type" },
+  "goals.type_ph": { es: "Ej: Desarrollo personal, Técnico, Liderazgo...", en: "e.g. Personal development, Technical, Leadership..." },
+  "goals.kpis_field_label": { es: "KPIs para su cumplimiento", en: "KPIs to achieve it" },
+  "goals.kpis_ph": { es: "Ej: Presentar en 2 reuniones de cliente al trimestre", en: "e.g. Present at 2 client meetings per quarter" },
+  "goals.desc_label": { es: "Descripción", en: "Description" },
+  "goals.desc_ph": { es: "Detalla cómo trabajar este objetivo...", en: "Describe how to work on this goal..." },
+  "goals.add_another": { es: "+ Añadir otro", en: "+ Add another" },
+  "goals.save_many": { es: "Guardar {n} objetivos", en: "Save {n} goals" },
+  "goals.save_one": { es: "Guardar objetivo", en: "Save goal" },
+  "goals.history": { es: "Historial", en: "History" },
+  "goals.of_person": { es: "Objetivos de {nombre}", en: "{nombre}’s goals" },
+  "goals.none_for": { es: "No hay objetivos para {nombre}.", en: "No goals for {nombre}." },
+
+  // --- Footer ---
+  "footer.privacy": { es: "Privacidad", en: "Privacy" },
+  "footer.terms": { es: "Términos", en: "Terms" },
+
+  // --- Documentos legales (titulos; el cuerpo son .md aparte) ---
+  "legal.privacy_title": { es: "Política de privacidad", en: "Privacy policy" },
+  "legal.terms_title": { es: "Términos y condiciones", en: "Terms and conditions" },
+  "legal.unavailable": { es: "Documento no disponible.", en: "Document not available." },
+
+  // --- Seleccion de rol (admin) ---
+  "role.welcome": { es: "Bienvenida", en: "Welcome" },
+  "role.how_enter": { es: "¿Cómo quieres entrar hoy?", en: "How do you want to sign in today?" },
+  "role.admin_title": { es: "Administrador", en: "Administrator" },
+  "role.admin_desc": { es: "Consulta evaluaciones e informes de cualquier empleado", en: "View evaluations and reports for any employee" },
+  "role.personal_title": { es: "Perfil personal", en: "Personal profile" },
+  "role.personal_desc": { es: "Accede como cualquier otro empleado de la empresa", en: "Access as any other employee in the company" },
+
+  // --- Login / registro / recuperar contrasena (AuthScreen) ---
+  "auth.eyebrow": { es: "Evaluaciones internas", en: "Internal evaluations" },
+  "auth.title_verify": { es: "Verificación requerida", en: "Verification required" },
+  "auth.title_forgot": { es: "Recuperar contraseña", en: "Reset password" },
+  "auth.title_reset": { es: "Nueva contraseña", en: "New password" },
+  "auth.title_login": { es: "Iniciar sesión", en: "Sign in" },
+  "auth.title_register": { es: "Crear cuenta", en: "Create account" },
+  "auth.desc_forgot": { es: "Introduce tu email corporativo y te enviaremos un enlace para restablecer tu contraseña.", en: "Enter your work email and we’ll send you a link to reset your password." },
+  "auth.desc_reset": { es: "Elige una nueva contraseña para tu cuenta.", en: "Choose a new password for your account." },
+  "auth.back_to_login": { es: "← Volver al inicio de sesión", en: "← Back to sign in" },
+  "auth.back_word": { es: "Volver", en: "Back" },
+  "auth.err_weak_pw": { es: "La contraseña debe tener mínimo 8 caracteres, una mayúscula y un carácter especial.", en: "The password must be at least 8 characters and include one uppercase letter and one special character." },
+  "auth.err_pw_mismatch": { es: "Las contraseñas no coinciden.", en: "The passwords do not match." },
+  "auth.forgot_sent": { es: "Si el email existe, te hemos enviado un enlace para cambiar la contraseña.", en: "If the email exists, we’ve sent you a link to change your password." },
+  "auth.pw_updated": { es: "Contraseña actualizada. Ya puedes entrar.", en: "Password updated. You can sign in now." },
+  "auth.verify_intro_1": { es: "Por seguridad, hemos enviado un código de 6 dígitos a ", en: "For security, we’ve sent a 6-digit code to " },
+  "auth.verify_intro_2": { es: ". Introdúcelo a continuación. Caduca en 10 minutos.", en: ". Enter it below. It expires in 10 minutes." },
+  "auth.verify_code_label": { es: "Código de verificación", en: "Verification code" },
+  "auth.repeat_pw": { es: "Repite la contraseña", en: "Repeat password" },
+  "auth.user_or_email": { es: "Usuario o email", en: "Username or email" },
+  "auth.user": { es: "Usuario", en: "Username" },
+  "auth.password": { es: "Contraseña", en: "Password" },
+  "auth.remember": { es: "Recuérdame", en: "Remember me" },
+  "auth.pw_hint": { es: "Mínimo 8 caracteres, una mayúscula y un carácter especial. Las contraseñas deben coincidir.", en: "At least 8 characters, one uppercase letter and one special character. The passwords must match." },
+  "auth.processing": { es: "Procesando...", en: "Processing..." },
+  "auth.verify_btn": { es: "Verificar", en: "Verify" },
+  "auth.send_link": { es: "Enviar enlace", en: "Send link" },
+  "auth.save_pw": { es: "Guardar contraseña", en: "Save password" },
+  "auth.forgot_link": { es: "Olvidé mi contraseña", en: "I forgot my password" },
+  "auth.legal_1": { es: "Al acceder aceptas nuestra ", en: "By signing in you accept our " },
+  "auth.legal_privacy": { es: "política de privacidad", en: "privacy policy" },
+  "auth.legal_2": { es: " y los ", en: " and the " },
+  "auth.legal_terms": { es: "términos y condiciones", en: "terms and conditions" },
+  "auth.legal_3": { es: " de uso de la plataforma.", en: " for using the platform." },
+
+  // --- Chat evaluacion de proyecto (ChatEvalProyecto) ---
+  "cep.grace_intro": { es: "💬 Tienes evaluaciones recientes que puedes modificar durante 2 días desde que las guardaste.\n\nPulsa *✏️ Modificar respuestas* para cambiar algo.", en: "💬 You have recent evaluations you can edit for 2 days after saving them.\n\nTap *✏️ Edit answers* to change something." },
+  "cep.pending_intro": { es: "📍 *Tienes una evaluación mensual pendiente.*\n\n_Esta evaluación es totalmente privada, solo podrá verla el CA de la persona evaluada._\n_Si en algún momento quieres cancelar, pulsa Cancelar._\n\n*Pulsa el botón* para comenzar la evaluación.", en: "📍 *You have a monthly evaluation pending.*\n\n_This evaluation is fully private; only the evaluated person’s CA can see it._\n_If at any point you want to cancel, tap Cancel._\n\n*Tap the button* to start the evaluation." },
+  "cep.resumen_head": { es: "*Resumen de tus respuestas:*", en: "*Summary of your answers:*" },
+  "cep.resumen_evaluado": { es: "- *Persona evaluada*: {v}", en: "- *Person evaluated*: {v}" },
+  "cep.resumen_proyecto": { es: "- *Proyecto*: {v}", en: "- *Project*: {v}" },
+  "cep.resumen_satisf": { es: "\n¿Estás satisfecho con tus respuestas?\nPulsa *✅ Sí, guardar* o *✏️ Modificar*.", en: "\nAre you happy with your answers?\nTap *✅ Yes, save* or *✏️ Edit*." },
+  "cep.btn_comenzar": { es: "Comenzar", en: "Start" },
+  "cep.ask_area": { es: "¿A qué área perteneces?\n*1.* Negocio\n*2.* MiddleOffice\n*3.* Palantir", en: "Which area do you belong to?\n*1.* Business\n*2.* MiddleOffice\n*3.* Palantir" },
+  "cep.area_negocio": { es: "Negocio", en: "Business" },
+  "cep.ask_who_list": { es: "¿A quién quieres evaluar?\n{lista}", en: "Who do you want to evaluate?\n{lista}" },
+  "cep.ask_who": { es: "¿A quién quieres evaluar? Dime el nombre de la persona.", en: "Who do you want to evaluate? Tell me the person’s name." },
+  "cep.ask_who_short": { es: "¿A quién quieres evaluar? Dime el nombre.", en: "Who do you want to evaluate? Tell me the name." },
+  "cep.ask_project": { es: "Escribe el nombre de uno de los proyectos en los que estás trabajando. Más adelante podrás evaluar el resto", en: "Type the name of one of the projects you’re working on. You’ll be able to evaluate the rest later." },
+  "cep.project_ok": { es: "Perfecto 😊, vamos con el proyecto *{val}*. Dime el nombre de uno de los miembros de tu equipo, podrás evaluar al resto después.", en: "Great 😊, let’s go with the project *{val}*. Tell me the name of one of your team members; you can evaluate the rest afterwards." },
+  "cep.already_evaluated": { es: "Ya has evaluado a *{emp}* en *{proy}* en esta sesión. Dime el nombre de otro miembro.", en: "You’ve already evaluated *{emp}* in *{proy}* this session. Tell me another member’s name." },
+  "cep.no_questions": { es: "⚠️ No hay preguntas configuradas.", en: "⚠️ No questions configured." },
+  "cep.not_found_suggest": { es: "*{nombre}* no aparece en la lista de empleados.\n¿Querías decir alguno de estos?\n{sug}", en: "*{nombre}* is not in the employee list.\nDid you mean one of these?\n{sug}" },
+  "cep.not_found": { es: "*{nombre}* no aparece en la lista de empleados. Escribe nombre y apellido como aparece en la lista.", en: "*{nombre}* is not in the employee list. Type the first and last name as they appear in the list." },
+  "cep.err_temp_data": { es: "⚠️ Error temporal consultando datos. Vuelve a intentarlo.", en: "⚠️ Temporary error fetching data. Please try again." },
+  "cep.updated": { es: "✅ *Evaluación actualizada* ❤️\n\n¿Quieres modificar la evaluación de alguien más?", en: "✅ *Evaluation updated* ❤️\n\nDo you want to edit someone else’s evaluation?" },
+  "cep.saved": { es: "✅ *Evaluación guardada en Notion*.\n\n¿Hay más miembros en el equipo que quieras evaluar?", en: "✅ *Evaluation saved to Notion*.\n\nAre there more team members you’d like to evaluate?" },
+  "cep.err_save": { es: "⚠️ No se pudo guardar en Notion. {msg}", en: "⚠️ Could not save to Notion. {msg}" },
+  "cep.btn_modificar": { es: "✏️ Modificar", en: "✏️ Edit" },
+  "cep.mod_item_persona": { es: "1. Persona evaluada", en: "1. Person evaluated" },
+  "cep.mod_item_proyecto": { es: "2. Proyecto", en: "2. Project" },
+  "cep.ask_which_mod": { es: "¿Qué respuesta quieres modificar?\n{items}\n\nResponde con el número.", en: "Which answer do you want to edit?\n{items}\n\nReply with the number." },
+  "cep.reply_number": { es: "Por favor, responde con un número 🔢", en: "Please reply with a number 🔢" },
+  "cep.reply_number_range": { es: "Por favor, responde con un número del 1 al {max} 🔢", en: "Please reply with a number from 1 to {max} 🔢" },
+  "cep.enter_person": { es: "Indica el nombre de la persona a evaluar.", en: "Enter the name of the person to evaluate." },
+  "cep.enter_new_project": { es: "Escribe el nuevo nombre del proyecto.", en: "Type the new project name." },
+  "cep.enter_new_answer": { es: "Escribe la nueva respuesta.", en: "Type the new answer." },
+  "cep.not_found_suggest2": { es: "*{v}* no aparece en la lista.\n¿Querías decir alguno de estos?\n{sug}", en: "*{v}* is not in the list.\nDid you mean one of these?\n{sug}" },
+  "cep.not_found2": { es: "*{v}* no aparece en la lista. Escribe nombre y apellido.", en: "*{v}* is not in the list. Type the first and last name." },
+  "cep.err_temp": { es: "⚠️ Error temporal. Vuelve a intentarlo.", en: "⚠️ Temporary error. Please try again." },
+  "cep.reply_1_5": { es: "Por favor, responde con un número del 1 al 5 🔢", en: "Please reply with a number from 1 to 5 🔢" },
+  "cep.ask_other_member_proj": { es: "Perfecto. ¿Qué otro miembro del proyecto *{proy}* quieres evaluar?", en: "Great. Which other member of the project *{proy}* do you want to evaluate?" },
+  "cep.ask_other_member": { es: "Perfecto. ¿Qué otro miembro quieres evaluar?", en: "Great. Which other member do you want to evaluate?" },
+  "cep.thanks_close": { es: "Perfecto, muchas gracias por tu tiempo ❤️. Ya puedes cerrar esta sección 👋", en: "Great, thank you very much for your time ❤️. You can now close this section 👋" },
+  "cep.ask_other_project": { es: "¿Estás trabajando en algún otro proyecto?", en: "Are you working on any other project?" },
+  "cep.thanks_grace": { es: "Perfecto, muchas gracias por tu tiempo ❤️\n\n💬 Si quieres modificar tus respuestas, tienes un plazo de 2 días.", en: "Great, thank you very much for your time ❤️\n\n💬 If you want to edit your answers, you have a 2-day window." },
+  "cep.yes": { es: "✅ Sí", en: "✅ Yes" },
+  "cep.no": { es: "❌ No", en: "❌ No" },
+  "cep.save_yes": { es: "✅ Sí, guardar", en: "✅ Yes, save" },
+  "cep.completed": { es: "Evaluación completada ✅", en: "Evaluation completed ✅" },
+  "cep.ask_whose_mod": { es: "¿La evaluación de quién quieres modificar?", en: "Whose evaluation do you want to edit?" },
+  "cep.btn_mod_answers": { es: "✏️ Modificar respuestas", en: "✏️ Edit answers" },
+  "cep.bye": { es: "¡Hasta pronto! 👋", en: "See you soon! 👋" },
+  "cep.ph_project": { es: "Nombre del proyecto...", en: "Project name..." },
+  "cep.ph_person": { es: "Nombre del compañero...", en: "Colleague’s name..." },
+  "cep.ph_answer": { es: "Escribe tu respuesta...", en: "Type your answer..." },
+  "cep.ph_field_number": { es: "Número del campo...", en: "Field number..." },
+  "cep.ph_or_name": { es: "O escribe el nombre...", en: "Or type the name..." },
+  "cep.ph_new_answer": { es: "Nueva respuesta...", en: "New answer..." },
+
+  // --- Seccion de evaluaciones en la web (EvaluacionesSlackSection) ---
+  "ess.intro": { es: "Contestar aquí es exactamente igual que contestar en Slack. Tus respuestas se guardan en el mismo sitio y en el mismo formato.", en: "Answering here is exactly the same as answering in Slack. Your answers are saved in the same place and format." },
+  "ess.tab_monthly": { es: "Evaluación mensual", en: "Monthly evaluation" },
+  "ess.tab_personal": { es: "Evaluación personal", en: "Personal evaluation" },
+  "ess.tip_done": { es: "Ya has completado esta evaluación en el ciclo actual", en: "You’ve already completed this evaluation in the current cycle" },
+  "ess.tip_editable": { es: "Puedes modificar tus respuestas (2 días de margen)", en: "You can edit your answers (2-day window)" },
+  "ess.tip_soon": { es: "Próximamente", en: "Coming soon" },
+  "ess.editable": { es: "Modificable", en: "Editable" },
+  "ess.soon_short": { es: "Próx.", en: "Soon" },
+  "ess.select_type": { es: "Selecciona un tipo de evaluación.", en: "Select an evaluation type." },
+  "ess.page_kicker": { es: "Evaluaciones en Slack", en: "Slack evaluations" },
+
+  // --- Dashboard ---
+  "dash.gen_report": { es: "Claude está generando el informe...", en: "Claude is generating the report..." },
+  "dash.report_ready": { es: "Informe listo con {n} evaluaciones.", en: "Report ready with {n} evaluations." },
+  "dash.interpreting": { es: "Claude está interpretando el texto del evaluador...", en: "Claude is interpreting the evaluator’s text..." },
+  "dash.annual_generated": { es: "Informe anual generado.", en: "Annual report generated." },
+  "dash.err_download_file": { es: "Error al descargar el archivo.", en: "Error downloading the file." },
+  "dash.downloading": { es: "Descargando archivo...", en: "Downloading file..." },
+  "dash.file_ready": { es: "Archivo listo.", en: "File ready." },
+  "dash.nav_activate_proj": { es: "Activar evaluaciones de proyecto", en: "Activate project evaluations" },
+  "dash.nav_proj_evals": { es: "Evaluaciones por proyectos", en: "Evaluations by project" },
+  "dash.nav_my_advisees": { es: "Mis advisees", en: "My advisees" },
+  "dash.nav_manage_projects": { es: "Gestionar mis proyectos en activo", en: "Manage my active projects" },
+  "dash.nav_admin_panel": { es: "Panel admin", en: "Admin panel" },
+  "dash.my_role": { es: "Mi puesto", en: "My role" },
+  "dash.my_country": { es: "Mi país", en: "My country" },
+  "dash.country_change": { es: "Cambiar", en: "Change" },
+  "dash.country_placeholder": { es: "Selecciona tu país", en: "Select your country" },
+  "dash.country_other": { es: "Otro…", en: "Other…" },
+  "dash.country_other_ph": { es: "Escribe el país", en: "Type the country" },
+  "dash.country_none": { es: "Sin definir", en: "Not set" },
+  "dash.country_saved": { es: "País actualizado.", en: "Country updated." },
+  "dash.country_error": { es: "No se pudo guardar el país.", en: "Couldn’t save the country." },
+  "dash.my_goals": { es: "Mis objetivos", en: "My goals" },
+  "dash.no_goals": { es: "Sin objetivos definidos.", en: "No goals defined." },
+  "dash.my_reports": { es: "Mis informes", en: "My reports" },
+  "dash.open_web": { es: "Abrir en web", en: "Open in browser" },
+  "dash.no_access": { es: "No tienes acceso.", en: "You don’t have access." },
+  "dash.manage_evals": { es: "Gestión de evaluaciones", en: "Evaluation management" },
+  "dash.evaluated_person": { es: "Persona evaluada", en: "Person evaluated" },
+  "dash.current_selection": { es: "Selección actual: {v}", en: "Current selection: {v}" },
+  "dash.no_table": { es: "sin tabla disponible", en: "no table available" },
+  "dash.claude_draft": { es: "Borrador de Claude", en: "Claude draft" },
+  "dash.final_ca": { es: "Versión final CA", en: "CA final version" },
+  "dash.annual_report": { es: "Informe anual", en: "Annual report" },
+  "dash.annual_report_of": { es: "Informe anual de {nombre}", en: "Annual report for {nombre}" },
+  "dash.annual_desc": { es: "Genera una base para el informe anual de evaluaciones.", en: "Generate a base for the annual evaluation report." },
+  "dash.gen_annual": { es: "Generar informe anual", en: "Generate annual report" },
+  "dash.result": { es: "Resultado", en: "Result" },
+  "dash.open_web_short": { es: "Abrir web", en: "Open web" },
+  "dash.download_annual": { es: "Descargar informe anual", en: "Download annual report" },
+  "dash.final_report": { es: "Informe final", en: "Final report" },
+  "dash.final_report_of": { es: "Informe final de {nombre}", en: "Final report for {nombre}" },
+  "dash.select_person": { es: "Selecciona una persona evaluada.", en: "Select a person to evaluate." },
+  "dash.open_web_version": { es: "Abrir versión web", en: "Open web version" },
+  "dash.no_final_report": { es: "No hay informe final disponible.", en: "No final report available." },
+  "dash.opinions_about": { es: "Opiniones sobre {nombre}", en: "Opinions about {nombre}" },
+  "dash.evals_seen": { es: "Evaluaciones vistas:", en: "Evaluations seen:" },
+  "dash.ca_opinion": { es: "Opinión del CA:", en: "CA opinion:" },
+  "dash.no_opinions": { es: "No hay opiniones guardadas sobre {nombre}.", en: "No saved opinions about {nombre}." },
+
+  // --- Historial de evaluaciones ---
+  "hist.err_load": { es: "No se pudieron cargar las evaluaciones.", en: "The evaluations could not be loaded." },
+  "hist.title": { es: "Historial de evaluaciones", en: "Evaluation history" },
+  "hist.project_label": { es: "Proyecto:", en: "Project:" },
+  "hist.empty": { es: "No hay evaluaciones registradas tuyas para este proyecto aún.", en: "You have no evaluations recorded for this project yet." },
+  "hist.col_date": { es: "Fecha", en: "Date" },
+  "hist.col_score": { es: "Valoración", en: "Score" },
+  "hist.col_justif": { es: "Justificación", en: "Justification" },
+  "hist.col_relation": { es: "Relación", en: "Relationship" },
+  "hist.rel_superior": { es: "Superior", en: "Superior" },
+  "hist.rel_equal": { es: "Igual", en: "Same level" },
+  "hist.rel_lower": { es: "Inferior", en: "Subordinate" },
+
+  // --- Subir informe final (SubirInformePage) ---
+  "subir.uploading": { es: "Subiendo informe...", en: "Uploading report..." },
+  "subir.err_upload": { es: "No se pudo subir el informe.", en: "The report could not be uploaded." },
+  "subir.uploaded_ok": { es: "Informe subido correctamente.", en: "Report uploaded successfully." },
+  "subir.current_version": { es: "Versión actual", en: "Current version" },
+  "subir.current_desc": { es: "Ya hay un informe final subido. Puedes descargarlo o subir uno nuevo para reemplazarlo.", en: "There’s already a final report uploaded. You can download it or upload a new one to replace it." },
+  "subir.upload_final": { es: "Subir versión final", en: "Upload final version" },
+  "subir.upload_desc": { es: "Sube el Word con tu versión final. Se guarda en Notion y el advisee podrá descargarlo. Se mantienen las 2 versiones más recientes.", en: "Upload the Word file with your final version. It’s saved to Notion and the advisee can download it. The 2 most recent versions are kept." },
+  "subir.word_file": { es: "Archivo Word (.docx)", en: "Word file (.docx)" },
+  "subir.uploading_btn": { es: "Subiendo...", en: "Uploading..." },
+  "subir.upload_btn": { es: "Subir informe", en: "Upload report" },
+  "subir.uploaded": { es: "Informe subido", en: "Report uploaded" },
+
+  // --- Detalle de advisee (AdviseeDetail) ---
+  "ad.err_no_doc": { es: "No se generó el documento.", en: "The document was not generated." },
+  "ad.err_save_note": { es: "No se pudo guardar la nota.", en: "The note could not be saved." },
+  "ad.err_save_note2": { es: "Error al guardar la nota.", en: "Error saving the note." },
+  "ad.back_advisees": { es: "← Mis advisees", en: "← My advisees" },
+  "ad.edit_goals": { es: "Editar objetivos", en: "Edit goals" },
+  "ad.close_manage": { es: "Cerrar gestión", en: "Close management" },
+  "ad.manage_report": { es: "Gestionar informe", en: "Manage report" },
+  "ad.close_make_final": { es: "Cerrar Realizar Informe final", en: "Close Make final report" },
+  "ad.make_final": { es: "Realizar Informe final", en: "Make final report" },
+  "ad.with_claude": { es: "Con ayuda de Claude", en: "With Claude’s help" },
+  "ad.close_manual": { es: "Cerrar manualmente", en: "Close manual" },
+  "ad.manual": { es: "Manualmente", en: "Manually" },
+  "ad.generating": { es: "Generando...", en: "Generating..." },
+  "ad.dl_opinions": { es: "Descargar PDF de opiniones", en: "Download opinions PDF" },
+  "ad.dl_proj_evals": { es: "Descargar PDF de evaluaciones de proyecto", en: "Download project evaluations PDF" },
+  "ad.dl_personal_tracking": { es: "Descargar PDF de seguimiento personal", en: "Download personal tracking PDF" },
+  "ad.dl_monthly_evals": { es: "Descargar PDF de evaluaciones mensuales", en: "Download monthly evaluations PDF" },
+  "ad.upload_final": { es: "Subir informe final", en: "Upload final report" },
+  "ad.access_active_revoke": { es: "Acceso a informe activo — revocar", en: "Report access active — revoke" },
+  "ad.give_access": { es: "Dar acceso a su informe", en: "Give access to their report" },
+  "ad.view_available_info": { es: "Ver información disponible", en: "View available information" },
+  "ad.meetings_log": { es: "Registro de reuniones / Comentarios", en: "Meetings log / Comments" },
+  "ad.note_placeholder": { es: "Escribe aquí tus anotaciones sobre esta reunión o cualquier comentario...", en: "Write your notes about this meeting or any comment here..." },
+  "ad.save_note": { es: "Guardar nota", en: "Save note" },
+  "ad.loading_history": { es: "Cargando historial...", en: "Loading history..." },
+  "ad.no_notes": { es: "No hay notas registradas todavía.", en: "No notes recorded yet." },
+  "ad.view_included_evals": { es: "Ver evaluaciones incluidas", en: "View included evaluations" },
+
+  // --- Mis proyectos en activo (MisProyectosActivosPage) ---
+  "mpa.member_added": { es: "{emp} añadido.", en: "{emp} added." },
+  "mpa.member_removed": { es: "{emp} eliminado.", en: "{emp} removed." },
+  "mpa.err_modify": { es: "Error al modificar.", en: "Error modifying." },
+  "mpa.kicker": { es: "Gestión de proyecto", en: "Project management" },
+  "mpa.title": { es: "Mis proyectos en activo", en: "My active projects" },
+  "mpa.no_projects": { es: "No tienes proyectos con evaluaciones activas.", en: "You have no projects with active evaluations." },
+  "mpa.progress": { es: "{done} de {total} evaluaciones completadas", en: "{done} of {total} evaluations completed" },
+  "mpa.loading_state": { es: "Cargando estado de evaluaciones...", en: "Loading evaluation status..." },
+  "mpa.no_data": { es: "Sin datos de evaluación todavía.", en: "No evaluation data yet." },
+  "mpa.col_member": { es: "Miembro", en: "Member" },
+  "mpa.col_received": { es: "Recibidas", en: "Received" },
+  "mpa.col_selfeval": { es: "Autoevaluación", en: "Self-evaluation" },
+  "mpa.col_status": { es: "Estado", en: "Status" },
+  "mpa.evaluated_by": { es: "Evaluado por: {list}", en: "Evaluated by: {list}" },
+  "mpa.pending_from": { es: "Pendiente de: {list}", en: "Pending from: {list}" },
+  "mpa.complete": { es: "Completo", en: "Complete" },
+  "mpa.pending": { es: "Pendiente", en: "Pending" },
+  "mpa.remove_member": { es: "Eliminar {nombre}", en: "Remove {nombre}" },
+  "mpa.select_person": { es: "Selecciona una persona...", en: "Select a person..." },
+  "mpa.add": { es: "Añadir", en: "Add" },
+  "mpa.add_member": { es: "+ Añadir miembro", en: "+ Add member" },
+
+  // --- Activar evaluaciones de proyecto (ActivarEvaluacionesProyectoPage) ---
+  "aep.err_type_project": { es: "Escribe el nombre del proyecto.", en: "Type the project name." },
+  "aep.err_select_employee": { es: "Selecciona al menos un empleado.", en: "Select at least one employee." },
+  "aep.activated": { es: "Evaluaciones activadas para {n} persona(s). Se les ha enviado una notificación por Slack.", en: "Evaluations activated for {n} person(s). They’ve been notified on Slack." },
+  "aep.err_activate": { es: "No se pudo activar.", en: "Could not activate." },
+  "aep.title": { es: "Activar evaluaciones", en: "Activate evaluations" },
+  "aep.desc": { es: "Como responsable de proyecto, introduce el nombre del proyecto y selecciona los miembros de tu equipo. Se les notificará por Slack y podrán acceder a los formularios de evaluación.", en: "As project lead, enter the project name and select your team members. They’ll be notified on Slack and will be able to access the evaluation forms." },
+  "aep.activate_another": { es: "Activar otro proyecto", en: "Activate another project" },
+  "aep.back_home": { es: "Volver al inicio", en: "Back to home" },
+  "aep.project_name": { es: "Nombre del proyecto", en: "Project name" },
+  "aep.format_hint": { es: "Formato: AÑO_EMPRESA_NOMBRE (sin espacios ni tildes, p.ej. 2026_Acme_Innovacion)", en: "Format: YEAR_COMPANY_NAME (no spaces or accents, e.g. 2026_Acme_Innovation)" },
+  "aep.team_members": { es: "Miembros del equipo", en: "Team members" },
+  "aep.loading_employees": { es: "Cargando empleados...", en: "Loading employees..." },
+  "aep.search_by_name": { es: "Buscar por nombre...", en: "Search by name..." },
+  "aep.members_selected_one": { es: "miembro seleccionado", en: "member selected" },
+  "aep.members_selected_many": { es: "miembros seleccionados", en: "members selected" },
+  "aep.activating": { es: "Activando...", en: "Activating..." },
+  "aep.activate_n_one": { es: "Activar evaluaciones ({n} seleccionado)", en: "Activate evaluations ({n} selected)" },
+  "aep.activate_n_many": { es: "Activar evaluaciones ({n} seleccionados)", en: "Activate evaluations ({n} selected)" },
+
+  // --- Evaluaciones de proyecto: listado (EvaluacionesProyectoPage) ---
+  "ep.fill_eval": { es: "Rellenar evaluación", en: "Fill in evaluation" },
+  "ep.completed": { es: "Completada", en: "Completed" },
+  "ep.pending": { es: "Pendiente", en: "Pending" },
+  "ep.history": { es: "Historial", en: "History" },
+  "ep.kicker": { es: "Evaluación de proyecto", en: "Project evaluation" },
+  "ep.project_label": { es: "Proyecto", en: "Project" },
+  "ep.progress": { es: "Progreso de evaluaciones", en: "Evaluation progress" },
+  "ep.progress_stat": { es: "{done} de {total} completadas · {pct}%", en: "{done} of {total} completed · {pct}%" },
+  "ep.section_auto": { es: "Autoevaluación", en: "Self-evaluation" },
+  "ep.section_manager": { es: "Evaluaciones a manager", en: "Evaluations to manager" },
+  "ep.section_members": { es: "Evaluaciones a miembros", en: "Evaluations to members" },
+
+  // --- Formulario de evaluacion de proyecto (FormularioEvaluacionProyecto) ---
+  "fep.label_auto": { es: "Autoevaluación", en: "Self-evaluation" },
+  "fep.label_peer": { es: "Evaluación a compañero", en: "Peer evaluation" },
+  "fep.label_manager": { es: "Evaluación al responsable", en: "Evaluation of the lead" },
+  "fep.label_member": { es: "Evaluación a miembro", en: "Member evaluation" },
+  "fep.err_select_person": { es: "Selecciona la persona a evaluar.", en: "Select the person to evaluate." },
+  "fep.err_required": { es: "Por favor responde todas las preguntas obligatorias.", en: "Please answer all required questions." },
+  "fep.saved_notion": { es: "Evaluación guardada correctamente en Notion.", en: "Evaluation saved successfully to Notion." },
+  "fep.err_save": { es: "No se pudo guardar.", en: "Could not save." },
+  "fep.loading_questions": { es: "Cargando preguntas...", en: "Loading questions..." },
+  "fep.saved_ok": { es: "Evaluación guardada correctamente.", en: "Evaluation saved successfully." },
+  "fep.new_eval": { es: "Nueva evaluación", en: "New evaluation" },
+  "fep.person_to_eval": { es: "Persona a evaluar", en: "Person to evaluate" },
+  "fep.select_dash": { es: "— Selecciona —", en: "— Select —" },
+  "fep.evaluating_self": { es: "Evaluándote a ti mismo: {nombre}", en: "Evaluating yourself: {nombre}" },
+  "fep.evaluating": { es: "Evaluando a: {nombre}", en: "Evaluating: {nombre}" },
+  "fep.no_questions": { es: "No hay preguntas configuradas para este tipo de evaluación.", en: "No questions configured for this type of evaluation." },
+  "fep.scale_low": { es: "1 — Carece de cumplimiento", en: "1 — Does not meet" },
+  "fep.scale_high": { es: "5 — Cumple totalmente", en: "5 — Fully meets" },
+  "fep.submit": { es: "Enviar evaluación", en: "Submit evaluation" },
+
+  // --- Wizard de evaluacion anual asistida (EvaluacionAnualWizard) ---
+  "eaw.err_write_points": { es: "Escribe tus puntos antes de enviar.", en: "Write your points before sending." },
+  "eaw.eyebrow": { es: "Evaluación anual asistida", en: "Assisted annual evaluation" },
+  "eaw.generating": { es: "Generando…", en: "Generating…" },
+  "eaw.full_info": { es: "Info completa", en: "Full info" },
+  "eaw.year_stat": { es: "Año {anio} · {done}/{total} áreas confirmadas", en: "Year {anio} · {done}/{total} areas confirmed" },
+  "eaw.err_start": { es: "No se pudo iniciar la evaluación.", en: "The evaluation could not be started." },
+  "eaw.confirm_identity_q": { es: "¿Es esta la persona que vas a evaluar?", en: "Is this the person you’re going to evaluate?" },
+  "eaw.year_projects": { es: "Proyectos del año: {list}", en: "Projects this year: {list}" },
+  "eaw.yes_correct_start": { es: "Sí, es correcto · empezar", en: "Yes, correct · start" },
+  "eaw.no_back": { es: "No, volver", en: "No, go back" },
+  "eaw.loading_area": { es: "Cargando área…", en: "Loading area…" },
+  "eaw.area_n": { es: "Área {i}/{total}", en: "Area {i}/{total}" },
+  "eaw.info_considered": { es: "Información que la IA consideró de esta área ({n})", en: "Information the AI considered for this area ({n})" },
+  "eaw.no_evidence": { es: "Sin evidencia específica para esta área.", en: "No specific evidence for this area." },
+  "eaw.ph_respond_ai": { es: "Responde a la IA…", en: "Reply to the AI…" },
+  "eaw.ph_main_points": { es: "Tus puntos principales y tu opinión…", en: "Your main points and your opinion…" },
+  "eaw.sending": { es: "Enviando…", en: "Sending…" },
+  "eaw.respond": { es: "Responder", en: "Reply" },
+  "eaw.send_to_ai": { es: "Enviar a la IA", en: "Send to the AI" },
+  "eaw.confirm_area": { es: "Confirmar área y continuar →", en: "Confirm area and continue →" },
+  "eaw.all_confirmed": { es: "Todas las áreas confirmadas", en: "All areas confirmed" },
+  "eaw.summary_desc": { es: "Al finalizar, la IA rellena el borrador con lo acordado en cada área (dejando los huecos de notas/retribución en blanco para que los completes y lo subas).", en: "When you finish, the AI fills in the draft with what was agreed for each area (leaving the notes/compensation gaps blank for you to complete and upload)." },
+  "eaw.gen_draft": { es: "Generar borrador", en: "Generate draft" },
+  "eaw.review_areas": { es: "Revisar áreas", en: "Review areas" },
+  "eaw.draft_done": { es: "Borrador generado ✓", en: "Draft generated ✓" },
+  "eaw.draft_desc": { es: "Ábrelo, rellena los huecos (notas/retribución) y súbelo como informe final.", en: "Open it, fill in the gaps (notes/compensation) and upload it as the final report." },
+  "eaw.view_draft": { es: "Ver borrador", en: "View draft" },
+};

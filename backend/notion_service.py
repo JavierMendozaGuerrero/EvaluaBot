@@ -9,6 +9,7 @@ from difflib import SequenceMatcher
 
 from . import config
 from .clients import notion
+from .i18n import IDIOMAS_SOPORTADOS
 from .state import bbdd_por_evaluado, lock
 from .utils import normalizar_nombre
 
@@ -232,30 +233,46 @@ def _buscar_objeto_notion_por_nombre(nombre_objetivo):
     return None
 
 
+def _safe_link_by_name(page_id, nombre):
+    """Como _page_or_database_link_by_name pero un 404/sin-compartir devuelve None
+    en vez de propagar, para poder caer al buscador global por nombre."""
+    try:
+        return _page_or_database_link_by_name(page_id, nombre)
+    except Exception:
+        logging.warning(
+            "No se pudo leer la pagina de Notion '%s' (¿movida o sin compartir con la integracion?). "
+            "Se intentara localizar '%s' por busqueda global.",
+            page_id, nombre,
+        )
+        return None
+
+
 def _resolver_ruta_lista_empleados(origen_id):
     origen_id = _normalizar_notion_id(origen_id)
-    pagina_listas_id = _page_or_database_link_by_name(origen_id, config.NOTION_DATA_LISTS_PAGE_NAME)
+    pagina_listas_id = _safe_link_by_name(origen_id, config.NOTION_DATA_LISTS_PAGE_NAME)
     if pagina_listas_id:
         logging.info("Pagina de listas de datos encontrada: %s", config.NOTION_DATA_LISTS_PAGE_NAME)
         _decorar_pagina_notion(pagina_listas_id, config.NOTION_DATA_LISTS_PAGE_NAME)
-        lista_empleados_id = _page_or_database_link_by_name(pagina_listas_id, config.NOTION_EMPLOYEES_DATABASE_NAME)
+        lista_empleados_id = _safe_link_by_name(pagina_listas_id, config.NOTION_EMPLOYEES_DATABASE_NAME)
         if lista_empleados_id:
             logging.info("Link a lista de empleados encontrado: %s", config.NOTION_EMPLOYEES_DATABASE_NAME)
             return lista_empleados_id
         return pagina_listas_id
 
-    lista_empleados_id = _page_or_database_link_by_name(origen_id, config.NOTION_EMPLOYEES_DATABASE_NAME)
+    lista_empleados_id = _safe_link_by_name(origen_id, config.NOTION_EMPLOYEES_DATABASE_NAME)
     if lista_empleados_id:
         logging.info("Link a lista de empleados encontrado: %s", config.NOTION_EMPLOYEES_DATABASE_NAME)
         return lista_empleados_id
 
     lista_empleados_id = _buscar_objeto_notion_por_nombre(config.NOTION_EMPLOYEES_DATABASE_NAME)
     if lista_empleados_id:
+        logging.info("Lista de empleados localizada por busqueda global: %s", config.NOTION_EMPLOYEES_DATABASE_NAME)
         return lista_empleados_id
 
     raise RuntimeError(
         f"No se encontro '{config.NOTION_EMPLOYEES_DATABASE_NAME}' desde el origen configurado. "
-        "Configura NOTION_EMPLOYEES_DATABASE_ID con la URL o ID exacto de la lista de empleados."
+        "Comparte la pagina/base con la integracion o configura NOTION_EMPLOYEES_DATABASE_ID "
+        "con la URL o ID exacto de la lista de empleados."
     )
 
 
@@ -718,27 +735,43 @@ def _poblar_bbdd_preguntas(bbdd_id):
     _preguntas_bbdd_pobladas.add(bbdd_id)
 
 
-def obtener_preguntas_desde_notion(tipo: str) -> dict:
-    """Devuelve {clave: texto} para el tipo dado (Top-Bottom / Bottom-Top / Same Level). Caché 5 min."""
+def obtener_preguntas_desde_notion(tipo: str, idioma: str = "es") -> dict:
+    """Devuelve {clave: texto} para el tipo dado (Top-Bottom / Bottom-Top / Same Level).
+
+    Filtra por la columna 'Idioma' (ES/EN) de la base de preguntas. Si se pide 'en'
+    y una clave no tiene fila en ingles, cae a la version espanola. Si la columna
+    'Idioma' aun no existe, todas las filas se tratan como ES (compatibilidad). Cache 5 min.
+    """
+    idioma = "en" if idioma == "en" else "es"
+    cache_key = f"{tipo}|{idioma}"
     ahora = time.time()
     with _lock_preguntas:
-        if tipo in _preguntas_cache and (ahora - _preguntas_cache_time.get(tipo, 0)) < _PREGUNTAS_CACHE_TTL:
-            return _preguntas_cache[tipo]
+        if cache_key in _preguntas_cache and (ahora - _preguntas_cache_time.get(cache_key, 0)) < _PREGUNTAS_CACHE_TTL:
+            return _preguntas_cache[cache_key]
     try:
         bbdd_id = _obtener_o_crear_bbdd_preguntas()
         if not bbdd_id:
             return {}
         resp = _query_bbdd(bbdd_id, filter={"property": "Tipo", "select": {"equals": tipo}})
-        preguntas = {}
+        es_map: dict = {}
+        en_map: dict = {}
         for pagina in resp.get("results", []):
             props = pagina.get("properties", {})
             clave = ((props.get("Clave") or {}).get("select") or {}).get("name", "")
             titulo = "".join(t.get("plain_text", "") for t in (props.get("Texto") or {}).get("title", []))
-            if clave and titulo:
-                preguntas[clave] = titulo
+            if not (clave and titulo):
+                continue
+            if _normalizar_idioma(_texto_propiedad(props, "Idioma")) == "en":
+                en_map[clave] = titulo
+            else:
+                es_map[clave] = titulo
+        if idioma == "en":
+            preguntas = {c: en_map.get(c, es_map.get(c, "")) for c in (set(es_map) | set(en_map))}
+        else:
+            preguntas = es_map
         with _lock_preguntas:
-            _preguntas_cache[tipo] = preguntas
-            _preguntas_cache_time[tipo] = ahora
+            _preguntas_cache[cache_key] = preguntas
+            _preguntas_cache_time[cache_key] = ahora
         return preguntas
     except Exception:
         logging.exception("Error obteniendo preguntas de Notion para tipo '%s'", tipo)
@@ -1423,6 +1456,41 @@ _empleados_cache_ts: float = 0.0
 _EMPLEADOS_CACHE_TTL = 300  # 5 minutos
 
 
+def _codigo_idioma(valor: str) -> str:
+    """Extrae un codigo de idioma de 2 letras del texto de la columna Idioma.
+
+    Acepta: 'ES', 'EN', 'Espanol (ES)', 'Ingles (EN)', 'English', 'Portugues (PT)'...
+    Devuelve el codigo en minusculas (p.ej. 'es', 'en', 'pt') o '' si no lo reconoce.
+    """
+    v = (valor or "").strip().lower()
+    if not v:
+        return ""
+    # 1) Codigo entre parentesis: "Espanol (ES)" -> es
+    m = re.search(r"\(([a-z]{2})\)", v)
+    if m:
+        return m.group(1)
+    # 2) El valor ya es un codigo de 2 letras: "es", "en", "pt"...
+    if len(v) == 2 and v.isalpha():
+        return v
+    # 3) Nombres de idioma conocidos (por si se escribe el nombre completo)
+    for fragmento, codigo in (("ingl", "en"), ("engl", "en"), ("espa", "es"),
+                              ("castel", "es"), ("portug", "pt"), ("fran", "fr")):
+        if fragmento in v:
+            return codigo
+    return ""
+
+
+def _normalizar_idioma(valor: str) -> str:
+    """Mapea la columna Idioma de Notion a un idioma soportado. Por defecto 'es'.
+
+    Un codigo no soportado todavia (sin traducciones) cae a 'es'. Para anadir un
+    idioma nuevo basta con incluir su codigo en IDIOMAS_SOPORTADOS (i18n.py) y sus
+    traducciones; esta funcion ya lo detectara sola.
+    """
+    codigo = _codigo_idioma(valor)
+    return codigo if codigo in IDIOMAS_SOPORTADOS else "es"
+
+
 def _obtener_registros_empleados() -> list[dict]:
     """Lee empleados con su nombre canonico y aliases utiles para busqueda. Cachea 5 min."""
     global _empleados_cache_data, _empleados_cache_ts
@@ -1496,8 +1564,30 @@ def _obtener_registros_empleados() -> list[dict]:
                         if foto:
                             break
 
+                idioma = "es"
+                idioma_prop = ""
+                idioma_prop_tipo = ""
+                for ip in ("Idioma", "Language", "Lang"):
+                    if ip in props:
+                        idioma_prop = ip
+                        idioma_prop_tipo = (props.get(ip) or {}).get("type", "")
+                        valor_idioma = _texto_propiedad(props, ip)
+                        if valor_idioma:
+                            idioma = _normalizar_idioma(valor_idioma)
+                        break
+
+                pais = ""
+                pais_prop = ""
+                pais_prop_tipo = ""
+                for pp in ("Pais", "País", "Country"):
+                    if pp in props:
+                        pais_prop = pp
+                        pais_prop_tipo = (props.get(pp) or {}).get("type", "")
+                        pais = _texto_propiedad(props, pp)
+                        break
+
                 baja = bool((props.get("Baja") or {}).get("checkbox", False))
-                registros.append({"nombre": nombre, "email": email.strip(), "aliases": aliases, "cargo": cargo, "id_usuario": id_usuario, "foto": foto, "baja": baja})
+                registros.append({"nombre": nombre, "email": email.strip(), "aliases": aliases, "cargo": cargo, "id_usuario": id_usuario, "foto": foto, "idioma": idioma, "pais": pais, "baja": baja, "page_id": pagina.get("id", ""), "idioma_prop": idioma_prop, "idioma_prop_tipo": idioma_prop_tipo, "pais_prop": pais_prop, "pais_prop_tipo": pais_prop_tipo})
             if not resp.get("has_more"):
                 break
             cursor = resp.get("next_cursor")
@@ -1532,12 +1622,46 @@ def obtener_registros_empleados() -> list[dict]:
 
 
 def obtener_perfil_empleado(nombre: str) -> dict:
-    """Devuelve cargo y foto del empleado que coincide con el nombre dado."""
+    """Devuelve cargo, foto, idioma y pais del empleado que coincide con el nombre dado."""
     nombre_norm = normalizar_nombre(nombre)
     for r in _obtener_registros_empleados():
         if normalizar_nombre(r["nombre"]) == nombre_norm:
-            return {"cargo": r.get("cargo", ""), "foto": r.get("foto", "")}
-    return {"cargo": "", "foto": ""}
+            return {"cargo": r.get("cargo", ""), "foto": r.get("foto", ""), "idioma": r.get("idioma", "es"), "pais": r.get("pais", "")}
+    return {"cargo": "", "foto": "", "idioma": "es", "pais": ""}
+
+
+def idioma_de_persona(nombre: str) -> str:
+    """Devuelve el idioma ('es' | 'en') del empleado. Por defecto 'es' si no se encuentra o no tiene idioma."""
+    nombre_norm = normalizar_nombre(nombre)
+    for r in _obtener_registros_empleados():
+        if normalizar_nombre(r["nombre"]) == nombre_norm:
+            return r.get("idioma", "es") or "es"
+    return "es"
+
+
+def idioma_por_sesion(sesion: dict) -> str:
+    """Idioma del usuario web probando persona/username/email contra nombre, aliases,
+    email e ID de Slack de la Lista de empleados. Por defecto 'es'. Registra el match en log."""
+    candidatos = {
+        normalizar_nombre(v)
+        for v in (sesion.get("persona"), sesion.get("username"), sesion.get("email"))
+        if v
+    }
+    if not candidatos:
+        return "es"
+    for r in _obtener_registros_empleados():
+        ids = {normalizar_nombre(r.get("nombre", ""))}
+        ids |= {normalizar_nombre(a) for a in r.get("aliases", []) if a}
+        if r.get("email"):
+            ids.add(normalizar_nombre(r["email"]))
+        if r.get("id_usuario"):
+            ids.add(normalizar_nombre(r["id_usuario"]))
+        if candidatos & ids:
+            idi = r.get("idioma", "es") or "es"
+            logging.info("[i18n] sesion %s -> empleado '%s' (idioma=%s)", candidatos, r.get("nombre"), idi)
+            return idi
+    logging.info("[i18n] sesion %s sin match en Lista de empleados -> es", candidatos)
+    return "es"
 
 
 # ---------------------------------------------------------------------------
@@ -1894,6 +2018,145 @@ def obtener_cargo_por_slack_id(user_id: str) -> str | None:
         if registro.get("id_usuario") == user_id:
             return registro.get("cargo") or None
     return None
+
+
+def idioma_por_slack_id(user_id: str) -> str:
+    """Devuelve el idioma ('es' | 'en') del empleado cuyo Slack ID coincide. Por defecto 'es'."""
+    for registro in _obtener_registros_empleados():
+        if registro.get("id_usuario") == user_id:
+            return registro.get("idioma", "es") or "es"
+    return "es"
+
+
+def _valor_idioma_notion(idioma: str, tipo: str) -> dict:
+    """Payload de la propiedad 'Idioma' de Notion segun el tipo de columna (select/status/title/text)."""
+    texto = "EN" if idioma == "en" else "ES"
+    if tipo == "select":
+        return {"select": {"name": texto}}
+    if tipo == "status":
+        return {"status": {"name": texto}}
+    if tipo == "title":
+        return {"title": [{"type": "text", "text": {"content": texto}}]}
+    return {"rich_text": [{"type": "text", "text": {"content": texto}}]}
+
+
+def _guardar_idioma_en_registro(registro: dict, idioma: str) -> str:
+    """Escribe el idioma en la columna Idioma de Notion para ese empleado y actualiza la cache. Devuelve el idioma."""
+    idioma = "en" if idioma == "en" else "es"
+    page_id = registro.get("page_id")
+    prop = registro.get("idioma_prop")
+    tipo = registro.get("idioma_prop_tipo") or "select"
+    if page_id and prop:
+        try:
+            notion.pages.update(page_id=page_id, properties={prop: _valor_idioma_notion(idioma, tipo)})
+        except Exception:
+            logging.exception("Error guardando idioma en Notion (page %s, prop %s)", page_id, prop)
+            return registro.get("idioma", "es") or "es"
+    else:
+        logging.warning("No se pudo guardar idioma: no hay columna 'Idioma' en la Lista de empleados.")
+        return registro.get("idioma", "es") or "es"
+    # Actualiza el registro cacheado para que las lecturas devuelvan el nuevo valor al instante.
+    with _lock_empleados:
+        registro["idioma"] = idioma
+    return idioma
+
+
+def guardar_idioma_por_slack_id(user_id: str, idioma: str) -> str:
+    """Escribe en Notion el idioma del empleado con ese Slack ID. Devuelve el idioma efectivo."""
+    for registro in _obtener_registros_empleados():
+        if registro.get("id_usuario") == user_id:
+            return _guardar_idioma_en_registro(registro, idioma)
+    return "es"
+
+
+def toggle_idioma_slack(user_id: str) -> str:
+    """Alterna ES<->EN del empleado con ese Slack ID y lo escribe en Notion. Devuelve el nuevo idioma."""
+    nuevo = "es" if idioma_por_slack_id(user_id) == "en" else "en"
+    return guardar_idioma_por_slack_id(user_id, nuevo)
+
+
+def guardar_idioma_por_sesion(sesion: dict, idioma: str) -> str:
+    """Escribe en Notion el idioma del usuario web (match por persona/username/email). Devuelve el idioma efectivo."""
+    candidatos = {
+        normalizar_nombre(v)
+        for v in (sesion.get("persona"), sesion.get("username"), sesion.get("email"))
+        if v
+    }
+    if not candidatos:
+        return "es"
+    for registro in _obtener_registros_empleados():
+        ids = {normalizar_nombre(registro.get("nombre", ""))}
+        ids |= {normalizar_nombre(a) for a in registro.get("aliases", []) if a}
+        if registro.get("email"):
+            ids.add(normalizar_nombre(registro["email"]))
+        if registro.get("id_usuario"):
+            ids.add(normalizar_nombre(registro["id_usuario"]))
+        if candidatos & ids:
+            return _guardar_idioma_en_registro(registro, idioma)
+    return "es"
+
+
+def _valor_pais_notion(pais: str, tipo: str) -> dict:
+    """Payload de la propiedad 'Pais' de Notion segun el tipo de columna (select/status/title/text)."""
+    pais = (pais or "").strip()
+    if tipo == "select":
+        return {"select": {"name": pais} if pais else None}
+    if tipo == "status":
+        return {"status": {"name": pais} if pais else None}
+    if tipo == "title":
+        return {"title": [{"type": "text", "text": {"content": pais}}]}
+    return {"rich_text": [{"type": "text", "text": {"content": pais}}]}
+
+
+def _guardar_pais_en_registro(registro: dict, pais: str) -> str:
+    """Escribe el pais en la columna Pais de Notion para ese empleado y actualiza la cache. Devuelve el pais."""
+    pais = (pais or "").strip()
+    page_id = registro.get("page_id")
+    prop = registro.get("pais_prop")
+    tipo = registro.get("pais_prop_tipo") or "rich_text"
+    if not (page_id and prop):
+        logging.warning("No se pudo guardar pais: no hay columna 'Pais' en la Lista de empleados.")
+        return registro.get("pais", "") or ""
+    try:
+        notion.pages.update(page_id=page_id, properties={prop: _valor_pais_notion(pais, tipo)})
+    except Exception:
+        logging.exception("Error guardando pais en Notion (page %s, prop %s)", page_id, prop)
+        return registro.get("pais", "") or ""
+    # Actualiza el registro cacheado para que las lecturas devuelvan el nuevo valor al instante.
+    with _lock_empleados:
+        registro["pais"] = pais
+    return pais
+
+
+def guardar_pais_por_sesion(sesion: dict, pais: str) -> str:
+    """Escribe en Notion el pais del usuario web (match por persona/username/email). Devuelve el pais efectivo."""
+    candidatos = {
+        normalizar_nombre(v)
+        for v in (sesion.get("persona"), sesion.get("username"), sesion.get("email"))
+        if v
+    }
+    if not candidatos:
+        return ""
+    for registro in _obtener_registros_empleados():
+        ids = {normalizar_nombre(registro.get("nombre", ""))}
+        ids |= {normalizar_nombre(a) for a in registro.get("aliases", []) if a}
+        if registro.get("email"):
+            ids.add(normalizar_nombre(registro["email"]))
+        if registro.get("id_usuario"):
+            ids.add(normalizar_nombre(registro["id_usuario"]))
+        if candidatos & ids:
+            return _guardar_pais_en_registro(registro, pais)
+    return ""
+
+
+def obtener_paises_disponibles() -> list[str]:
+    """Devuelve los paises distintos ya presentes en la Lista de empleados, ordenados."""
+    vistos = {}
+    for registro in _obtener_registros_empleados():
+        p = (registro.get("pais") or "").strip()
+        if p:
+            vistos.setdefault(p.casefold(), p)
+    return sorted(vistos.values(), key=lambda s: s.casefold())
 
 
 def obtener_slack_ids_empleados() -> list[str]:

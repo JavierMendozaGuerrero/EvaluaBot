@@ -23,6 +23,7 @@ from datetime import datetime, timezone
 
 from . import config
 from .clients import notion, slack_app
+from .i18n import t
 from .notion_service import (
     _buscar_bbdd_en_pagina_id,
     _data_source_id,
@@ -520,14 +521,14 @@ def obtener_equipo_proyecto(nombre_proyecto: str) -> list:
         return []
 
 
-def activar_evaluaciones_empleados(manager: str, proyecto: str, empleados: list) -> dict:
+def activar_evaluaciones_empleados(manager: str, proyecto: str, empleados: list, idioma: str = "es") -> dict:
     """
     Activa evaluaciones de proyecto para los empleados indicados.
     Crea/actualiza registros en la BD de activaciones y envía notificaciones Slack.
     """
     db_id = _obtener_o_crear_bbdd_activaciones()
     if not db_id:
-        return {"ok": False, "error": "No se pudo acceder a la BD de activaciones en Notion."}
+        return {"ok": False, "error": t("pe.err_db_access_notion", idioma)}
 
     _obtener_o_crear_pagina_raiz_resultados()
 
@@ -540,7 +541,7 @@ def activar_evaluaciones_empleados(manager: str, proyecto: str, empleados: list)
             ]
         }, page_size=1)
         if resp_check.get("results"):
-            return {"ok": False, "error": f"Ya existe un proyecto activo con el nombre «{proyecto}». Elige un nombre diferente."}
+            return {"ok": False, "error": t("pe.err_project_exists", idioma, proyecto=proyecto)}
     except Exception:
         logging.exception("Error comprobando duplicado para proyecto '%s'", proyecto)
 
@@ -578,11 +579,11 @@ def activar_evaluaciones_empleados(manager: str, proyecto: str, empleados: list)
     return {"ok": True, "activados": activados, "errores": errores}
 
 
-def añadir_miembro_proyecto(manager: str, proyecto: str, empleado: str) -> dict:
+def añadir_miembro_proyecto(manager: str, proyecto: str, empleado: str, idioma: str = "es") -> dict:
     """Añade (o reactiva) un empleado a un proyecto activo."""
     db_id = _obtener_o_crear_bbdd_activaciones()
     if not db_id:
-        return {"ok": False, "error": "No se pudo acceder a la BD de activaciones."}
+        return {"ok": False, "error": t("pe.err_db_access", idioma)}
     try:
         resp = _query_bbdd(db_id, filter={
             "and": [
@@ -610,7 +611,7 @@ def añadir_miembro_proyecto(manager: str, proyecto: str, empleado: str) -> dict
         return {"ok": True}
     except Exception:
         logging.exception("Error añadiendo miembro '%s' al proyecto '%s'", empleado, proyecto)
-        return {"ok": False, "error": "Error interno al añadir miembro."}
+        return {"ok": False, "error": t("pe.err_add_member", idioma)}
 
 
 def _listar_child_pages_proyecto(proyecto_page_id: str) -> list:
@@ -671,11 +672,11 @@ def _limpiar_registros_evaluacion_miembro(proyecto: str, empleado: str) -> None:
             _archivar_filas_evaluador_en_pagina(page["id"], empleado)
 
 
-def eliminar_miembro_proyecto(proyecto: str, empleado: str) -> dict:
+def eliminar_miembro_proyecto(proyecto: str, empleado: str, idioma: str = "es") -> dict:
     """Desactiva a un empleado de un proyecto (Activo=False) y limpia sus registros."""
     db_id = _obtener_o_crear_bbdd_activaciones()
     if not db_id:
-        return {"ok": False, "error": "No se pudo acceder a la BD de activaciones."}
+        return {"ok": False, "error": t("pe.err_db_access", idioma)}
     try:
         resp = _query_bbdd(db_id, filter={
             "and": [
@@ -686,13 +687,13 @@ def eliminar_miembro_proyecto(proyecto: str, empleado: str) -> dict:
         }, page_size=1)
         existing = resp.get("results", [])
         if not existing:
-            return {"ok": False, "error": "No se encontró ese miembro en el proyecto."}
+            return {"ok": False, "error": t("pe.err_member_not_found", idioma)}
         notion.pages.update(page_id=existing[0]["id"], properties={"Activo": {"checkbox": False}})
         threading.Thread(target=_limpiar_registros_evaluacion_miembro, args=(proyecto, empleado), daemon=True).start()
         return {"ok": True}
     except Exception:
         logging.exception("Error eliminando miembro '%s' del proyecto '%s'", empleado, proyecto)
-        return {"ok": False, "error": "Error interno al eliminar miembro."}
+        return {"ok": False, "error": t("pe.err_remove_member", idioma)}
 
 
 def obtener_evals_completadas_proyecto(evaluador: str, proyecto: str) -> list:

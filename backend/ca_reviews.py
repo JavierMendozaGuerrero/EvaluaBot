@@ -15,6 +15,7 @@ from datetime import datetime, timedelta, timezone
 
 from . import config
 from .clients import notion, slack_app
+from .i18n import t, boton_idioma_slack
 from .notion_service import (
     _coincide_parent_bbdd,
     _crear_pagina_en_bbdd,
@@ -25,6 +26,8 @@ from .notion_service import (
     _query_bbdd,
     _tipo_objeto_busqueda_bbdd,
     _usa_data_sources,
+    idioma_por_slack_id,
+    toggle_idioma_slack,
     buscar_empleado_en_lista,
     buscar_empleado_y_cargo,
     obtener_advisees,
@@ -331,11 +334,13 @@ def _es_no(texto: str) -> bool:
 
 
 def _es_confirmar(texto: str) -> bool:
-    return normalizar_nombre(texto) in {"si", "sí", "s", "ok", "okay", "confirmar", "guardar", "correcto"}
+    return normalizar_nombre(texto) in {"si", "sí", "s", "ok", "okay", "confirmar", "guardar", "correcto",
+                                        "yes", "y", "save", "confirm", "correct"}
 
 
 def _es_modificar(texto: str) -> bool:
-    return normalizar_nombre(texto) in {"modificar", "cambiar", "editar", "repetir"}
+    return normalizar_nombre(texto) in {"modificar", "cambiar", "editar", "repetir",
+                                        "modify", "change", "edit", "repeat"}
 
 
 _OPCIONES_MODIFICACION_CA = {
@@ -344,21 +349,17 @@ _OPCIONES_MODIFICACION_CA = {
 }
 
 
-def _texto_menu_modificacion_ca() -> str:
-    return (
-        "¿Qué respuesta quieres modificar?\n"
-        "1. Advisee\n2. Opinión\n\n"
-        "Responde con el número o el nombre del campo."
-    )
+def _texto_menu_modificacion_ca(idioma="es") -> str:
+    return t("bc.mod_which", idioma)
 
 
-def _bloques_menu_modificacion_ca() -> list:
+def _bloques_menu_modificacion_ca(idioma="es") -> list:
     """Menú '¿Qué respuesta quieres modificar?' (CA) como botones."""
     return [
-        {"type": "section", "text": {"type": "mrkdwn", "text": "*¿Qué respuesta quieres modificar?*"}},
+        {"type": "section", "text": {"type": "mrkdwn", "text": t("bc.mod_which_bold", idioma)}},
         {"type": "actions", "elements": [
             {"type": "button", "text": {"type": "plain_text", "text": "Advisee"}, "value": "1", "action_id": "mod_ca_1"},
-            {"type": "button", "text": {"type": "plain_text", "text": "Opinión"}, "value": "2", "action_id": "mod_ca_2"},
+            {"type": "button", "text": {"type": "plain_text", "text": t("bc.opinion_label", idioma)}, "value": "2", "action_id": "mod_ca_2"},
         ]},
     ]
 
@@ -367,27 +368,20 @@ def _clave_modificacion_ca(texto: str) -> str | None:
     return _OPCIONES_MODIFICACION_CA.get(normalizar_nombre(texto))
 
 
-def _texto_pregunta_ca_por_clave(clave: str) -> str:
+def _texto_pregunta_ca_por_clave(clave: str, idioma="es") -> str:
     if clave == "advisee":
-        return "¿Cuál es el nombre de tu advisee?"
+        return t("bc.ask_advisee_name", idioma)
     if clave == "opinion":
-        return "¿Qué opinas de las evaluaciones?"
-    return "Escribe la nueva respuesta."
+        return t("bc.ask_opinion", idioma)
+    return t("bc.enter_new_answer", idioma)
 
 
-def _mensaje_advisee_no_encontrado(nombre: str) -> str:
+def _mensaje_advisee_no_encontrado(nombre: str, idioma="es") -> str:
     sugerencias = sugerir_empleados_parecidos(nombre)
     if sugerencias:
         opciones = "\n".join(f"- {item}" for item in sugerencias)
-        return (
-            f"*{nombre}* no aparece tal cual en la lista de empleados.\n"
-            "¿Querías decir alguno de estos nombres? Responde copiando el nombre exacto:\n"
-            f"{opciones}"
-        )
-    return (
-        f"*{nombre}* no aparece tal cual en la lista de empleados. "
-        "Escribe nombre y apellido como aparece en la lista."
-    )
+        return t("bc.not_found_suggest", idioma, nombre=nombre, opciones=opciones)
+    return t("bc.not_found", idioma, nombre=nombre)
 
 
 def _nombre_desde_notion(user_id: str) -> str | None:
@@ -495,6 +489,31 @@ def _advisee_permitido_para_ca(ca_nombre: str, ca_aliases: list[str], advisee: s
 # Envío del mensaje inicial por DM
 # ---------------------------------------------------------------------------
 
+def _bloques_dm_ca(idioma):
+    """Bloques del DM inicial de las evaluaciones CA, con botón de cambio de idioma en la cabecera."""
+    return [
+        {
+            "type": "section",
+            "text": {"type": "mrkdwn", "text": t("bc.pending_intro", idioma)},
+            "accessory": boton_idioma_slack(idioma, "lang_toggle_ca"),
+        },
+        {
+            "type": "section",
+            "text": {"type": "mrkdwn", "text": t("bp.example_label", idioma)},
+            "accessory": {
+                "type": "button",
+                "text": {"type": "plain_text", "text": t("bp.see_example", idioma)},
+                "action_id": "ca_ver_ejemplo",
+            },
+        },
+        {
+            "type": "section",
+            "text": {"type": "mrkdwn", "text": t("bp.send_to_start", idioma)},
+        },
+        {"type": "divider"},
+    ]
+
+
 def enviar_pregunta_inicial_ca() -> None:
     try:
         if config.APP_MODE != "produccion" and config.SLACK_TEST_USER_ID:
@@ -519,39 +538,11 @@ def enviar_pregunta_inicial_ca() -> None:
 
                 resp_dm = slack_app.client.conversations_open(users=[user_id])
                 dm_channel = resp_dm["channel"]["id"]
+                _idi = idioma_por_slack_id(user_id)
                 resp = slack_app.client.chat_postMessage(
                     channel=dm_channel,
-                    text="📋 CA: Tienes evaluación de advisees pendiente",
-                    blocks=[
-                        {
-                            "type": "section",
-                            "text": {
-                                "type": "mrkdwn",
-                                "text": (
-                                    "📋 *CA: Tienes evaluación de advisees pendiente*\n\n"
-                                    "_Esta evaluación es totalmente privada, solo podrás verla tú._\n"
-                                    "_Si en algún momento quieres cancelar, escribe SOS en el hilo._"
-                                ),
-                            },
-                        },
-                        {
-                            "type": "section",
-                            "text": {"type": "mrkdwn", "text": ":point_right: Ejemplo:"},
-                            "accessory": {
-                                "type": "button",
-                                "text": {"type": "plain_text", "text": "Ver ejemplo"},
-                                "action_id": "ca_ver_ejemplo",
-                            },
-                        },
-                        {
-                            "type": "section",
-                            "text": {
-                                "type": "mrkdwn",
-                                "text": ":point_right: *Envía cualquier mensaje en el hilo para comenzar la evaluación*",
-                            },
-                        },
-                        {"type": "divider"},
-                    ],
+                    text=t("bc.pending_fallback", _idi),
+                    blocks=_bloques_dm_ca(_idi),
                 )
                 with _lock:
                     ca_dm_activas.add(user_id)
@@ -591,8 +582,8 @@ def manejar_mensaje_ca(event, logger) -> None:
             estado_anterior = conversaciones_ca.pop(conv_key, {})
             guardados = estado_anterior.get("advisees_guardados", set())
             if guardados:
-                conversaciones_ca[conv_key] = {"modo": "pre_inicial", "ca_nombre": None, "advisees_guardados": guardados}
-        reply("Evaluación *cancelada* voluntariamente. Si quieres volver a empezar, escribe cualquier mensaje en este hilo.")
+                conversaciones_ca[conv_key] = {"modo": "pre_inicial", "ca_nombre": None, "advisees_guardados": guardados, "idioma": idioma_por_slack_id(user_id)}
+        reply(t("bm.eval_cancelled", idioma_por_slack_id(user_id)))
         return
 
     accion = None
@@ -601,8 +592,9 @@ def manejar_mensaje_ca(event, logger) -> None:
     with _lock:
         estado = conversaciones_ca.get(conv_key)
         if estado is None:
-            estado = {"modo": "pre_inicial", "ca_nombre": None}
+            estado = {"modo": "pre_inicial", "ca_nombre": None, "idioma": idioma_por_slack_id(user_id)}
             conversaciones_ca[conv_key] = estado
+        _idi = estado.get("idioma", "es")
 
         modo = estado["modo"]
 
@@ -725,9 +717,9 @@ def manejar_mensaje_ca(event, logger) -> None:
             with _lock:
                 if conv_key in conversaciones_ca:
                     conversaciones_ca[conv_key]["modo"] = "terminado"
-            reply(f"{prefijo}Ya has opinado sobre todos tus advisees. ¡Perfecto, gracias por tu tiempo! 🎉")
+            reply(prefijo + t("bc.all_advisees_done", _idi))
             return
-        texto_header = f"{prefijo}¿De qué advisee te gustaría hacer seguimiento?"
+        texto_header = prefijo + t("bc.which_advisee", _idi)
         if advisees_l:
             elementos = [
                 {
@@ -740,7 +732,7 @@ def manejar_mensaje_ca(event, logger) -> None:
             ]
             elementos.append({
                 "type": "button",
-                "text": {"type": "plain_text", "text": "❌ Terminar"},
+                "text": {"type": "plain_text", "text": t("bc.btn_finish", _idi), "emoji": True},
                 "action_id": "ca_advisee_no",
             })
             blocks = [
@@ -767,7 +759,7 @@ def manejar_mensaje_ca(event, logger) -> None:
         if advisee_encontrado:
             permitido, _ = _advisee_permitido_para_ca(ca_nombre, ca_aliases, advisee_encontrado)
         if not advisee_encontrado or not permitido:
-            reply(f"*{advisee}* no aparece en tu lista de advisees.\n\nPor favor, escribe el nombre o número correspondiente del advisee a evaluar. Si quieres terminar la evaluación escribe *no*")
+            reply(t("bc.advisee_not_in_list", _idi, advisee=advisee))
             return
         else:
             advisee = advisee_encontrado
@@ -795,14 +787,11 @@ def manejar_mensaje_ca(event, logger) -> None:
                 slack_app.client.chat_postMessage(
                     channel=channel,
                     thread_ts=thread_ts,
-                    text="¿Quieres un resumen estructurado por competencias generado por Claude?",
+                    text=t("bc.claude_summary_q", _idi),
                     blocks=[
                         {
                             "type": "section",
-                            "text": {
-                                "type": "mrkdwn",
-                                "text": "¿Quieres un resumen estructurado por competencias generado por Claude?\n_Evitar el uso excesivo por favor._",
-                            },
+                            "text": {"type": "mrkdwn", "text": t("bc.claude_summary_q_full", _idi)},
                         },
                         {
                             "type": "actions",
@@ -810,14 +799,14 @@ def manejar_mensaje_ca(event, logger) -> None:
                             "elements": [
                                 {
                                     "type": "button",
-                                    "text": {"type": "plain_text", "text": "Sí"},
+                                    "text": {"type": "plain_text", "text": t("bc.yes", _idi)},
                                     "value": "si",
                                     "action_id": "permiso_claude_si",
                                     "style": "primary",
                                 },
                                 {
                                     "type": "button",
-                                    "text": {"type": "plain_text", "text": "No"},
+                                    "text": {"type": "plain_text", "text": t("bc.no", _idi)},
                                     "value": "no",
                                     "action_id": "permiso_claude_no",
                                 },
@@ -827,12 +816,7 @@ def manejar_mensaje_ca(event, logger) -> None:
                 )
 
     elif accion == "mostrar_confirmacion_ca":
-        texto_conf = (
-            f"*Resumen de tu valoración:*\n"
-            f"• Advisee: *{payload.get('advisee', '?')}*\n"
-            f"• Opinión: {payload.get('opinion', '?')}\n\n"
-            "Responde o haz click en sí para guardar en Notion o modificar para cambiar una respuesta concreta."
-        )
+        texto_conf = t("bc.conf_summary", _idi, advisee=payload.get('advisee', '?'), opinion=payload.get('opinion', '?'))
         slack_app.client.chat_postMessage(
             channel=channel,
             thread_ts=thread_ts,
@@ -844,13 +828,13 @@ def manejar_mensaje_ca(event, logger) -> None:
                     "elements": [
                         {
                             "type": "button",
-                            "text": {"type": "plain_text", "text": "✅ Sí, guardar"},
+                            "text": {"type": "plain_text", "text": t("bc.btn_save_yes", _idi), "emoji": True},
                             "style": "primary",
                             "action_id": "ca_confirmar",
                         },
                         {
                             "type": "button",
-                            "text": {"type": "plain_text", "text": "✏️ Modificar"},
+                            "text": {"type": "plain_text", "text": t("bm.edit_btn", _idi), "emoji": True},
                             "action_id": "ca_modificar",
                         },
                     ],
@@ -861,36 +845,25 @@ def manejar_mensaje_ca(event, logger) -> None:
     elif accion == "pedir_modificacion_ca":
         slack_app.client.chat_postMessage(
             channel=channel, thread_ts=thread_ts,
-            text="¿Qué respuesta quieres modificar?",
-            blocks=_bloques_menu_modificacion_ca(),
+            text=t("bc.mod_which", _idi),
+            blocks=_bloques_menu_modificacion_ca(_idi),
         )
 
     elif accion == "pedir_valor_modificacion_ca":
         campo = estado.get("campo_modificando")
         if payload.get("error_advisee_no_asociado"):
             permitidos = payload.get("advisees_permitidos") or []
-            opciones = "\n".join(f"- {item}" for item in permitidos) if permitidos else "- No tienes advisees asociados en Lista CA."
-            reply(
-                f"*{payload['error_advisee_no_asociado']}* existe en la lista de empleados, "
-                "pero no aparece asociado a ti en `Lista CA`.\n"
-                f"Tus advisees actuales:\n{opciones}\n\n"
-                "Escribe uno de esos nombres."
-            )
+            opciones = "\n".join(f"- {item}" for item in permitidos) if permitidos else t("bc.no_associated_advisees", _idi)
+            reply(t("bc.error_advisee_not_associated", _idi, advisee=payload['error_advisee_no_asociado'], opciones=opciones))
         elif payload.get("error_advisee"):
             sugerencias = sugerir_empleados_parecidos(payload["error_advisee"])
             if sugerencias:
                 opciones = "\n".join(f"- {n}" for n in sugerencias)
-                reply(
-                    f"*{payload['error_advisee']}* no está en la lista de empleados.\n"
-                    f"¿Querías decir alguno de estos? Copia el nombre exacto:\n{opciones}"
-                )
+                reply(t("bc.error_advisee_suggest", _idi, advisee=payload['error_advisee'], opciones=opciones))
             else:
-                reply(
-                    f"*{payload['error_advisee']}* no está en la lista de empleados. "
-                    "Escríbelo sin tildes, primera letra del nombre y primer apellido en mayúscula, solo primer apellido."
-                )
+                reply(t("bc.error_advisee_no_suggest", _idi, advisee=payload['error_advisee']))
         else:
-            reply(_texto_pregunta_ca_por_clave(campo) if campo else _texto_menu_modificacion_ca())
+            reply(_texto_pregunta_ca_por_clave(campo, _idi) if campo else _texto_menu_modificacion_ca(_idi))
 
     elif accion == "llamar_claude":
         advisee = payload["advisee"]
@@ -901,22 +874,22 @@ def manejar_mensaje_ca(event, logger) -> None:
             with _lock:
                 if conv_key in conversaciones_ca:
                     conversaciones_ca[conv_key]["resumen_actual"] = resumen_claude
-            reply(f"📊 *Resumen generado por Claude:*\n\n{resumen_claude}\n\n¿Qué opinas de esto?")
+            reply(t("bc.claude_summary_result", _idi, resumen=resumen_claude))
         except Exception:
             logging.exception("Error generando resumen Claude para '%s'", advisee)
             with _lock:
                 if conv_key in conversaciones_ca:
                     conversaciones_ca[conv_key]["resumen_actual"] = resumen_bruto
-            reply("⚠️ No se pudo generar el resumen con Claude.\n\n¿Qué opinas de esto?")
+            reply(t("bc.claude_summary_error", _idi))
 
     elif accion == "pedir_opinion_sin_claude":
-        reply("¿Qué comentario deseas registrar sobre las evaluaciones de tu advisee?")
+        reply(t("bc.ask_comment", _idi))
 
     elif accion == "aclarar_permiso_claude":
-        reply("Responde `sí` para generar un resumen con Claude, o `no` para continuar directamente.")
+        reply(t("bc.clarify_claude", _idi))
 
     elif accion == "cancelar_opinion":
-        _reply_lista_advisees("De acuerdo, no se guardará esta opinión.\n\n")
+        _reply_lista_advisees(t("bc.opinion_not_saved", _idi))
 
     elif accion == "guardar_y_preguntar_otro":
         ca_nombre, ca_aliases = _identidad_usuario_slack(user_id, logger)
@@ -924,26 +897,23 @@ def manejar_mensaje_ca(event, logger) -> None:
             ca_aliases.append(payload["ca_nombre"])
         permitido, permitidos = _advisee_permitido_para_ca(ca_nombre, ca_aliases, payload["advisee"])
         if not permitido:
-            opciones = "\n".join(f"- {item}" for item in permitidos) if permitidos else "- No tienes advisees asociados en Lista CA."
-            reply(
-                f"No puedo guardar esta opinión: *{payload['advisee']}* no aparece asociado a ti en `Lista CA`.\n"
-                f"Tus advisees actuales:\n{opciones}"
-            )
+            opciones = "\n".join(f"- {item}" for item in permitidos) if permitidos else t("bc.no_associated_advisees", _idi)
+            reply(t("bc.cannot_save_not_associated", _idi, advisee=payload['advisee'], opciones=opciones))
             return
         resumen = estado.get("resumen_actual", "")
         ok, error = _guardar_opinion(ca_nombre, payload["advisee"], payload["opinion"], resumen)
         if ok:
             guardados = estado.setdefault("advisees_guardados", set())
             guardados.add(payload["advisee"])
-            _reply_lista_advisees("✅ Opinión guardada en Notion.\n\n")
+            _reply_lista_advisees(t("bc.opinion_saved", _idi))
         else:
-            _reply_lista_advisees(f"⚠️ No se pudo guardar en Notion: `{error[:300]}`\n\n")
+            _reply_lista_advisees(t("bc.opinion_save_error", _idi, error=error[:300]))
 
     elif accion == "terminar":
-        reply("¡Perfecto, gracias por tu tiempo! 🎉")
+        reply(t("bc.thanks_end", _idi))
 
     elif accion == "ya_terminado":
-        reply("Esta evaluación ya ha concluido. 👋")
+        reply(t("bc.already_concluded", _idi))
 
 
 @slack_app.action(re.compile(r"^ca_advisee_\d+$"))
@@ -955,12 +925,13 @@ def _handle_ca_elegir_advisee(ack, body, client, logger):
         msg = body.get("message", {})
         channel = body["channel"]["id"]
         thread_ts = msg.get("thread_ts") or msg.get("ts", "")
+        _idi = idioma_por_slack_id(user_id)
         try:
             client.chat_update(
                 channel=channel,
                 ts=msg["ts"],
-                blocks=[{"type": "section", "text": {"type": "mrkdwn", "text": f"Advisee: *{advisee_name}* ✅"}}],
-                text=f"Advisee: {advisee_name}",
+                blocks=[{"type": "section", "text": {"type": "mrkdwn", "text": t("bc.advisee_selected", _idi, name=advisee_name)}}],
+                text=t("bc.advisee_selected_plain", _idi, name=advisee_name),
             )
         except Exception:
             logger.warning("No se pudo actualizar el mensaje de selección de advisee")
@@ -983,12 +954,13 @@ def _handle_ca_advisee_no(ack, body, client, logger):
         msg = body.get("message", {})
         channel = body["channel"]["id"]
         thread_ts = msg.get("thread_ts") or msg.get("ts", "")
+        _idi = idioma_por_slack_id(user_id)
         try:
             client.chat_update(
                 channel=channel,
                 ts=msg["ts"],
-                blocks=[{"type": "section", "text": {"type": "mrkdwn", "text": "❌ Terminado"}}],
-                text="❌ Terminado",
+                blocks=[{"type": "section", "text": {"type": "mrkdwn", "text": t("bc.finished_update", _idi)}}],
+                text=t("bc.finished_update", _idi),
             )
         except Exception:
             pass
@@ -1042,7 +1014,7 @@ def ciclo_recordatorios_ca() -> None:
                     continue
                 slack_app.client.chat_postMessage(
                     channel=dm_channel,
-                    text="*📋 Recuerda realizar tu revisión de Career Advisor.* Abre el hilo del mensaje CA y responde.",
+                    text=t("bc.reminder", idioma_por_slack_id(uid)),
                 )
                 with _lock:
                     ca_ultimo_recordatorio_dm[uid] = time.time()
@@ -1064,26 +1036,45 @@ def obtener_resumen_advisee_para_ca(ca_nombre: str, advisee: str) -> tuple[str, 
 # Ejemplo de guía — modal CA
 # ---------------------------------------------------------------------------
 
-def _build_ejemplo_ca_view() -> dict:
+def _build_ejemplo_ca_view(idioma="es") -> dict:
     ejemplos = obtener_ejemplos_guia()
-    ejemplo = ejemplos.get("CA", "_No hay ejemplo disponible_")
+    ejemplo = ejemplos.get("CA", t("bm.no_example", idioma))
     return {
         "type": "modal",
         "callback_id": "ejemplo_ca_ver",
-        "title": {"type": "plain_text", "text": "Ejemplo de guía"},
-        "close": {"type": "plain_text", "text": "Cerrar"},
+        "title": {"type": "plain_text", "text": t("bm.guide_example_title", idioma)},
+        "close": {"type": "plain_text", "text": t("bm.close", idioma)},
         "blocks": [
             {
                 "type": "section",
-                "text": {"type": "mrkdwn", "text": "💡 *Ejemplo de guía — Evaluación CA*"},
+                "text": {"type": "mrkdwn", "text": t("bc.guide_example_header", idioma)},
             },
             {"type": "divider"},
             {
                 "type": "section",
-                "text": {"type": "mrkdwn", "text": ejemplo[:3000] if ejemplo else "_No hay ejemplo disponible_"},
+                "text": {"type": "mrkdwn", "text": ejemplo[:3000] if ejemplo else t("bm.no_example", idioma)},
             },
         ],
     }
+
+
+@slack_app.action("lang_toggle_ca")
+def _handle_lang_toggle_ca(ack, body, logger):
+    ack()
+    try:
+        user_id = body.get("user", {}).get("id", "")
+        nuevo = toggle_idioma_slack(user_id)
+        channel = (body.get("channel") or {}).get("id") or (body.get("container") or {}).get("channel_id")
+        ts = (body.get("message") or {}).get("ts") or (body.get("container") or {}).get("message_ts")
+        if channel and ts:
+            slack_app.client.chat_update(
+                channel=channel,
+                ts=ts,
+                text=t("bc.pending_fallback", nuevo),
+                blocks=_bloques_dm_ca(nuevo),
+            )
+    except Exception:
+        logger.exception("Error cambiando idioma (CA)")
 
 
 @slack_app.action("ca_ver_ejemplo")
@@ -1093,7 +1084,8 @@ def _handle_ca_ver_ejemplo(ack, body, logger):
     if not trigger_id:
         return
     try:
-        slack_app.client.views_open(trigger_id=trigger_id, view=_build_ejemplo_ca_view())
+        _idi = idioma_por_slack_id(body.get("user", {}).get("id", ""))
+        slack_app.client.views_open(trigger_id=trigger_id, view=_build_ejemplo_ca_view(_idi))
     except Exception:
         logger.exception("Error abriendo modal de ejemplo CA")
 
@@ -1191,7 +1183,8 @@ def _handle_permiso_claude(ack, body, client, logger):
         channel = body["channel"]["id"]
         msg = body.get("message", {})
         thread_ts = msg.get("thread_ts") or msg.get("ts", "")
-        texto_sel = "✅ Sí, generar resumen con Claude" if valor == "si" else "❌ No, continuar sin resumen"
+        _idi = idioma_por_slack_id(user_id)
+        texto_sel = t("bc.claude_yes_update", _idi) if valor == "si" else t("bc.claude_no_update", _idi)
         try:
             client.chat_update(
                 channel=channel,

@@ -16,6 +16,7 @@ from datetime import datetime, timezone
 
 from . import config
 from .clients import Document, anthropic_client
+from .i18n import t
 from .notion_service import (
     listar_bbdd_evaluados,
     obtener_ca_de_empleado,
@@ -25,9 +26,46 @@ from .notion_service import (
     obtener_criterios_evaluacion,
     obtener_comentarios_personales,
     obtener_barbecho_por_empleado,
+    idioma_de_persona,
 )
 from .project_evals import obtener_evaluaciones_proyecto_por_evaluado
 from .utils import slug_archivo
+
+
+# Etiquetas en ingles para elementos cuya version espanola ya vive en el codigo.
+# Se traducen por clave; si no hay traduccion, cae a la etiqueta espanola original.
+_MESES_EN = ["January", "February", "March", "April", "May", "June",
+             "July", "August", "September", "October", "November", "December"]
+_DIMS_EN = {
+    "gestion_proyecto": "Project management",
+    "calidad_tecnica": "Technical quality",
+    "trabajo_en_equipo": "Teamwork",
+    "comunicacion": "Communication",
+    "relacion_cliente": "Client relationship",
+    "liderazgo_desarrollo_talento": "Talent development",
+    "liderazgo_motivacion": "Motivation",
+    "liderazgo_referente": "Role model",
+}
+
+
+def _mes_label(idx: int, idioma: str) -> str:
+    return (_MESES_EN if idioma == "en" else _MESES_ES)[idx]
+
+
+_NIVEL_EN = {
+    "lider": "Lead",
+    "equipo": "Your team members",
+    "sin_nivel": "No level specified",
+}
+
+
+def _dim_label(clave: str, etiqueta: str, idioma: str) -> str:
+    """Etiqueta de dimension en el idioma dado; conserva el espanol exacto si idioma!=en."""
+    return _DIMS_EN.get(clave, etiqueta) if idioma == "en" else etiqueta
+
+
+def _nivel_label(clave: str, etiqueta: str, idioma: str) -> str:
+    return _NIVEL_EN.get(clave, etiqueta) if idioma == "en" else etiqueta
 
 
 # ── Constantes ────────────────────────────────────────────────────────────────
@@ -679,7 +717,7 @@ def _verificar_soporte(comentarios: dict, fuentes: dict) -> list[dict]:
     return avisos
 
 
-def interpretar_evaluaciones_anual(emp_data: dict, cargo: str = "", criterios: str | None = None) -> dict:
+def interpretar_evaluaciones_anual(emp_data: dict, cargo: str = "", criterios: str | None = None, idioma: str = "es") -> dict:
     """
     Llama a Claude con el contexto de evaluaciones y opiniones.
     Devuelve un dict con bullets y notas por dimensión.
@@ -749,6 +787,14 @@ def interpretar_evaluaciones_anual(emp_data: dict, cargo: str = "", criterios: s
         "contribution_to_firm y resultado son cadenas planas, no objetos. "
         "resultado es una síntesis de lo ya afirmado; puede no llevar citas."
     )
+    if idioma == "en":
+        system += (
+            "\n\nLANGUAGE: Write ALL comment text in English (the fields 'lider', 'equipo', "
+            "'sin_nivel', 'contribution_to_firm' and 'resultado'). The source data may be in "
+            "Spanish; translate the meaning, do not copy Spanish text. Keep the JSON keys and the "
+            "citation tags like [E3] exactly as specified. When there is no evidence for a "
+            "dimension, write exactly 'Not enough information' (without a citation)."
+        )
 
     respuesta = anthropic_client.messages.create(
         model="claude-sonnet-4-6",
@@ -929,7 +975,7 @@ def _dx_bullets(cell, texto, fuentes=None):
         _dxr_con_citas(p, linea, fuentes, size=9)
 
 
-def _dx_bullets_por_nivel(cell, contenido, fuentes=None):
+def _dx_bullets_por_nivel(cell, contenido, fuentes=None, idioma="es"):
     from docx.enum.text import WD_ALIGN_PARAGRAPH
     if not isinstance(contenido, dict):
         _dx_bullets(cell, contenido, fuentes)
@@ -943,7 +989,7 @@ def _dx_bullets_por_nivel(cell, contenido, fuentes=None):
         if primer:
             p.clear()
         primer = False
-        _dxr(p, label + ":", bold=True, size=8)
+        _dxr(p, _nivel_label(nivel_key, label, idioma) + ":", bold=True, size=8)
         for linea in texto.splitlines():
             linea = linea.strip(" •-–")
             if linea:
@@ -973,7 +1019,7 @@ def _tabla_dims(doc, dims, comentarios, fuentes=None):
 
 # ── HTML: generación ─────────────────────────────────────────────────────────
 
-def guardar_informe_anual_html(emp_data: dict, comentarios: dict, cargo: str = "") -> str:
+def guardar_informe_anual_html(emp_data: dict, comentarios: dict, cargo: str = "", idioma: str = "es") -> str:
     fuentes = comentarios.get("_fuentes", {})
 
     def esc(v):
@@ -1004,25 +1050,25 @@ def guardar_informe_anual_html(emp_data: dict, comentarios: dict, cargo: str = "
                 continue
             lineas = [ln.strip(" •-–") for ln in texto.splitlines() if ln.strip()]
             buls = "<br>".join(f"• {linkify(esc(ln))}" for ln in lineas)
-            partes.append(f"<span style='font-size:11px;font-weight:700'>{esc(label)}:</span><br>{buls}")
+            partes.append(f"<span style='font-size:11px;font-weight:700'>{esc(_nivel_label(nivel_key, label, idioma))}:</span><br>{buls}")
         return "<br><br>".join(partes) if partes else "—"
 
     def filas_dims(dims):
         filas = ""
         for clave, etiqueta in dims:
-            filas += f"<tr><td>{esc(etiqueta)}</td><td class='nc'>X</td><td>{bullets_html_por_nivel(comentarios.get(clave,''))}</td></tr>"
+            filas += f"<tr><td>{esc(_dim_label(clave, etiqueta, idioma))}</td><td class='nc'>X</td><td>{bullets_html_por_nivel(comentarios.get(clave,''))}</td></tr>"
         return filas
 
     cargo_lower = cargo.strip().lower()
     requiere_liderazgo = any(c in cargo_lower for c in _REQUIERE_LIDERAZGO)
 
-    cargo_row = f"<tr><td><strong>Cargo</strong></td><td>{esc(cargo)}</td></tr>" if cargo else ""
+    cargo_row = f"<tr><td><strong>{t('anual.role', idioma)}</strong></td><td>{esc(cargo)}</td></tr>" if cargo else ""
 
     liderazgo_bloque = ""
     if requiere_liderazgo:
         liderazgo_bloque = f"""
-        <h2 class="sec">LIDERAZGO</h2>
-        <table class="et"><thead><tr><th>Dimensión</th><th class="nc">Nota</th><th>Comentarios del evaluador</th></tr></thead>
+        <h2 class="sec">{t("anual.leadership", idioma)}</h2>
+        <table class="et"><thead><tr><th>{t("anual.col_dimension", idioma)}</th><th class="nc">{t("anual.col_score", idioma)}</th><th>{t("anual.col_eval_comments", idioma)}</th></tr></thead>
         <tbody>{filas_dims(_DIMS_LIDERAZGO)}</tbody></table>"""
 
     objetivos_html = ""
@@ -1045,7 +1091,7 @@ def guardar_informe_anual_html(emp_data: dict, comentarios: dict, cargo: str = "
             items_html += f"<div style='margin-bottom:12px'><p>{header}</p>{meta}{kpis_block}{desc_block}</div>"
         objetivos_html = items_html
     else:
-        objetivos_html = "<p>Sin objetivos registrados.</p>"
+        objetivos_html = f"<p>{t('anual.no_goals', idioma)}</p>"
 
     # Panel de revisión (solo borrador): avisos del verificador + bullets descartados.
     # El CA decide qué hacer antes de publicar el informe final.
@@ -1061,28 +1107,28 @@ def guardar_informe_anual_html(emp_data: dict, comentarios: dict, cargo: str = "
                 items += (f"<li>{linkify(esc(a.get('afirmacion', '')))}"
                           f"{f' — <em>{motivo}</em>' if motivo else ''}</li>")
             partes_panel.append(
-                "<p class='rev-h'>⚠ Afirmaciones a revisar (posiblemente no respaldadas por su cita)</p>"
+                f"<p class='rev-h'>{t('anual.rev_warn_title', idioma)}</p>"
                 f"<ul>{items}</ul>"
             )
         if descartados:
             items = "".join(f"<li>{esc(d)}</li>" for d in descartados)
             partes_panel.append(
-                "<p class='rev-h'>🗑 Bullets descartados automáticamente (no citaban ninguna fuente)</p>"
+                f"<p class='rev-h'>{t('anual.rev_discarded_title', idioma)}</p>"
                 f"<ul>{items}</ul>"
             )
         panel_revision = (
             "<div class='revision'>"
-            "<p class='rev-title'>Revisión del Career Advisor</p>"
-            "<p class='rev-sub'>Este bloque solo aparece en el borrador. Revísalo y edítalo antes de publicar el informe final.</p>"
+            f"<p class='rev-title'>{t('anual.rev_title', idioma)}</p>"
+            f"<p class='rev-sub'>{t('anual.rev_sub', idioma)}</p>"
             + "".join(partes_panel) +
             "</div>"
         )
 
     # Anexo "Fuentes / Evidencia": cada cita del informe enlaza aquí (sin depender de Notion).
     _TIPO_LABEL = {
-        "opinion": "Opinión CA", "evaluacion": "Evaluación mensual",
-        "proyecto": "Evaluación de proyecto", "seguimiento": "Seguimiento personal",
-        "barbecho": "Barbecho",
+        "opinion": t("anual.src_opinion", idioma), "evaluacion": t("anual.src_evaluacion", idioma),
+        "proyecto": t("anual.src_proyecto", idioma), "seguimiento": t("anual.src_seguimiento", idioma),
+        "barbecho": t("anual.src_barbecho", idioma),
     }
     _ORDEN_TIPO = {"O": 0, "E": 1, "P": 2, "S": 3, "B": 4}
 
@@ -1103,9 +1149,8 @@ def guardar_informe_anual_html(emp_data: dict, comentarios: dict, cargo: str = "
             f"</div>"
         )
     fuentes_html = (
-        "<h2 class='sec'>FUENTES / EVIDENCIA</h2>"
-        "<p class='f-intro'>Cada cita [X#] del informe enlaza aquí. Esta es la evidencia en bruto "
-        "(proyecto, evaluador, fecha y texto) para que puedas contrastar cada afirmación.</p>"
+        f"<h2 class='sec'>{t('anual.sources_evidence', idioma)}</h2>"
+        f"<p class='f-intro'>{t('anual.sources_intro_web', idioma)}</p>"
         f"{fuentes_items}"
     ) if fuentes else ""
 
@@ -1114,11 +1159,11 @@ def guardar_informe_anual_html(emp_data: dict, comentarios: dict, cargo: str = "
     año = datetime.now(timezone.utc).year - 1
 
     contenido = f"""<!DOCTYPE html>
-<html lang="es">
+<html lang="{idioma}">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Informe anual — {esc(emp_data['empleado'])}</title>
+<title>{t("anual.title_web", idioma, emp=esc(emp_data['empleado']))}</title>
 <style>
 {config.IGENERIS_CSS}
 .shell {{ max-width: 960px; margin: 0 auto; padding-bottom: 60px; }}
@@ -1156,25 +1201,25 @@ def guardar_informe_anual_html(emp_data: dict, comentarios: dict, cargo: str = "
 <main class="page shell">
 <nav class="nav">
   <a class="brand" href="javascript:void(0)" onclick="window.close()">igeneris</a>
-  <div class="nav-links"><button class="secondary" onclick="window.close()">Cerrar</button></div>
+  <div class="nav-links"><button class="secondary" onclick="window.close()">{t("report.cerrar", idioma)}</button></div>
 </nav>
 <div class="top">
-  <p class="kicker">Evaluación anual {año}</p>
+  <p class="kicker">{t("anual.eval_year", idioma, anio=año)}</p>
   <h1>{esc(emp_data['empleado'])}</h1>
-  <p>Generado el {fecha}</p>
+  <p>{t("anual.generated", idioma, fecha=fecha)}</p>
 </div>
 
 {panel_revision}
 
 <table class="it">
-  <tr><td><strong>Nombre</strong></td><td>{esc(emp_data['empleado'])}</td></tr>
+  <tr><td><strong>{t("anual.name", idioma)}</strong></td><td>{esc(emp_data['empleado'])}</td></tr>
   {cargo_row}
   <tr><td><strong>Career Advisor</strong></td><td>{esc(emp_data.get('ca') or '—')}</td></tr>
 </table>
 
-<h2 class="sec">CALIFICACIÓN {año}</h2>
+<h2 class="sec">{t("anual.rating_year", idioma, anio=año)}</h2>
 <table class="et">
-  <thead><tr><th>Dimensión</th><th class="nc">Nota</th><th>Comentarios del evaluador</th></tr></thead>
+  <thead><tr><th>{t("anual.col_dimension", idioma)}</th><th class="nc">{t("anual.col_score", idioma)}</th><th>{t("anual.col_eval_comments", idioma)}</th></tr></thead>
   <tbody>{filas_dims(_DIMS_PROYECTOS)}</tbody>
 </table>
 
@@ -1183,13 +1228,13 @@ def guardar_informe_anual_html(emp_data: dict, comentarios: dict, cargo: str = "
 <h2 class="sec">CONTRIBUTION TO THE FIRM</h2>
 <p>{bullets_html(comentarios.get('contribution_to_firm',''))}</p>
 
-<h2 class="sec">RESULTADO</h2>
+<h2 class="sec">{t("anual.result", idioma)}</h2>
 <div class="rg">
-  <div>Nota global<br><strong>X / 5</strong></div>
+  <div>{t("anual.overall_score", idioma)}<br><strong>X / 5</strong></div>
   <div>{esc(comentarios.get('resultado','—'))}</div>
 </div>
 
-<h2 class="sec">OBJETIVOS {año + 1}</h2>
+<h2 class="sec">{t("anual.objectives_year", idioma, anio=año + 1)}</h2>
 {objetivos_html}
 
 {fuentes_html}
@@ -1217,7 +1262,7 @@ def _celda_emp(cell, label, valor, w):
         _dxr(cell.paragraphs[0], valor or "", size=9)
 
 
-def guardar_informe_anual_word(emp_data: dict, comentarios: dict, cargo: str = "") -> str:
+def guardar_informe_anual_word(emp_data: dict, comentarios: dict, cargo: str = "", idioma: str = "es") -> str:
     """Genera el .docx replicando la plantilla oficial de EVALUACIÓN ANUAL de IGENERIS.
 
     Campos que el sistema no posee (CA '26, salarios, % variable, promoción, deadlines,
@@ -1234,7 +1279,7 @@ def guardar_informe_anual_word(emp_data: dict, comentarios: dict, cargo: str = "
     ahora = datetime.now(timezone.utc)
     anio_eval = ahora.year - 1          # se evalúa el año anterior (p. ej. 2025 en marzo 2026)
     anio_sig = ahora.year               # año siguiente al evaluado
-    fecha_txt = f"{_MESES_ES[ahora.month - 1]} {ahora.year}"
+    fecha_txt = f"{_mes_label(ahora.month - 1, idioma)} {ahora.year}"
     yy = f"'{str(anio_eval)[-2:]}"      # "'25"
     yy_sig = f"'{str(anio_sig)[-2:]}"   # "'26"
 
@@ -1249,15 +1294,15 @@ def guardar_informe_anual_word(emp_data: dict, comentarios: dict, cargo: str = "
     _dxr(marca, ".Igeneris", bold=True, size=22)
     titulo = doc.add_paragraph()
     titulo.alignment = WD_ALIGN_PARAGRAPH.CENTER
-    _dxr(titulo, "EVALUACIÓN ANUAL", bold=True, size=13, underline=True)
+    _dxr(titulo, t("anual.doc_title", idioma), bold=True, size=13, underline=True)
     doc.add_paragraph()
 
     # ── Tabla de datos del empleado (4 columnas) ──────────────────────────────
     w1, w2, w3, w4 = 1.2, 2.24, 1.3, _CONTENT_W_IN - 1.2 - 2.24 - 1.3
     filas_emp = [
-        ("Empleado", emp_data["empleado"], "Fecha", fecha_txt),
-        (f"CA {yy}", emp_data.get("ca", ""), "Posición actual", cargo or ""),
-        (f"CA {yy_sig}", "", "Salario actual", ""),
+        (t("anual.employee", idioma), emp_data["empleado"], t("anual.date", idioma), fecha_txt),
+        (f"CA {yy}", emp_data.get("ca", ""), t("anual.current_position", idioma), cargo or ""),
+        (f"CA {yy_sig}", "", t("anual.current_salary", idioma), ""),
     ]
     t_emp = doc.add_table(rows=len(filas_emp), cols=4)
     t_emp.style = "Table Grid"
@@ -1270,7 +1315,7 @@ def guardar_informe_anual_word(emp_data: dict, comentarios: dict, cargo: str = "
     doc.add_paragraph()
 
     # ── CALIFICACIÓN {año} ────────────────────────────────────────────────────
-    _dxt(doc, f"CALIFICACIÓN {anio_eval}")
+    _dxt(doc, t("anual.rating_year", idioma, anio=anio_eval))
 
     cargo_lower = cargo.strip().lower()
     requiere_liderazgo = any(c in cargo_lower for c in _REQUIERE_LIDERAZGO)
@@ -1283,7 +1328,7 @@ def guardar_informe_anual_word(emp_data: dict, comentarios: dict, cargo: str = "
     t_cal = doc.add_table(rows=len(dims) + 1, cols=3)
     t_cal.style = "Table Grid"
     h0, h1, h2 = t_cal.rows[0].cells
-    for c, txt, w, ctr in ((h0, "PROYECTOS", w_dim, False), (h1, "NOTA", w_nota, True), (h2, "COMENTARIOS", w_com, False)):
+    for c, txt, w, ctr in ((h0, t("anual.projects", idioma), w_dim, False), (h1, t("anual.score_up", idioma), w_nota, True), (h2, t("anual.comments_up", idioma), w_com, False)):
         _dxb(c); _dxw(c, w)
         _dxr(c.paragraphs[0], txt, bold=True, size=9, center=ctr)
     for i, (clave, etiqueta) in enumerate(dims):
@@ -1291,17 +1336,17 @@ def guardar_informe_anual_word(emp_data: dict, comentarios: dict, cargo: str = "
         _dxb(c0); _dxw(c0, w_dim)
         _dxb(c1); _dxw(c1, w_nota)
         _dxb(c2); _dxw(c2, w_com)
-        _dxr(c0.paragraphs[0], etiqueta, size=9)
+        _dxr(c0.paragraphs[0], _dim_label(clave, etiqueta, idioma), size=9)
         # NOTA: en blanco, la rellena el CA
-        _dx_bullets_por_nivel(c2, comentarios.get(clave, ""), fuentes)
+        _dx_bullets_por_nivel(c2, comentarios.get(clave, ""), fuentes, idioma=idioma)
     doc.add_paragraph()
 
     # ── Notas finales / retribución ───────────────────────────────────────────
     wc1, wc2, wc3, wc4 = 2.9, 0.7, 1.5, _CONTENT_W_IN - 2.9 - 0.7 - 1.5
     filas_ret = [
-        ("Nota final Proyectos", "", "Variable (60%)", ""),
-        ("Nota final Contrib. To the firm (10%)", "", "Variable", ""),
-        ("Consecución Objetivos corp.", "", "Variable (30%)", "Total Variable " + yy + " ="),
+        (t("anual.final_projects", idioma), "", t("anual.variable_60", idioma), ""),
+        (t("anual.final_contrib", idioma), "", t("anual.variable", idioma), ""),
+        (t("anual.corp_objectives", idioma), "", t("anual.variable_30", idioma), t("anual.total_variable", idioma, yy=yy)),
     ]
     t_ret = doc.add_table(rows=len(filas_ret), cols=4)
     t_ret.style = "Table Grid"
@@ -1316,20 +1361,20 @@ def guardar_informe_anual_word(emp_data: dict, comentarios: dict, cargo: str = "
     doc.add_paragraph()
 
     # ── RESULTADO EVAL {año} ──────────────────────────────────────────────────
-    _dxt(doc, f"RESULTADO EVAL {yy}")
+    _dxt(doc, t("anual.eval_result", idioma, yy=yy))
     wr = [1.2, 0.9, 1.4, 1.3, _CONTENT_W_IN - 1.2 - 0.9 - 1.4 - 1.3]
     t_res = doc.add_table(rows=1, cols=5)
     t_res.style = "Table Grid"
     cells = t_res.rows[0].cells
-    textos_res = [("PROMOCIÓN", True, False), ("", False, True), (f"POSICIÓN {yy_sig}", True, False),
-                  ("", False, True), ("Nuevo salario fijo =", True, False)]
+    textos_res = [(t("anual.promotion", idioma), True, False), ("", False, True), (t("anual.position_next", idioma, yy=yy_sig), True, False),
+                  ("", False, True), (t("anual.new_fixed_salary", idioma), True, False)]
     for c, w, (txt, bold, ctr) in zip(cells, wr, textos_res):
         _dxb(c); _dxw(c, w)
         _dxr(c.paragraphs[0], txt, bold=bold, size=9, center=ctr)
     doc.add_paragraph()
 
     # ── OPORTUNIDADES DE MEJORA / OBJETIVOS {año+1} ───────────────────────────
-    _dxt(doc, f"OPORTUNIDADES DE MEJORA / OBJETIVOS {yy_sig}")
+    _dxt(doc, t("anual.improvement_objectives", idioma, yy=yy_sig))
     objetivos = emp_data.get("objetivos", [])
     n_filas = max(3, len(objetivos))
     w_obj, w_dl = _CONTENT_W_IN - 0.9, 0.9
@@ -1354,14 +1399,14 @@ def guardar_informe_anual_word(emp_data: dict, comentarios: dict, cargo: str = "
     if fuentes:
         _ORDEN = {"O": 0, "E": 1, "P": 2, "S": 3, "B": 4}
         _TIPO = {
-            "opinion": "Opinión CA", "evaluacion": "Evaluación mensual",
-            "proyecto": "Evaluación de proyecto", "seguimiento": "Seguimiento personal",
-            "barbecho": "Barbecho",
+            "opinion": t("anual.src_opinion", idioma), "evaluacion": t("anual.src_evaluacion", idioma),
+            "proyecto": t("anual.src_proyecto", idioma), "seguimiento": t("anual.src_seguimiento", idioma),
+            "barbecho": t("anual.src_barbecho", idioma),
         }
         doc.add_paragraph()
-        _dxt(doc, "FUENTES / EVIDENCIA")
+        _dxt(doc, t("anual.sources_evidence", idioma))
         _dxr(doc.add_paragraph(),
-             "Cada cita [X#] del informe enlaza a su ficha aquí: la evidencia en bruto para contrastar.",
+             t("anual.sources_intro_docx", idioma),
              size=8)
         ordenadas = sorted(fuentes, key=lambda c: (_ORDEN.get(c[:1], 9), int(c[1:]) if c[1:].isdigit() else 0))
         for n, cid in enumerate(ordenadas, 1):
@@ -1435,9 +1480,10 @@ def generar_informe_anual(evaluado: str, cargo: str = "") -> str:
         )
 
     slug = slug_archivo(evaluado)
+    idioma = idioma_de_persona(evaluado)
     # Se computa una sola vez: alimenta la huella de caché y el prompt (evita doble lectura de Notion).
     criterios = _criterios_para_prompt(cargo)
-    huella = _huella_datos(emp_data, cargo=cargo, criterios=criterios)
+    huella = _huella_datos(emp_data, cargo=cargo, criterios=(criterios or "") + f"|lang={idioma}")
     ruta_docx = os.path.join(config.CARPETA_WEB, f"informe_anual_{slug}.docx")
     ruta_html = os.path.join(config.CARPETA_WEB, f"informe_anual_{slug}.html")
     cache = _leer_cache(slug)
@@ -1446,8 +1492,8 @@ def generar_informe_anual(evaluado: str, cargo: str = "") -> str:
         logging.info("Informe anual en caché para %s, reutilizando.", evaluado)
         return slug
 
-    comentarios = interpretar_evaluaciones_anual(emp_data, cargo=cargo, criterios=criterios)
-    slug = guardar_informe_anual_word(emp_data, comentarios, cargo=cargo)
-    guardar_informe_anual_html(emp_data, comentarios, cargo=cargo)
+    comentarios = interpretar_evaluaciones_anual(emp_data, cargo=cargo, criterios=criterios, idioma=idioma)
+    slug = guardar_informe_anual_word(emp_data, comentarios, cargo=cargo, idioma=idioma)
+    guardar_informe_anual_html(emp_data, comentarios, cargo=cargo, idioma=idioma)
     _escribir_cache(slug, huella)
     return slug

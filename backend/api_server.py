@@ -16,6 +16,7 @@ except ImportError:
 from datetime import datetime, timedelta, timezone
 
 from . import config
+from .i18n import t
 from .notion_service import (
     listar_bbdd_evaluados,
     obtener_advisees,
@@ -34,6 +35,11 @@ from .notion_service import (
     toggle_acceso_advisee_individual,
     obtener_perfil_empleado,
     obtener_registros_empleados,
+    idioma_de_persona,
+    idioma_por_sesion,
+    guardar_idioma_por_sesion,
+    guardar_pais_por_sesion,
+    obtener_paises_disponibles,
     evaluacion_proyecto_guardada_desde,
     evaluacion_personal_guardada_desde,
     obtener_config_calendario,
@@ -174,7 +180,8 @@ class ApiHandler(BaseHTTPRequestHandler):
                 if not sesion:
                     self.responder_json({"user": None})
                     return
-                self.responder_json({"user": sesion})
+                usuario = {**sesion, "idioma": idioma_por_sesion(sesion)}
+                self.responder_json({"user": usuario})
                 return
             if ruta == "/api/evaluados":
                 sesion = self.sesion_actual()
@@ -229,6 +236,12 @@ class ApiHandler(BaseHTTPRequestHandler):
                     raise PermissionError("Inicia sesión para acceder.")
                 perfil = obtener_perfil_empleado(sesion.get("persona", ""))
                 self.responder_json(perfil)
+                return
+            if ruta == "/api/paises":
+                sesion = self.sesion_actual()
+                if not sesion:
+                    raise PermissionError("Inicia sesión para acceder.")
+                self.responder_json({"paises": obtener_paises_disponibles()})
                 return
             if ruta == "/api/perfil-empleado":
                 sesion = self.sesion_actual()
@@ -593,7 +606,9 @@ class ApiHandler(BaseHTTPRequestHandler):
             if ruta == "/api/login":
                 usuario = autenticar_usuario(datos.get("username", ""), datos.get("password", ""))
                 token = crear_sesion(usuario)
-                self.responder_json({"token": token, "user": obtener_sesion_por_token(token)})
+                sesion = obtener_sesion_por_token(token)
+                sesion_con_idioma = {**sesion, "idioma": idioma_por_sesion(sesion)}
+                self.responder_json({"token": token, "user": sesion_con_idioma})
                 return
             if ruta == "/api/password-reset/request":
                 solicitar_reset_password(datos.get("email", ""))
@@ -607,6 +622,18 @@ class ApiHandler(BaseHTTPRequestHandler):
             sesion = self.sesion_actual()
             if not sesion:
                 raise PermissionError("Inicia sesión para acceder.")
+            if ruta == "/api/set-idioma":
+                idioma = (datos.get("idioma") or "").strip().lower()
+                if idioma not in ("es", "en"):
+                    idioma = "es"
+                ok = guardar_idioma_por_sesion(sesion, idioma)
+                self.responder_json({"ok": bool(ok), "idioma": idioma})
+                return
+            if ruta == "/api/set-pais":
+                pais = (datos.get("pais") or "").strip()[:80]
+                guardado = guardar_pais_por_sesion(sesion, pais)
+                self.responder_json({"ok": True, "pais": guardado})
+                return
             if ruta == "/api/generar":
                 evaluado = datos.get("evaluado", "")
                 cargo = datos.get("cargo", "").strip()
@@ -812,29 +839,31 @@ class ApiHandler(BaseHTTPRequestHandler):
                 return
             if ruta == "/api/activar-evaluaciones-proyecto":
                 manager = sesion.get("persona", "")
+                _idi = idioma_por_sesion(sesion)
                 proyecto = datos.get("proyecto", "").strip()
                 empleados = datos.get("empleados", [])
                 if not proyecto:
-                    self.responder_json({"error": "Falta el nombre del proyecto."}, 400)
+                    self.responder_json({"error": t("pe.err_missing_project", _idi)}, 400)
                     return
                 if not empleados or not isinstance(empleados, list):
-                    self.responder_json({"error": "Debes seleccionar al menos un empleado."}, 400)
+                    self.responder_json({"error": t("pe.err_select_employee", _idi)}, 400)
                     return
-                resultado = activar_evaluaciones_empleados(manager, proyecto, empleados)
+                resultado = activar_evaluaciones_empleados(manager, proyecto, empleados, _idi)
                 self.responder_json(resultado)
                 return
             if ruta == "/api/modificar-equipo-proyecto":
                 manager = sesion.get("persona", "")
+                _idi = idioma_por_sesion(sesion)
                 accion = datos.get("accion", "").strip()
                 proyecto = datos.get("proyecto", "").strip()
                 empleado = datos.get("empleado", "").strip()
                 if accion not in ("añadir", "eliminar") or not proyecto or not empleado:
-                    self.responder_json({"error": "Faltan campos obligatorios."}, 400)
+                    self.responder_json({"error": t("pe.err_missing_fields", _idi)}, 400)
                     return
                 if accion == "añadir":
-                    resultado = añadir_miembro_proyecto(manager, proyecto, empleado)
+                    resultado = añadir_miembro_proyecto(manager, proyecto, empleado, _idi)
                 else:
-                    resultado = eliminar_miembro_proyecto(proyecto, empleado)
+                    resultado = eliminar_miembro_proyecto(proyecto, empleado, _idi)
                 self.responder_json(resultado)
                 return
             if ruta == "/api/guardar-evaluacion-proyecto":

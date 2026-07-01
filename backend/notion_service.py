@@ -3091,7 +3091,7 @@ def _obtener_o_crear_bbdd_acceso_ca() -> str:
             with lock:
                 _cache_acceso_ca_db["db_id"] = db_id
             return db_id
-    parent = _parent_bbdd_referencia()
+    parent = _parent_bbdd_en_pagina(config.NOTION_ACTIVACIONES_PERMISOS_PAGE_NAME, crear=True)
     props = {"Name": {"title": {}}, "Activo": {"checkbox": {}}}
     if _usa_data_sources():
         nueva = notion.databases.create(

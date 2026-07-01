@@ -96,13 +96,14 @@ def _formatear_fecha(iso: str) -> str:
         return iso[:10]
 
 
-def obtener_datos_opiniones_ca(advisee: str, ca_nombre: str = "") -> dict:
+def obtener_datos_opiniones_ca(advisee: str, ca_nombre: str = "", anonimo: bool = False) -> dict:
     """
     Recopila las opiniones del CA sobre el advisee y las separa en:
       - entries:            filas con Resumen (opinión del CA + resumen sobre el que opinó)
       - comentarios_sueltos: filas sin Resumen (notas sueltas registradas desde la web)
 
     Si no se pasa ca_nombre se intenta resolver desde "Objetivos" / "Lista CA".
+    Si anonimo=True, el resumen_advisee se oculta (pero la opinión del CA sigue visible).
     """
     if not ca_nombre:
         try:
@@ -120,7 +121,10 @@ def obtener_datos_opiniones_ca(advisee: str, ca_nombre: str = "") -> dict:
         opinion = (op.get("opinion") or "").strip()
         resumen = (op.get("resumen_advisee") or "").strip()
         fecha = op.get("fecha") or ""
-        if resumen:
+        tiene_resumen = bool(resumen)
+        if anonimo:
+            resumen = ""
+        if tiene_resumen:
             entries.append({
                 "fecha": _formatear_fecha(fecha),
                 "fecha_iso": fecha,
@@ -464,7 +468,7 @@ def _escribir_cache(slug: str, huella: str) -> None:
 
 # ── Punto de entrada ──────────────────────────────────────────────────────────
 
-def generar_resumen_opiniones_ca(advisee: str, ca_nombre: str = "") -> str:
+def generar_resumen_opiniones_ca(advisee: str, ca_nombre: str = "", anonimo: bool = False) -> str:
     """
     Lee las opiniones del CA en Notion → genera PDF + HTML en CARPETA_WEB.
     Reutiliza caché si los datos no han cambiado.
@@ -476,7 +480,7 @@ def generar_resumen_opiniones_ca(advisee: str, ca_nombre: str = "") -> str:
         ValueError: si el advisee no tiene ninguna opinión registrada.
         RuntimeError: si reportlab no está instalado (no se puede generar el PDF).
     """
-    datos = obtener_datos_opiniones_ca(advisee, ca_nombre)
+    datos = obtener_datos_opiniones_ca(advisee, ca_nombre, anonimo=anonimo)
     if not datos["entries"] and not datos["comentarios_sueltos"]:
         raise ValueError(f"No hay opiniones del CA registradas para '{advisee}'.")
 

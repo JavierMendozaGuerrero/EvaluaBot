@@ -37,12 +37,14 @@ from .notion_service import (
     obtener_evaluaciones_por_evaluado,
     obtener_nombre_por_id_usuario,
     obtener_objetivos_persona,
+    obtener_preguntas_seguimiento_ca,
     obtener_slack_ids_empleados,
     siguiente_envio_calendario,
     sugerir_empleados_parecidos,
 )
 from .skill_resumen_evaluacion import generar_resumen_evaluacion
 from .utils import normalizar_nombre
+from .anonimato import cargar_config as _cargar_anonimato, evaluadores_visibles_para_advisee as _evaluadores_visibles_para_advisee
 
 # ---------------------------------------------------------------------------
 # Estado compartido
@@ -250,7 +252,7 @@ def _ca_guardo_desde(ca_nombre: str, desde_ts: float) -> bool:
 # Resumen de evaluaciones
 # ---------------------------------------------------------------------------
 
-def _resumen_advisee(advisee: str, desde_fecha: str | None) -> str:
+def _resumen_advisee(advisee: str, desde_fecha: str | None, anonimo: bool = True) -> str:
     try:
         evaluaciones = obtener_evaluaciones_por_evaluado(advisee)
     except RuntimeError:
@@ -275,8 +277,9 @@ def _resumen_advisee(advisee: str, desde_fecha: str | None) -> str:
     lineas = []
     for ev in ordenadas:
         fecha = ev.get("fecha", "")[:10] if ev.get("fecha") else "?"
+        quien = "Anónimo" if anonimo else ev.get('persona_que_evalua', '?')
         lineas.append(
-            f"• [{fecha}] *{ev.get('persona_que_evalua', '?')}* en {ev.get('proyecto', '?')} – "
+            f"• [{fecha}] *{quien}* en {ev.get('proyecto', '?')} – "
             f"Valoración: {ev.get('q1', '?')} | "
             f"Ejemplo: {ev.get('q2', '?')}"
         )
@@ -295,8 +298,9 @@ def _resumen_advisee(advisee: str, desde_fecha: str | None) -> str:
         if comentarios:
             lineas_personales = []
             for c in sorted(comentarios, key=lambda x: x.get("fecha", "")):
+                autor_c = "Anónimo" if anonimo else c['autor']
                 lineas_personales.append(
-                    f"• [{c['fecha']}] *{c['autor']}* → _{c['comentario']}_"
+                    f"• [{c['fecha']}] *{autor_c}* → _{c['comentario']}_"
                 )
             resumen += f"\n\n*Comentarios personales ({len(lineas_personales)}):*\n" + "\n".join(lineas_personales)
     except Exception:
@@ -372,7 +376,7 @@ def _texto_pregunta_ca_por_clave(clave: str, idioma="es") -> str:
     if clave == "advisee":
         return t("bc.ask_advisee_name", idioma)
     if clave == "opinion":
-        return t("bc.ask_opinion", idioma)
+        return obtener_preguntas_seguimiento_ca().get("opinion", "¿Qué opinas de las evaluaciones?")
     return t("bc.enter_new_answer", idioma)
 
 
@@ -770,7 +774,8 @@ def manejar_mensaje_ca(event, logger) -> None:
             desde_fecha = _fecha_ultima_opinion(ca_nombre, advisee)
             hace_4_semanas = (datetime.now(timezone.utc) - timedelta(weeks=4)).isoformat()
             desde_fecha = max(desde_fecha, hace_4_semanas) if desde_fecha else hace_4_semanas
-            resumen = _resumen_advisee(advisee, desde_fecha)
+            _cfg_anon = _cargar_anonimato()
+            resumen = _resumen_advisee(advisee, desde_fecha, anonimo=not _evaluadores_visibles_para_advisee(advisee, _cfg_anon))
             sin_novedades = "no hay evaluaciones nuevas" in resumen or "No hay evaluaciones registradas" in resumen
             with _lock:
                 if conv_key in conversaciones_ca:
@@ -874,16 +879,18 @@ def manejar_mensaje_ca(event, logger) -> None:
             with _lock:
                 if conv_key in conversaciones_ca:
                     conversaciones_ca[conv_key]["resumen_actual"] = resumen_claude
-            reply(t("bc.claude_summary_result", _idi, resumen=resumen_claude))
+            _preg = obtener_preguntas_seguimiento_ca().get("opinion_con_claude", "¿Qué opinas de esto?")
+            reply(f"📊 *Resumen generado por Claude:*\n\n{resumen_claude}\n\n{_preg}")
         except Exception:
             logging.exception("Error generando resumen Claude para '%s'", advisee)
             with _lock:
                 if conv_key in conversaciones_ca:
                     conversaciones_ca[conv_key]["resumen_actual"] = resumen_bruto
-            reply(t("bc.claude_summary_error", _idi))
+            _preg = obtener_preguntas_seguimiento_ca().get("opinion_con_claude", "¿Qué opinas de esto?")
+            reply(f"⚠️ No se pudo generar el resumen con Claude.\n\n{_preg}")
 
     elif accion == "pedir_opinion_sin_claude":
-        reply(t("bc.ask_comment", _idi))
+        reply(obtener_preguntas_seguimiento_ca().get("opinion_sin_claude", "¿Qué comentario deseas registrar sobre las evaluaciones de tu advisee?"))
 
     elif accion == "aclarar_permiso_claude":
         reply(t("bc.clarify_claude", _idi))
@@ -1027,7 +1034,8 @@ def obtener_resumen_advisee_para_ca(ca_nombre: str, advisee: str) -> tuple[str, 
     desde_fecha = _fecha_ultima_opinion(ca_nombre, advisee)
     hace_4_semanas = (datetime.now(timezone.utc) - timedelta(weeks=4)).isoformat()
     desde_fecha = max(desde_fecha, hace_4_semanas) if desde_fecha else hace_4_semanas
-    resumen = _resumen_advisee(advisee, desde_fecha)
+    _cfg_anon = _cargar_anonimato()
+    resumen = _resumen_advisee(advisee, desde_fecha, anonimo=not _evaluadores_visibles_para_advisee(advisee, _cfg_anon))
     sin_novedades = "no hay evaluaciones nuevas" in resumen or "No hay evaluaciones registradas" in resumen
     return resumen, sin_novedades
 

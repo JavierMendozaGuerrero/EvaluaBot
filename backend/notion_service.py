@@ -563,7 +563,7 @@ def _obtener_o_crear_pagina_preguntas_id() -> str | None:
             return page_id
 
     # Fallback: estructura antigua — buscar "Preguntas" dentro de la página de listas
-    for nombre_listas in (config.NOTION_DATA_LISTS_PAGE_NAME, config.NOTION_DATA_MODIFICABLES_PAGE_NAME, "Listas de datos"):
+    for nombre_listas in (config.NOTION_DATA_LISTS_PAGE_NAME, config.NOTION_DATA_MODIFICABLES_PAGE_NAME):
         listas_parent = _parent_bbdd_en_pagina(nombre_listas, crear=False)
         if listas_parent.get("type") != "page_id":
             continue
@@ -2479,6 +2479,53 @@ def obtener_advisees(ca_nombre: str, ca_aliases=None) -> list[str]:
         return []
 
 
+def obtener_todos_los_advisees() -> list[str]:
+    """Devuelve todos los advisees únicos de TODOS los CAs desde la Lista CA."""
+    with lock:
+        db_id = _cache_lista_ca.get("db_id", "")
+    if not db_id:
+        resultado = notion.search(
+            query="Lista CA",
+            filter={"value": _tipo_objeto_busqueda_bbdd(), "property": "object"},
+            page_size=50,
+        )
+        for bbdd in resultado.get("results", []):
+            titulo_norm = normalizar_nombre(_extraer_titulo_bbdd(bbdd))
+            if titulo_norm in ("lista ca", "lista de cas") or titulo_norm.startswith("lista ca") or titulo_norm.startswith("lista de ca"):
+                db_id = _data_source_id(bbdd)
+                with lock:
+                    _cache_lista_ca["db_id"] = db_id
+                break
+    if not db_id:
+        return []
+    try:
+        nombres: set[str] = set()
+        cursor = None
+        while True:
+            kwargs: dict = {"page_size": 100}
+            if cursor:
+                kwargs["start_cursor"] = cursor
+            resp = _query_bbdd(db_id, **kwargs)
+            for fila in resp.get("results", []):
+                props = fila.get("properties", {})
+                for col_name, prop_val in props.items():
+                    if not re.match(r'^A\d+$', col_name):
+                        continue
+                    nombre_a = "".join(
+                        p.get("plain_text", "")
+                        for p in (prop_val.get("rich_text") or prop_val.get("title") or [])
+                    ).strip()
+                    if nombre_a:
+                        nombres.add(nombre_a)
+            if not resp.get("has_more"):
+                break
+            cursor = resp.get("next_cursor")
+        return list(nombres)
+    except Exception:
+        logging.exception("Error obteniendo todos los advisees")
+        return []
+
+
 def obtener_datos_empleados_por_nombres(nombres: list[str]) -> list[dict]:
     """Retorna {nombre, foto, email} para cada nombre desde 'Lista de empleados'."""
     if not nombres:
@@ -2712,20 +2759,8 @@ def _obtener_o_crear_bbdd_objetivos() -> str:
                 _cache_objetivos_db["db_id"] = db_id
             return db_id
 
-    parent = None
-    try:
-        res_pages = notion.search(
-            query="Listas de datos",
-            filter={"value": "page", "property": "object"},
-            page_size=10,
-        )
-        for page in res_pages.get("results", []):
-            if normalizar_nombre(_extraer_titulo_pagina(page)) == "listas de datos":
-                parent = {"type": "page_id", "page_id": page["id"]}
-                break
-    except Exception:
-        pass
-    if parent is None:
+    parent = _parent_bbdd_en_pagina(config.NOTION_TOSEE_PAGE_NAME, crear=False)
+    if parent.get("type") != "page_id":
         parent = _parent_bbdd_referencia()
 
     if _usa_data_sources():
@@ -3393,6 +3428,10 @@ PREGUNTAS_PERSONALES_DEFAULT = {
         "Inmediatamente se te mandarán tus objetivos actuales para que puedas reflexionar "
         "si te estás dirigiendo hacia conseguirlos. 🏆"
     ),
+    "item_1": 'Explicar cómo estás ayudando en _"Contribution to the firm"_',
+    "item_2": "Cómo te estás acercando a tus objetivos",
+    "item_3": "Señalar limitaciones o aspectos relevantes respecto al cumplimiento de los criterios de evaluación",
+    "item_4": "Si necesitas ayuda con algún tema o has tenido alguna dificultad que quieras comentar",
 }
 
 _mensaje_inicial_migrado: set = set()
@@ -3589,6 +3628,115 @@ def obtener_preguntas_personales() -> dict:
         return dict(PREGUNTAS_PERSONALES_DEFAULT)
 
 
+PREGUNTAS_CA_DEFAULT = {
+    "opinion": "¿Qué opinas de las evaluaciones?",
+    "opinion_sin_claude": "¿Qué comentario deseas registrar sobre las evaluaciones de tu advisee?",
+    "opinion_con_claude": "¿Qué opinas de esto?",
+}
+
+_NOMBRE_PREGUNTAS_CA = "Preguntas seguimiento CA"
+_cache_ca_preguntas_db: dict = {"db_id": None}
+_cache_ca_preguntas: dict = {}
+_CA_PREGUNTAS_TTL = 300
+
+
+def _poblar_bbdd_preguntas_ca(db_id: str) -> None:
+    for clave, texto in PREGUNTAS_CA_DEFAULT.items():
+        try:
+            _crear_pagina_en_bbdd(db_id, {
+                "Clave": {"title": [{"type": "text", "text": {"content": clave}}]},
+                "Texto": {"rich_text": [{"type": "text", "text": {"content": texto}}]},
+            })
+        except Exception:
+            logging.exception("Error poblando pregunta CA '%s'", clave)
+
+
+def _obtener_o_crear_bbdd_preguntas_ca() -> str | None:
+    with lock:
+        db_id = _cache_ca_preguntas_db["db_id"]
+    if db_id:
+        return db_id
+
+    parent = _parent_bbdd_en_pagina(config.NOTION_PREGUNTAS_CHATBOT_PAGE_NAME, crear=True)
+    if parent.get("type") == "page_id":
+        objetivo = normalizar_nombre(_NOMBRE_PREGUNTAS_CA)
+        for bloque in _iter_blocks(parent["page_id"]):
+            if bloque.get("type") == "child_database" and normalizar_nombre(_titulo_child_database(bloque)) == objetivo:
+                try:
+                    db_id = _data_source_id(notion.databases.retrieve(database_id=bloque["id"]))
+                except Exception:
+                    db_id = bloque["id"]
+                with lock:
+                    _cache_ca_preguntas_db["db_id"] = db_id
+                return db_id
+
+    props = {"Clave": {"title": {}}, "Texto": {"rich_text": {}}}
+    try:
+        if _usa_data_sources():
+            nueva = notion.databases.create(
+                parent=parent,
+                title=[{"type": "text", "text": {"content": _NOMBRE_PREGUNTAS_CA}}],
+                initial_data_source={"title": [{"type": "text", "text": {"content": _NOMBRE_PREGUNTAS_CA}}], "properties": props},
+            )
+            nueva = notion.databases.retrieve(database_id=nueva["id"])
+        else:
+            nueva = notion.databases.create(
+                parent=parent,
+                title=[{"type": "text", "text": {"content": _NOMBRE_PREGUNTAS_CA}}],
+                properties=props,
+            )
+        db_id = _data_source_id(nueva)
+        with lock:
+            _cache_ca_preguntas_db["db_id"] = db_id
+        logging.info("BD '%s' creada", _NOMBRE_PREGUNTAS_CA)
+        _poblar_bbdd_preguntas_ca(db_id)
+        return db_id
+    except Exception:
+        logging.exception("Error creando BD '%s'", _NOMBRE_PREGUNTAS_CA)
+        return None
+
+
+def obtener_preguntas_seguimiento_ca() -> dict:
+    import time as _time
+    ahora = _time.time()
+    with lock:
+        cached = _cache_ca_preguntas.get("data")
+        ts = _cache_ca_preguntas.get("ts", 0.0)
+    if cached and (ahora - ts) < _CA_PREGUNTAS_TTL:
+        return cached
+
+    db_id = _obtener_o_crear_bbdd_preguntas_ca()
+    if not db_id:
+        return dict(PREGUNTAS_CA_DEFAULT)
+
+    try:
+        resultado = {}
+        cursor = None
+        while True:
+            kwargs: dict = {"page_size": 100}
+            if cursor:
+                kwargs["start_cursor"] = cursor
+            resp = _query_bbdd(db_id, **kwargs)
+            for fila in resp.get("results", []):
+                props = fila.get("properties", {})
+                clave = " ".join(p.get("plain_text", "") for p in props.get("Clave", {}).get("title", [])).strip()
+                texto = " ".join(p.get("plain_text", "") for p in props.get("Texto", {}).get("rich_text", [])).strip()
+                if clave and texto:
+                    resultado[clave] = texto
+            if not resp.get("has_more"):
+                break
+            cursor = resp.get("next_cursor")
+        for k, v in PREGUNTAS_CA_DEFAULT.items():
+            resultado.setdefault(k, v)
+        with lock:
+            _cache_ca_preguntas["data"] = resultado
+            _cache_ca_preguntas["ts"] = _time.time()
+        return resultado
+    except Exception:
+        logging.exception("Error leyendo preguntas CA desde Notion")
+        return dict(PREGUNTAS_CA_DEFAULT)
+
+
 def guardar_evaluacion_personal(nombre: str, respuestas: dict) -> bool:
     try:
         db_id = _buscar_o_crear_bbdd_en_personales(
@@ -3629,34 +3777,26 @@ def _obtener_o_crear_bbdd_calendario() -> str | None:
     if db_id:
         return db_id
 
-    parent = None
+    # Buscar en cualquier ubicación via búsqueda global
     try:
         res = notion.search(
-            query="Listas de datos",
-            filter={"value": "page", "property": "object"},
+            query="Calendario evaluaciones",
+            filter={"value": _tipo_objeto_busqueda_bbdd(), "property": "object"},
             page_size=10,
         )
-        for page in res.get("results", []):
-            if normalizar_nombre(_extraer_titulo_pagina(page)) == "listas de datos":
-                parent = {"type": "page_id", "page_id": page["id"]}
-                break
+        for bbdd in res.get("results", []):
+            if normalizar_nombre(_extraer_titulo_bbdd(bbdd)) == "calendario evaluaciones":
+                db_id = _data_source_id(bbdd)
+                with lock:
+                    _cache_calendario_db["db_id"] = db_id
+                return db_id
     except Exception:
         pass
-    if parent is None:
-        parent = _parent_bbdd_referencia()
 
-    # Buscar si ya existe dentro de la página
-    try:
-        if parent and parent.get("type") == "page_id":
-            for bloque in _iter_blocks(parent["page_id"]):
-                if bloque.get("type") == "child_database":
-                    if normalizar_nombre(_titulo_child_database(bloque)) == "calendario evaluaciones":
-                        db_id = bloque["id"]
-                        with lock:
-                            _cache_calendario_db["db_id"] = db_id
-                        return db_id
-    except Exception:
-        pass
+    # No existe — crear bajo "Datos a Monitorizar" si existe, si no bajo root
+    parent = _parent_bbdd_en_pagina(config.NOTION_DATA_LISTS_PAGE_NAME, crear=False)
+    if parent.get("type") != "page_id":
+        parent = _parent_bbdd_referencia()
 
     try:
         if _usa_data_sources():

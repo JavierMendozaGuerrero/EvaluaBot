@@ -359,6 +359,7 @@ export const STRINGS = {
   "mpa.col_status": { es: "Estado", en: "Status" },
   "mpa.evaluated_by": { es: "Evaluado por: {list}", en: "Evaluated by: {list}" },
   "mpa.pending_from": { es: "Pendiente de: {list}", en: "Pending from: {list}" },
+  "mpa.pending_from_count": { es: "Pendiente de {n} persona(s)", en: "Pending from {n} person(s)" },
   "mpa.complete": { es: "Completo", en: "Complete" },
   "mpa.pending": { es: "Pendiente", en: "Pending" },
   "mpa.remove_member": { es: "Eliminar {nombre}", en: "Remove {nombre}" },

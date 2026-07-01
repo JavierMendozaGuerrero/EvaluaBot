@@ -40,6 +40,7 @@ from .notion_service import (
     guardar_idioma_por_sesion,
     guardar_pais_por_sesion,
     obtener_paises_disponibles,
+    obtener_todos_los_advisees,
     evaluacion_proyecto_guardada_desde,
     evaluacion_personal_guardada_desde,
     obtener_config_calendario,
@@ -92,6 +93,7 @@ from .users import (
     validar_acceso_sesion,
 )
 from .utils import normalizar_nombre, slug_archivo
+from .anonimato import cargar_config as cargar_anonimato, guardar_config as guardar_anonimato, evaluadores_visibles_para_advisee
 
 
 class ReusableTCPServer(ThreadingHTTPServer):
@@ -157,6 +159,11 @@ class ApiHandler(BaseHTTPRequestHandler):
         token_query = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query).get("token", [""])[0]
         return obtener_sesion_por_token(token_query)
 
+    @staticmethod
+    def _aliases_sesion(sesion):
+        email = sesion.get("email", "")
+        return [sesion.get("username", ""), email, email.split("@")[0] if email else ""]
+
     def _exigir_acceso_advisee(self, sesion, evaluado):
         """Lanza PermissionError si el CA de la sesión no tutela a `evaluado` (admin pasa siempre)."""
         if sesion.get("is_admin"):
@@ -187,15 +194,22 @@ class ApiHandler(BaseHTTPRequestHandler):
                 sesion = self.sesion_actual()
                 if not sesion:
                     raise PermissionError("Inicia sesión para acceder.")
-                opciones = []
-                for bbdd in sorted(listar_bbdd_evaluados(), key=lambda item: item["evaluado"].lower()):
-                    if not sesion.get("is_admin") and normalizar_nombre(bbdd["evaluado"]) != normalizar_nombre(sesion.get("persona")):
-                        continue
-                    opciones.append({"value": bbdd["evaluado"], "label": bbdd["evaluado"]})
-                datos = obtener_datos_empleados_por_nombres([o["value"] for o in opciones])
-                fotos = {normalizar_nombre(d["nombre"]): d.get("foto", "") for d in datos}
-                for o in opciones:
-                    o["foto"] = fotos.get(normalizar_nombre(o["value"]), "")
+                if sesion.get("is_admin"):
+                    registros = obtener_registros_empleados()
+                    opciones = sorted(
+                        [{"value": r["nombre"], "label": r["nombre"], "foto": r.get("foto", "")} for r in registros if r.get("nombre")],
+                        key=lambda o: o["label"].lower(),
+                    )
+                else:
+                    opciones = []
+                    for bbdd in sorted(listar_bbdd_evaluados(), key=lambda item: item["evaluado"].lower()):
+                        if normalizar_nombre(bbdd["evaluado"]) != normalizar_nombre(sesion.get("persona")):
+                            continue
+                        opciones.append({"value": bbdd["evaluado"], "label": bbdd["evaluado"]})
+                    datos = obtener_datos_empleados_por_nombres([o["value"] for o in opciones])
+                    fotos = {normalizar_nombre(d["nombre"]): d.get("foto", "") for d in datos}
+                    for o in opciones:
+                        o["foto"] = fotos.get(normalizar_nombre(o["value"]), "")
                 self.responder_json({"evaluados": opciones})
                 return
             if ruta == "/api/mis-advisees":
@@ -228,6 +242,10 @@ class ApiHandler(BaseHTTPRequestHandler):
                     advisee,
                     ca_aliases=[sesion.get("username", ""), sesion.get("email", "")],
                 )
+                _cfg_anon = cargar_anonimato()
+                if not (sesion.get("is_admin") or evaluadores_visibles_para_advisee(advisee, _cfg_anon)):
+                    for op in opiniones:
+                        op["resumen_advisee"] = ""
                 self.responder_json({"opiniones": opiniones})
                 return
             if ruta == "/api/mi-perfil":
@@ -422,6 +440,13 @@ class ApiHandler(BaseHTTPRequestHandler):
                     self.responder_json({"error": "Falta el proyecto."}, 400)
                     return
                 estado = obtener_estado_evaluaciones_proyecto(proyecto)
+                cfg_anon = cargar_anonimato()
+                es_admin = sesion.get("is_admin", False)
+                for m in estado:
+                    m["n_pendientes"] = len(m["pendientes"])
+                    if not (es_admin or evaluadores_visibles_para_advisee(m.get("evaluado", ""), cfg_anon)):
+                        m["evaluadores"] = []
+                        m["pendientes"] = []
                 self.responder_json({"estado": estado})
                 return
             if ruta.startswith("/api/eval-anual/"):
@@ -442,6 +467,12 @@ class ApiHandler(BaseHTTPRequestHandler):
                     self.responder_json(eval_sesion.obtener_area(evaluado, clave))
                     return
                 self.responder_json({"error": "Ruta no encontrada."}, 404)
+                return
+            if ruta == "/api/anonimato-evaluadores":
+                sesion = self.sesion_actual()
+                if not sesion or not sesion.get("is_admin"):
+                    raise PermissionError("Solo administradores.")
+                self.responder_json(cargar_anonimato())
                 return
             if ruta.startswith("/api/files/"):
                 self.servir_archivo_protegido(ruta.removeprefix("/api/files/"), parsed.query)
@@ -673,7 +704,9 @@ class ApiHandler(BaseHTTPRequestHandler):
                 if not sesion.get("is_admin") and normalizar_nombre(evaluado) not in [normalizar_nombre(a) for a in advisees_ca]:
                     raise PermissionError("Solo el CA o un administrador pueden generar este documento.")
                 validar_acceso_sesion(sesion, evaluado, extra_permitidos=advisees_ca)
-                slug = generar_resumen_opiniones_ca(evaluado)
+                _cfg_anon_op = cargar_anonimato()
+                _anonimo_op = not (sesion.get("is_admin") or evaluadores_visibles_para_advisee(evaluado, _cfg_anon_op))
+                slug = generar_resumen_opiniones_ca(evaluado, anonimo=_anonimo_op)
                 self.responder_json({
                     "pdfUrl": self.url_archivo(f"opiniones_ca_{slug}.pdf", evaluado),
                     "htmlUrl": self.url_archivo(f"opiniones_ca_{slug}.html", evaluado),
@@ -685,6 +718,8 @@ class ApiHandler(BaseHTTPRequestHandler):
                     self.responder_json({"error": "Selecciona un advisee."}, 400)
                     return
                 self._exigir_acceso_advisee(sesion, evaluado)
+                _cfg_anon = cargar_anonimato()
+                _anonimo = not (sesion.get("is_admin") or evaluadores_visibles_para_advisee(evaluado, _cfg_anon))
                 _GEN = {
                     "/api/generar-pdf-evals-proyecto": (generar_pdf_evals_proyecto, "evals_proyecto"),
                     "/api/generar-pdf-seguimiento": (generar_pdf_seguimiento_personal, "seguimiento_personal"),
@@ -692,7 +727,8 @@ class ApiHandler(BaseHTTPRequestHandler):
                     "/api/generar-pdf-completo": (generar_pdf_completo, "info_completa"),
                 }
                 generador, prefijo = _GEN[ruta]
-                slug = generador(evaluado)
+                anonimo_ruta = False if ruta == "/api/generar-pdf-evals-proyecto" else _anonimo
+                slug = generador(evaluado, anonimo=anonimo_ruta)
                 self.responder_json({"pdfUrl": self.url_archivo(f"{prefijo}_{slug}.pdf", evaluado)})
                 return
             if ruta == "/api/trayectoria":
@@ -909,6 +945,36 @@ class ApiHandler(BaseHTTPRequestHandler):
                     return
                 self.responder_json({"ok": True})
                 return
+            if ruta == "/api/anonimato-evaluadores":
+                if not sesion.get("is_admin"):
+                    raise PermissionError("Solo administradores.")
+                cfg = cargar_anonimato()
+                anteriores = set(cfg.get("advisees_revelados") or [])
+                if "global_anonimo" in datos:
+                    cfg["global_anonimo"] = bool(datos["global_anonimo"])
+                if "advisees_revelados" in datos:
+                    cfg["advisees_revelados"] = list(datos["advisees_revelados"])
+                guardar_anonimato(cfg)
+                nuevos = set(cfg.get("advisees_revelados") or [])
+                for advisee_cambiado in anteriores.symmetric_difference(nuevos):
+                    _slug = slug_archivo(advisee_cambiado)
+                    for _p in ("opiniones_ca_", "evals_mensuales_", "evals_proyecto_",
+                               "seguimiento_personal_", "info_completa_"):
+                        for _ext in (".pdf", ".html"):
+                            _f = os.path.join(config.CARPETA_WEB, f"{_p}{_slug}{_ext}")
+                            if os.path.exists(_f):
+                                try:
+                                    os.remove(_f)
+                                except Exception:
+                                    pass
+                    _cache_json = os.path.join(config.CARPETA_WEB, f"opiniones_ca_{_slug}_cache.json")
+                    if os.path.exists(_cache_json):
+                        try:
+                            os.remove(_cache_json)
+                        except Exception:
+                            pass
+                self.responder_json({"ok": True, **cfg})
+                return
             if ruta == "/api/guardar-evaluacion-slack":
                 persona = sesion.get("persona", "")
                 evaluado_nombre = datos.get("evaluado", "").strip()
@@ -1034,12 +1100,13 @@ class ApiHandler(BaseHTTPRequestHandler):
             content_type = "application/pdf"
         else:
             content_type = "text/html; charset=utf-8"
+        cache_control = "no-cache" if (es_opiniones or es_fuente_pdf or es_borrador) else "private, max-age=300"
         stat = os.stat(ruta)
         etag = '"%x-%x"' % (int(stat.st_mtime), stat.st_size)
         if self.headers.get("If-None-Match") == etag:
             self.send_response(304)
             self.send_header("ETag", etag)
-            self.send_header("Cache-Control", "private, max-age=300")
+            self.send_header("Cache-Control", cache_control)
             self.end_headers()
             return
         with open(ruta, "rb") as f:
@@ -1047,7 +1114,7 @@ class ApiHandler(BaseHTTPRequestHandler):
         self.send_response(200)
         self.send_header("Content-Type", content_type)
         self.send_header("Content-Length", str(len(body)))
-        self.send_header("Cache-Control", "private, max-age=300")
+        self.send_header("Cache-Control", cache_control)
         self.send_header("ETag", etag)
         self.end_headers()
         self.wfile.write(body)

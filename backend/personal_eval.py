@@ -18,6 +18,7 @@ from .notion_service import (
     obtener_ejemplos_guia,
     obtener_nombre_por_id_usuario,
     obtener_objetivos_persona,
+    obtener_preguntas_personales,
     obtener_slack_id_por_nombre,
     obtener_slack_ids_empleados,
     siguiente_envio_calendario,
@@ -36,41 +37,24 @@ conversaciones_personal: dict = {}
 _RECORDATORIO_SEGUNDOS = 7 * 24 * 60 * 60  # 1 semana
 
 
-def _bloques_oportunidad(idioma="es", con_urgencia=True):
-    """Bloques '*Esta es tu oportunidad para:*' en el idioma dado (con o sin bloque de urgencia)."""
-    bloques = [
-        {"type": "section", "text": {"type": "mrkdwn", "text": t("bp.opp_header", idioma)}},
-        {"type": "section", "text": {"type": "mrkdwn", "text": t("bp.opp_1", idioma)}},
-        {
-            "type": "section",
-            "text": {"type": "mrkdwn", "text": t("bp.opp_2", idioma)},
-            "accessory": {
-                "type": "button",
-                "text": {"type": "plain_text", "text": t("bp.btn_view_goals", idioma), "emoji": True},
-                "action_id": "personal_ver_objetivos",
-            },
-        },
-        {
-            "type": "section",
-            "text": {"type": "mrkdwn", "text": t("bp.opp_3", idioma)},
-            "accessory": {
-                "type": "button",
-                "text": {"type": "plain_text", "text": t("bp.btn_view_criteria", idioma), "emoji": True},
-                "action_id": "personal_ver_criterios",
-            },
-        },
+def _obtener_bloques_oportunidad(urgencia: bool = True) -> list:
+    preguntas = obtener_preguntas_personales()
+    items = [
+        ("item_1", None),
+        ("item_2", {"type": "button", "text": {"type": "plain_text", "text": "📋 Ver mis objetivos"}, "action_id": "personal_ver_objetivos"}),
+        ("item_3", {"type": "button", "text": {"type": "plain_text", "text": "📊 Ver criterios"}, "action_id": "personal_ver_criterios"}),
     ]
-    if con_urgencia:
-        bloques.append({
-            "type": "section",
-            "text": {"type": "mrkdwn", "text": t("bp.opp_4", idioma)},
-            "accessory": {
-                "type": "button",
-                "text": {"type": "plain_text", "text": t("bp.btn_urgency", idioma), "emoji": True},
-                "style": "danger",
-                "action_id": "personal_urgencia",
-            },
-        })
+    if urgencia:
+        items.append(("item_4", {"type": "button", "text": {"type": "plain_text", "text": "🚨 Urgencia"}, "style": "danger", "action_id": "personal_urgencia"}))
+    bloques = [{"type": "section", "text": {"type": "mrkdwn", "text": "*Esta es tu oportunidad para:*"}}]
+    for i, (clave, accessory) in enumerate(items, 1):
+        texto = preguntas.get(clave, f"Punto {i}")
+        if clave == "item_4":
+            texto += "\n_El botón de urgencia notifica a tu CA por Slack. Si no lo pulsas, el problema no se notifica automáticamente y solo quedará registrado._"
+        bloque: dict = {"type": "section", "text": {"type": "mrkdwn", "text": f"*{i}.* {texto}"}}
+        if accessory:
+            bloque["accessory"] = accessory
+        bloques.append(bloque)
     return bloques
 
 
@@ -348,7 +332,7 @@ def manejar_mensaje_personal(event, logger) -> None:
             channel=dm_channel,
             thread_ts=thread_ts,
             text=t("bp.opportunity_share", _idi),
-            blocks=_bloques_oportunidad(_idi, con_urgencia=True),
+            blocks=_obtener_bloques_oportunidad(urgencia=True),
         )
         return
 
@@ -380,7 +364,7 @@ def manejar_mensaje_personal(event, logger) -> None:
             channel=dm_channel,
             thread_ts=thread_ts,
             text=t("bp.opportunity_share", _idi),
-            blocks=_bloques_oportunidad(_idi, con_urgencia=False),
+            blocks=_obtener_bloques_oportunidad(urgencia=False),
         )
         return
 
@@ -636,7 +620,7 @@ def _handle_personal_urgencia_enviar(ack, body, logger):
             channel=dm_channel,
             thread_ts=thread_ts,
             text=t("bp.opportunity_share", _idi),
-            blocks=_bloques_oportunidad(_idi, con_urgencia=False),
+            blocks=_obtener_bloques_oportunidad(urgencia=False),
         )
     except Exception:
         logger.exception("Error procesando personal_urgencia_enviar")

@@ -13,3 +13,4 @@ bbdd_por_evaluado = {}
 sesiones_web = {}
 password_reset_tokens = {}
 evaluaciones_pendientes = []
+audio_pendiente_transcripcion: dict = {}  # (channel, ts) -> evento original

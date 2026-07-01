@@ -1,5 +1,6 @@
 import logging
 import re
+import threading
 import time
 from datetime import datetime, timedelta, timezone
 
@@ -960,8 +961,125 @@ def _enviar_resumen_con_botones(channel, thread_ts, text, idioma="es"):
     )
 
 
+# (channel, ts) -> original_event: mensajes de audio esperando transcripción
+_audio_pendiente: dict = {}
+
+
+def _despachar_con_texto(original_event, texto, logger):
+    """Enruta un evento con el texto ya resuelto (usado tras transcripción de audio)."""
+    nuevo_evento = dict(original_event, text=texto)
+    user_id = nuevo_evento.get("user")
+    thread_ts = nuevo_evento.get("thread_ts")
+    channel = nuevo_evento.get("channel", "")
+
+    slack_app.client.chat_postMessage(
+        channel=channel,
+        thread_ts=thread_ts,
+        text=f"📝 _{texto}_",
+    )
+
+    if thread_ts == ca_dm_ts.get(user_id):
+        manejar_mensaje_ca(nuevo_evento, logger)
+    elif thread_ts == personal_dm_ts.get(user_id):
+        manejar_mensaje_personal(nuevo_evento, logger)
+    elif thread_ts == evaluacion_dm_ts.get(user_id):
+        handle_message_events(nuevo_evento, logger)
+
+
+def _timeout_transcripcion(channel, thread_ts, msg_ts, logger):
+    """Hilo de fondo: si tras 3 min no llega message_changed, avisa al usuario."""
+    time.sleep(180)
+    if _audio_pendiente.pop((channel, msg_ts), None) is not None:
+        slack_app.client.chat_postMessage(
+            channel=channel,
+            thread_ts=thread_ts,
+            text="No he podido transcribir el audio. Por favor escribe tu respuesta en texto.",
+        )
+
+
+def _gestionar_audio(event, channel, thread_ts, logger):
+    """Detecta si el mensaje tiene audio y lo gestiona.
+    Devuelve el evento con texto inyectado (si ya estaba listo),
+    None si registramos espera vía message_changed,
+    o el evento original si no hay audio.
+    """
+    files = event.get("files") or []
+    if not files or (event.get("text") or "").strip():
+        return event
+
+    audio_file = next(
+        (f for f in files if (f.get("mimetype") or "").startswith("audio/")),
+        None,
+    )
+    if audio_file is None:
+        return event
+
+    t = audio_file.get("transcription") or {}
+    if t.get("status") == "complete":
+        texto = ((t.get("preview") or {}).get("content") or "").strip()
+        if texto:
+            slack_app.client.chat_postMessage(
+                channel=channel,
+                thread_ts=thread_ts,
+                text=f"📝 _{texto}_",
+            )
+            return dict(event, text=texto)
+
+    # Transcripción no disponible aún: pedimos al usuario que la active en Slack
+    msg_ts = event.get("ts")
+    _audio_pendiente[(channel, msg_ts)] = event
+    estado = (audio_file.get("transcription") or {}).get("status", "none")
+    if estado == "none":
+        texto_aviso = (
+            "He recibido tu audio. Para que pueda leerlo, pulsa *\"Ver transcripción\"* "
+            "justo a la derecha del audio y mándame el mensaje."
+        )
+    else:
+        texto_aviso = "⏳ Transcribiendo tu audio..."
+    slack_app.client.chat_postMessage(
+        channel=channel,
+        thread_ts=thread_ts,
+        text=texto_aviso,
+    )
+    threading.Thread(
+        target=_timeout_transcripcion,
+        args=(channel, thread_ts, msg_ts, logger),
+        daemon=True,
+    ).start()
+    return None
+
+
+def _procesar_message_changed(event, logger):
+    """Gestiona message_changed: resuelve transcripciones de audio pendientes."""
+    msg = event.get("message") or {}
+    channel = event.get("channel", "")
+    ts = msg.get("ts")
+
+    original_event = _audio_pendiente.get((channel, ts))
+    if not original_event:
+        return
+
+    for f in (msg.get("files") or []):
+        if (f.get("mimetype") or "").startswith("audio/"):
+            t = f.get("transcription") or {}
+            if t.get("status") == "complete":
+                texto = ((t.get("preview") or {}).get("content") or "").strip()
+                if texto:
+                    _audio_pendiente.pop((channel, ts), None)
+                    _despachar_con_texto(original_event, texto, logger)
+            return
+
+
+@slack_app.event({"type": "message", "subtype": "message_changed"})
+def handle_message_changed(event, logger):
+    _procesar_message_changed(event, logger)
+
+
 @slack_app.event("message")
 def handle_message_events(event, logger):
+    if event.get("subtype") in ("message_deleted", "bot_message"):
+        return
+
     if event.get("bot_id"):
         return
 
@@ -978,6 +1096,10 @@ def handle_message_events(event, logger):
             text=t("bm.no_reply_outside", idioma_por_slack_id(user_id)),
         )
         return
+
+    event = _gestionar_audio(event, channel, thread_ts, logger)
+    if event is None:
+        return  # audio pendiente, hilo de fondo espera la transcripción
 
     if thread_ts == ca_dm_ts.get(user_id):
         manejar_mensaje_ca(event, logger)

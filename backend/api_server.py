@@ -66,6 +66,7 @@ from .project_evals import (
     guardar_evaluacion_proyecto,
     obtener_proyectos_manager,
     obtener_estado_evaluaciones_proyecto,
+    enviar_recordatorios_proyecto,
     añadir_miembro_proyecto,
     eliminar_miembro_proyecto,
     obtener_evals_completadas_proyecto,
@@ -905,6 +906,20 @@ class ApiHandler(BaseHTTPRequestHandler):
                 else:
                     resultado = eliminar_miembro_proyecto(proyecto, empleado, _idi)
                 self.responder_json(resultado)
+                return
+            if ruta == "/api/recordatorio-proyecto":
+                manager = sesion.get("persona", "")
+                _idi = idioma_por_sesion(sesion)
+                proyecto = datos.get("proyecto", "").strip()
+                if not proyecto:
+                    self.responder_json({"error": t("pe.err_missing_fields", _idi)}, 400)
+                    return
+                proyectos_mgr = {p["nombre_proyecto"] for p in obtener_proyectos_manager(manager)}
+                if proyecto not in proyectos_mgr:
+                    self.responder_json({"error": t("pe.err_not_your_project", _idi)}, 403)
+                    return
+                resultado = enviar_recordatorios_proyecto(proyecto)
+                self.responder_json({"ok": True, **resultado})
                 return
             if ruta == "/api/guardar-evaluacion-proyecto":
                 evaluador = sesion.get("persona", "")

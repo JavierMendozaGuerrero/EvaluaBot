@@ -3130,6 +3130,33 @@ function MisProyectosActivosPage({ token, user, onBack }) {
   const [añadirMap, setAñadirMap] = useState({});
   const [añadirValor, setAñadirValor] = useState({});
   const [accionMsg, setAccionMsg] = useState({});
+  const [enviandoRec, setEnviandoRec] = useState({});
+  const [recMsg, setRecMsg] = useState({});
+
+  async function enviarRecordatorio(proyecto) {
+    setEnviandoRec((prev) => ({ ...prev, [proyecto]: true }));
+    setRecMsg((prev) => ({ ...prev, [proyecto]: "" }));
+    try {
+      const data = await apiRequest("/api/recordatorio-proyecto", {
+        token,
+        method: "POST",
+        body: { proyecto },
+      });
+      if (data.ok) {
+        const n = (data.enviados || []).length;
+        setRecMsg((prev) => ({
+          ...prev,
+          [proyecto]: data.sin_pendientes ? t("mpa.rec_none") : t("mpa.rec_sent", { n }),
+        }));
+      } else {
+        setRecMsg((prev) => ({ ...prev, [proyecto]: data.error || t("mpa.rec_err") }));
+      }
+    } catch (err) {
+      setRecMsg((prev) => ({ ...prev, [proyecto]: err.message }));
+    } finally {
+      setEnviandoRec((prev) => ({ ...prev, [proyecto]: false }));
+    }
+  }
 
   function cargarEstado(nombre) {
     apiRequest(`/api/estado-proyecto?proyecto=${encodeURIComponent(nombre)}`, { token })
@@ -3193,7 +3220,7 @@ function MisProyectosActivosPage({ token, user, onBack }) {
         ) : proyectos.length === 0 ? (
           <p className="fine">{t("mpa.no_projects")}</p>
         ) : (
-          proyectos.map((p) => {
+          proyectos.map((p, idx) => {
             const nombre = p.nombre_proyecto;
             const estado = estadoMap[nombre];
             const mostrarAnadir = añadirMap[nombre];
@@ -3280,15 +3307,18 @@ function MisProyectosActivosPage({ token, user, onBack }) {
                 {/* Add member */}
                 {mostrarAnadir ? (
                   <div style={{ display: "flex", gap: 8, marginTop: 12, alignItems: "center", flexWrap: "wrap" }}>
-                    <select
+                    <input
+                      type="text"
+                      list={`emp-list-${idx}`}
                       value={valorAnadir}
                       onChange={(e) => setAñadirValor((prev) => ({ ...prev, [nombre]: e.target.value }))}
+                      placeholder={t("mpa.select_person")}
                       style={{ flex: 1, minWidth: 180 }}
-                    >
-                      <option value="">{t("mpa.select_person")}</option>
-                      {disponibles.map((e) => <option key={e} value={e}>{e}</option>)}
-                    </select>
-                    <button disabled={!valorAnadir} onClick={() => modificarMiembro("añadir", nombre, valorAnadir)}>{t("mpa.add")}</button>
+                    />
+                    <datalist id={`emp-list-${idx}`}>
+                      {disponibles.map((e) => <option key={e} value={e} />)}
+                    </datalist>
+                    <button disabled={!disponibles.includes(valorAnadir)} onClick={() => modificarMiembro("añadir", nombre, valorAnadir)}>{t("mpa.add")}</button>
                     <button className="secondary" onClick={() => setAñadirMap((prev) => ({ ...prev, [nombre]: false }))}>{t("common.cancel")}</button>
                   </div>
                 ) : (
@@ -3300,6 +3330,15 @@ function MisProyectosActivosPage({ token, user, onBack }) {
                     {t("mpa.add_member")}
                   </button>
                 )}
+                <button
+                  type="button"
+                  onClick={() => enviarRecordatorio(nombre)}
+                  disabled={enviandoRec[nombre]}
+                  style={{ marginTop: 12, marginLeft: 8, height: 32, minHeight: "auto", padding: "0 14px", background: "transparent", color: "var(--accent)", border: "1px solid var(--accent)", borderRadius: "var(--radius-pill)", fontSize: 12, fontWeight: 400 }}
+                >
+                  {enviandoRec[nombre] ? t("mpa.rec_sending") : t("mpa.rec_button")}
+                </button>
+                {recMsg[nombre] && <p className="fine" style={{ marginTop: 8 }}>{recMsg[nombre]}</p>}
               </div>
             );
           })

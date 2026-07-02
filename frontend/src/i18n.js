@@ -364,6 +364,11 @@ export const STRINGS = {
   "mpa.select_person": { es: "Selecciona una persona...", en: "Select a person..." },
   "mpa.add": { es: "Añadir", en: "Add" },
   "mpa.add_member": { es: "+ Añadir miembro", en: "+ Add member" },
+  "mpa.rec_button": { es: "Enviar recordatorio al equipo", en: "Send reminder to team" },
+  "mpa.rec_sending": { es: "Enviando...", en: "Sending..." },
+  "mpa.rec_sent": { es: "Recordatorio enviado a {n} persona(s) con evaluaciones pendientes.", en: "Reminder sent to {n} person(s) with pending evaluations." },
+  "mpa.rec_none": { es: "Nadie tiene evaluaciones pendientes en este proyecto. 🎉", en: "Nobody has pending evaluations in this project. 🎉" },
+  "mpa.rec_err": { es: "No se pudo enviar el recordatorio.", en: "Could not send the reminder." },
 
   // --- Activar evaluaciones de proyecto (ActivarEvaluacionesProyectoPage) ---
   "aep.err_type_project": { es: "Escribe el nombre del proyecto.", en: "Type the project name." },

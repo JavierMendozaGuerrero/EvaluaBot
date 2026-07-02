@@ -3130,6 +3130,33 @@ function MisProyectosActivosPage({ token, user, onBack }) {
   const [añadirMap, setAñadirMap] = useState({});
   const [añadirValor, setAñadirValor] = useState({});
   const [accionMsg, setAccionMsg] = useState({});
+  const [enviandoRec, setEnviandoRec] = useState({});
+  const [recMsg, setRecMsg] = useState({});
+
+  async function enviarRecordatorio(proyecto) {
+    setEnviandoRec((prev) => ({ ...prev, [proyecto]: true }));
+    setRecMsg((prev) => ({ ...prev, [proyecto]: "" }));
+    try {
+      const data = await apiRequest("/api/recordatorio-proyecto", {
+        token,
+        method: "POST",
+        body: { proyecto },
+      });
+      if (data.ok) {
+        const n = (data.enviados || []).length;
+        setRecMsg((prev) => ({
+          ...prev,
+          [proyecto]: data.sin_pendientes ? t("mpa.rec_none") : t("mpa.rec_sent", { n }),
+        }));
+      } else {
+        setRecMsg((prev) => ({ ...prev, [proyecto]: data.error || t("mpa.rec_err") }));
+      }
+    } catch (err) {
+      setRecMsg((prev) => ({ ...prev, [proyecto]: err.message }));
+    } finally {
+      setEnviandoRec((prev) => ({ ...prev, [proyecto]: false }));
+    }
+  }
 
   function cargarEstado(nombre) {
     apiRequest(`/api/estado-proyecto?proyecto=${encodeURIComponent(nombre)}`, { token })
@@ -3300,6 +3327,15 @@ function MisProyectosActivosPage({ token, user, onBack }) {
                     {t("mpa.add_member")}
                   </button>
                 )}
+                <button
+                  type="button"
+                  onClick={() => enviarRecordatorio(nombre)}
+                  disabled={enviandoRec[nombre]}
+                  style={{ marginTop: 12, marginLeft: 8, height: 32, minHeight: "auto", padding: "0 14px", background: "transparent", color: "var(--accent)", border: "1px solid var(--accent)", borderRadius: "var(--radius-pill)", fontSize: 12, fontWeight: 400 }}
+                >
+                  {enviandoRec[nombre] ? t("mpa.rec_sending") : t("mpa.rec_button")}
+                </button>
+                {recMsg[nombre] && <p className="fine" style={{ marginTop: 8 }}>{recMsg[nombre]}</p>}
               </div>
             );
           })

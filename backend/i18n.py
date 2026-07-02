@@ -223,6 +223,14 @@ TEXTOS: dict[str, dict[str, str]] = {
     "pe.err_missing_project": {"es": "Falta el nombre del proyecto.", "en": "The project name is missing."},
     "pe.err_select_employee": {"es": "Debes seleccionar al menos un empleado.", "en": "You must select at least one employee."},
     "pe.err_missing_fields": {"es": "Faltan campos obligatorios.", "en": "Required fields are missing."},
+    "pe.err_not_your_project": {"es": "Este proyecto no es tuyo o no está activo.", "en": "This project isn't yours or isn't active."},
+    # --- Recordatorios de evaluaciones de proyecto (DM de Slack) ---
+    "rec.reminder": {
+        "es": "👋 ¡Hola! Tienes *{n}* evaluación(es) pendiente(s) del proyecto *{proyecto}*:\n{lista}\n\nPor favor, entra en la web y rellénalas. ¡Gracias! 🙏",
+        "en": "👋 Hi! You have *{n}* pending evaluation(s) for the project *{proyecto}*:\n{lista}\n\nPlease log in to the web app and complete them. Thanks! 🙏",
+    },
+    "rec.item_self": {"es": "tu autoevaluación", "en": "your self-evaluation"},
+    "rec.item_eval": {"es": "la evaluación de {nombre}", "en": "the evaluation of {nombre}"},
     "bm.editing": {"es": "✏️ Modificando...", "en": "✏️ Editing..."},
     "report.word_meta": {
         "es": "Generado el {fecha}. Evaluado: {evaluado}. Evaluaciones analizadas: {n}.",

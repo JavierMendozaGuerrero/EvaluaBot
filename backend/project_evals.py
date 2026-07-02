@@ -34,6 +34,7 @@ from .notion_service import (
     _query_bbdd,
     _titulo_child_page,
     _usa_data_sources,
+    idioma_por_slack_id,
     obtener_registros_empleados,
 )
 from .utils import normalizar_nombre
@@ -929,6 +930,59 @@ def obtener_estado_evaluaciones_proyecto(proyecto: str) -> list:
         resultado.append({"nombre": miembro, "n_evaluaciones": len(evaluadores), "evaluadores": evaluadores, "pendientes": pendientes, "autoevaluacion_hecha": autoevaluacion_hecha})
 
     return resultado
+
+
+def enviar_recordatorios_proyecto(proyecto: str) -> dict:
+    """Envía un DM de Slack a cada miembro del proyecto con evaluaciones pendientes.
+
+    A cada miembro se le indica qué le falta: su autoevaluación y/o evaluar a los
+    compañeros que aún no ha evaluado. Devuelve {enviados, fallidos, sin_pendientes}.
+    """
+    estado = obtener_estado_evaluaciones_proyecto(proyecto)
+    if not estado:
+        return {"enviados": [], "fallidos": [], "sin_pendientes": True}
+
+    # Invertir el estado: para cada evaluador, a qué compañeros aún debe evaluar.
+    faltan_evaluar: dict = {m["nombre"]: [] for m in estado}
+    for m in estado:
+        for evaluador in m.get("pendientes", []):
+            if evaluador in faltan_evaluar and evaluador != m["nombre"]:
+                faltan_evaluar[evaluador].append(m["nombre"])
+    falta_auto = {m["nombre"]: not m.get("autoevaluacion_hecha", False) for m in estado}
+
+    id_por_nombre = {
+        normalizar_nombre(r.get("nombre", "")): r.get("id_usuario")
+        for r in obtener_registros_empleados()
+    }
+
+    enviados: list = []
+    fallidos: list = []
+    for m in estado:
+        nombre = m["nombre"]
+        items_pendientes = list(faltan_evaluar.get(nombre, []))
+        if not items_pendientes and not falta_auto.get(nombre):
+            continue  # este miembro ya lo tiene todo hecho
+        slack_id = id_por_nombre.get(normalizar_nombre(nombre))
+        if not slack_id:
+            logging.warning("No se encontró Slack ID para '%s' (recordatorio proyecto '%s')", nombre, proyecto)
+            fallidos.append(nombre)
+            continue
+        try:
+            idioma = idioma_por_slack_id(slack_id)
+            lineas = []
+            if falta_auto.get(nombre):
+                lineas.append(f"• {t('rec.item_self', idioma)}")
+            for otro in items_pendientes:
+                lineas.append(f"• {t('rec.item_eval', idioma, nombre=otro)}")
+            texto = t("rec.reminder", idioma, n=len(lineas), proyecto=proyecto, lista="\n".join(lineas))
+            dm = slack_app.client.conversations_open(users=[slack_id])
+            slack_app.client.chat_postMessage(channel=dm["channel"]["id"], text=texto)
+            enviados.append(nombre)
+        except Exception:
+            logging.exception("Error enviando recordatorio a '%s' del proyecto '%s'", nombre, proyecto)
+            fallidos.append(nombre)
+
+    return {"enviados": enviados, "fallidos": fallidos, "sin_pendientes": not enviados and not fallidos}
 
 
 def _desactivar_proyecto(proyecto: str) -> bool:

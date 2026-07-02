@@ -27,6 +27,8 @@ TEXTOS: dict[str, dict[str, str]] = {
     "report.evaluaciones": {"es": "Evaluaciones", "en": "Evaluations"},
     "report.fuente": {"es": "Fuente", "en": "Source"},
     # --- Bot Slack: evaluacion mensual de proyecto (slack_bot.py) ---
+    "bm.back_btn": {"es": "⬅️ Atrás", "en": "⬅️ Back"},
+    "bm.back_done": {"es": "⬅️ Volviste atrás", "en": "⬅️ Went back"},
     "bm.pending_fallback": {"es": "📍 Tienes una evaluación mensual pendiente", "en": "📍 You have a monthly evaluation pending"},
     "bm.pending_intro": {
         "es": ("📍 *Tienes una evaluación mensual pendiente.*\n\n"
@@ -137,6 +139,8 @@ TEXTOS: dict[str, dict[str, str]] = {
     "bm.employee_selected_plain": {"es": "Empleado seleccionado: {nombre}", "en": "Selected employee: {nombre}"},
 
     # --- Bot Slack: seguimiento personal (personal_eval.py) ---
+    "bp.back_btn": {"es": "⬅️ Atrás", "en": "⬅️ Back"},
+    "bp.back_done": {"es": "⬅️ Volviste atrás", "en": "⬅️ Went back"},
     "bp.opp_header": {"es": "*Esta es tu oportunidad para:*", "en": "*This is your chance to:*"},
     "bp.opp_1": {"es": '*1.* Explicar cómo estás ayudando en _"Contribution to the firm"_', "en": '*1.* Explain how you\'re helping with _"Contribution to the firm"_'},
     "bp.opp_2": {"es": "*2.* Cómo te estás acercando a tus objetivos", "en": "*2.* How you're getting closer to your goals"},
@@ -163,6 +167,8 @@ TEXTOS: dict[str, dict[str, str]] = {
     "bp.reminder": {"es": "⏰ Recuerda que tienes una evaluación personal pendiente. Responde en este hilo cuando puedas.", "en": "⏰ Remember you have a personal evaluation pending. Reply in this thread when you can."},
 
     # --- Bot Slack: revision del CA sobre sus advisees (ca_reviews.py) ---
+    "bc.back_btn": {"es": "⬅️ Atrás", "en": "⬅️ Back"},
+    "bc.back_done": {"es": "⬅️ Volviste atrás", "en": "⬅️ Went back"},
     "bc.mod_which": {"es": "¿Qué respuesta quieres modificar?\n1. Advisee\n2. Opinión\n\nResponde con el número o el nombre del campo.", "en": "Which answer do you want to edit?\n1. Advisee\n2. Opinion\n\nReply with the number or the field name."},
     "bc.mod_which_bold": {"es": "*¿Qué respuesta quieres modificar?*", "en": "*Which answer do you want to edit?*"},
     "bc.opinion_label": {"es": "Opinión", "en": "Opinion"},

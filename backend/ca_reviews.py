@@ -16,6 +16,7 @@ from datetime import datetime, timedelta, timezone
 
 from . import config
 from .clients import notion, slack_app
+from .conversation_back import boton_atras, fila_atras, limpiar_historial, pop_historial, push_historial, tiene_historial
 from .i18n import t, boton_idioma_slack
 from .notion_service import (
     _coincide_parent_bbdd,
@@ -741,6 +742,147 @@ def enviar_pregunta_inicial_ca() -> None:
         logging.exception("Error en enviar_pregunta_inicial_ca")
 
 
+def _enviar_lista_advisees(user_id, channel, thread_ts, estado, idioma, logger, prefijo=""):
+    """Muestra la lista de advisees pendientes con botones. Se usa tanto al avanzar
+    normalmente como al reenviar esta pregunta tras pulsar 'Atrás'."""
+    ca_nombre_l, ca_aliases_l = _identidad_usuario_slack(user_id, logger)
+    advisees_l = obtener_advisees(ca_nombre_l, ca_aliases=ca_aliases_l)
+    guardados = estado.get("advisees_guardados", set())
+    advisees_l = [a for a in advisees_l if a not in guardados]
+    estado["lista_advisees"] = advisees_l
+    # Si ya has opinado sobre todos tus advisees, cierra la evaluación con el mensaje de siempre.
+    if not advisees_l and guardados:
+        with _lock:
+            if user_id in conversaciones_ca:
+                conversaciones_ca[user_id]["modo"] = "terminado"
+        slack_app.client.chat_postMessage(
+            channel=channel, thread_ts=thread_ts, text=prefijo + t("bc.all_advisees_done", idioma),
+        )
+        return
+    texto_header = prefijo + t("bc.which_advisee", idioma)
+    if advisees_l:
+        elementos = [
+            {
+                "type": "button",
+                "text": {"type": "plain_text", "text": nombre},
+                "value": nombre,
+                "action_id": f"ca_advisee_{i}",
+            }
+            for i, nombre in enumerate(advisees_l)
+        ]
+        elementos.append({
+            "type": "button",
+            "text": {"type": "plain_text", "text": t("bc.btn_finish", idioma), "emoji": True},
+            "action_id": "ca_advisee_no",
+        })
+        blocks = [
+            {"type": "section", "text": {"type": "mrkdwn", "text": texto_header}},
+            {"type": "actions", "elements": elementos},
+        ] + fila_atras("atras_ca", "bc.back_btn", estado, idioma)
+        slack_app.client.chat_postMessage(
+            channel=channel,
+            thread_ts=thread_ts,
+            text=texto_header,
+            blocks=blocks,
+        )
+    else:
+        slack_app.client.chat_postMessage(channel=channel, thread_ts=thread_ts, text=texto_header)
+
+
+def _enviar_pregunta_permiso_claude(channel, thread_ts, idioma, estado):
+    blocks = [
+        {"type": "section", "text": {"type": "mrkdwn", "text": t("bc.claude_summary_q_full", idioma)}},
+        {
+            "type": "actions",
+            "elements": [
+                {
+                    "type": "button",
+                    "text": {"type": "plain_text", "text": t("bc.yes", idioma)},
+                    "value": "si",
+                    "action_id": "permiso_claude_si",
+                    "style": "primary",
+                },
+                {
+                    "type": "button",
+                    "text": {"type": "plain_text", "text": t("bc.no", idioma)},
+                    "value": "no",
+                    "action_id": "permiso_claude_no",
+                },
+            ],
+        },
+    ] + fila_atras("atras_ca", "bc.back_btn", estado, idioma)
+    slack_app.client.chat_postMessage(
+        channel=channel, thread_ts=thread_ts, text=t("bc.claude_summary_q", idioma), blocks=blocks,
+    )
+
+
+def _enviar_pregunta_opinion(channel, thread_ts, idioma, estado):
+    preguntas = obtener_preguntas_seguimiento_ca()
+    if estado.get("opinion_via_claude"):
+        texto = f"📊 *Resumen generado por Claude:*\n\n{estado.get('resumen_actual', '')}\n\n{preguntas.get('opinion_con_claude', '')}"
+    else:
+        texto = preguntas.get("opinion_sin_claude", "")
+    bloques = [{"type": "section", "text": {"type": "mrkdwn", "text": texto}}] + fila_atras("atras_ca", "bc.back_btn", estado, idioma)
+    slack_app.client.chat_postMessage(channel=channel, thread_ts=thread_ts, text=texto, blocks=bloques)
+
+
+def _enviar_confirmacion_ca(channel, thread_ts, idioma, estado):
+    texto_conf = t("bc.conf_summary", idioma, advisee=estado.get("advisee_actual", "?"), opinion=estado.get("opinion_actual", "?"))
+    elementos = [
+        {
+            "type": "button",
+            "text": {"type": "plain_text", "text": t("bc.btn_save_yes", idioma), "emoji": True},
+            "style": "primary",
+            "action_id": "ca_confirmar",
+        },
+        {
+            "type": "button",
+            "text": {"type": "plain_text", "text": t("bm.edit_btn", idioma), "emoji": True},
+            "action_id": "ca_modificar",
+        },
+    ]
+    if tiene_historial(estado):
+        elementos.append(boton_atras("atras_ca", "bc.back_btn", idioma))
+    slack_app.client.chat_postMessage(
+        channel=channel,
+        thread_ts=thread_ts,
+        text=texto_conf,
+        blocks=[
+            {"type": "section", "text": {"type": "mrkdwn", "text": texto_conf}},
+            {"type": "actions", "elements": elementos},
+        ],
+    )
+
+
+def _enviar_menu_modificacion_ca(channel, thread_ts, idioma, estado):
+    bloques = _bloques_menu_modificacion_ca(idioma) + fila_atras("atras_ca", "bc.back_btn", estado, idioma)
+    slack_app.client.chat_postMessage(channel=channel, thread_ts=thread_ts, text=t("bc.mod_which", idioma), blocks=bloques)
+
+
+def _enviar_pregunta_valor_modificacion_ca(channel, thread_ts, idioma, estado):
+    campo = estado.get("campo_modificando")
+    texto = _texto_pregunta_ca_por_clave(campo, idioma) if campo else _texto_menu_modificacion_ca(idioma)
+    bloques = [{"type": "section", "text": {"type": "mrkdwn", "text": texto}}] + fila_atras("atras_ca", "bc.back_btn", estado, idioma)
+    slack_app.client.chat_postMessage(channel=channel, thread_ts=thread_ts, text=texto, blocks=bloques)
+
+
+def _reenviar_pregunta_actual_ca(user_id, channel, thread_ts, estado, logger):
+    idi = estado.get("idioma", "es")
+    modo = estado.get("modo")
+    if modo in ("esperando_advisee", "esperando_otro"):
+        _enviar_lista_advisees(user_id, channel, thread_ts, estado, idi, logger)
+    elif modo == "esperando_permiso_claude":
+        _enviar_pregunta_permiso_claude(channel, thread_ts, idi, estado)
+    elif modo == "esperando_opinion":
+        _enviar_pregunta_opinion(channel, thread_ts, idi, estado)
+    elif modo == "confirmacion_ca":
+        _enviar_confirmacion_ca(channel, thread_ts, idi, estado)
+    elif modo == "seleccionando_modificacion_ca":
+        _enviar_menu_modificacion_ca(channel, thread_ts, idi, estado)
+    elif modo == "modificando_respuesta_ca":
+        _enviar_pregunta_valor_modificacion_ca(channel, thread_ts, idi, estado)
+
+
 # ---------------------------------------------------------------------------
 # Lógica de conversación – llamada desde slack_bot.py
 # ---------------------------------------------------------------------------
@@ -797,18 +939,23 @@ def manejar_mensaje_ca(event, logger) -> None:
 
         elif modo == "esperando_permiso_claude":
             if _es_si(texto):
+                push_historial(estado)
                 payload["advisee"] = estado.get("advisee_actual", "?")
                 payload["resumen_bruto"] = estado.get("resumen_bruto", "")
                 estado["modo"] = "esperando_opinion"
+                estado["opinion_via_claude"] = True
                 accion = "llamar_claude"
             elif _es_no(texto):
+                push_historial(estado)
                 estado["resumen_actual"] = estado.get("resumen_bruto", "")
                 estado["modo"] = "esperando_opinion"
+                estado["opinion_via_claude"] = False
                 accion = "pedir_opinion_sin_claude"
             else:
                 accion = "aclarar_permiso_claude"
 
         elif modo == "esperando_opinion":
+            push_historial(estado)
             payload["advisee"] = estado.get("advisee_actual", "?")
             payload["ca_nombre"] = estado.get("ca_nombre")
             payload["opinion"] = texto
@@ -824,9 +971,11 @@ def manejar_mensaje_ca(event, logger) -> None:
                 estado["modo"] = "esperando_otro"
                 accion = "guardar_y_preguntar_otro"
             elif _es_modificar(texto):
+                push_historial(estado)
                 estado["modo"] = "seleccionando_modificacion_ca"
                 accion = "pedir_modificacion_ca"
             elif _es_no(texto):
+                limpiar_historial(estado)
                 estado["modo"] = "esperando_otro"
                 accion = "cancelar_opinion"
             else:
@@ -838,6 +987,7 @@ def manejar_mensaje_ca(event, logger) -> None:
             payload["opinion"] = estado.get("opinion_actual", "")
             campo = _clave_modificacion_ca(texto)
             if campo:
+                push_historial(estado)
                 estado["campo_modificando"] = campo
                 estado["modo"] = "modificando_respuesta_ca"
                 accion = "pedir_valor_modificacion_ca"
@@ -863,6 +1013,7 @@ def manejar_mensaje_ca(event, logger) -> None:
                             payload["error_advisee_no_asociado"] = empleado
                             payload["advisees_permitidos"] = permitidos
                         else:
+                            push_historial(estado)
                             estado["ca_nombre"] = ca_nombre
                             estado["advisee_actual"] = empleado
                             payload["advisee"] = empleado
@@ -870,6 +1021,7 @@ def manejar_mensaje_ca(event, logger) -> None:
                             estado["modo"] = "confirmacion_ca"
                             accion = "mostrar_confirmacion_ca"
                 elif campo == "opinion":
+                    push_historial(estado)
                     estado["opinion_actual"] = texto
                     payload["opinion"] = texto
                     estado.pop("campo_modificando", None)
@@ -891,46 +1043,7 @@ def manejar_mensaje_ca(event, logger) -> None:
             accion = "ya_terminado"
 
     def _reply_lista_advisees(prefijo=""):
-        ca_nombre_l, ca_aliases_l = _identidad_usuario_slack(user_id, logger)
-        advisees_l = obtener_advisees(ca_nombre_l, ca_aliases=ca_aliases_l)
-        guardados = estado.get("advisees_guardados", set())
-        advisees_l = [a for a in advisees_l if a not in guardados]
-        estado["lista_advisees"] = advisees_l
-        # Si ya has opinado sobre todos tus advisees, cierra la evaluación con el mensaje de siempre.
-        if not advisees_l and guardados:
-            with _lock:
-                if conv_key in conversaciones_ca:
-                    conversaciones_ca[conv_key]["modo"] = "terminado"
-            reply(prefijo + t("bc.all_advisees_done", _idi))
-            return
-        texto_header = prefijo + t("bc.which_advisee", _idi)
-        if advisees_l:
-            elementos = [
-                {
-                    "type": "button",
-                    "text": {"type": "plain_text", "text": nombre},
-                    "value": nombre,
-                    "action_id": f"ca_advisee_{i}",
-                }
-                for i, nombre in enumerate(advisees_l)
-            ]
-            elementos.append({
-                "type": "button",
-                "text": {"type": "plain_text", "text": t("bc.btn_finish", _idi), "emoji": True},
-                "action_id": "ca_advisee_no",
-            })
-            blocks = [
-                {"type": "section", "text": {"type": "mrkdwn", "text": texto_header}},
-                {"type": "actions", "elements": elementos},
-            ]
-            slack_app.client.chat_postMessage(
-                channel=channel,
-                thread_ts=thread_ts,
-                text=texto_header,
-                blocks=blocks,
-            )
-        else:
-            reply(texto_header)
+        _enviar_lista_advisees(user_id, channel, thread_ts, estado, _idi, logger, prefijo)
 
     if accion == "pedir_advisee":
         # Primer mensaje del hilo: barra de carga mientras leemos los advisees de Notion.
@@ -951,6 +1064,7 @@ def manejar_mensaje_ca(event, logger) -> None:
             advisee = advisee_encontrado
             with _lock:
                 if conv_key in conversaciones_ca:
+                    push_historial(conversaciones_ca[conv_key])
                     conversaciones_ca[conv_key]["advisee_actual"] = advisee
                     conversaciones_ca[conv_key]["ca_nombre"] = ca_nombre
             # Buscar datos en Notion (última opinión, evaluaciones, comentarios y objetivos)
@@ -1008,70 +1122,13 @@ def manejar_mensaje_ca(event, logger) -> None:
                         text=f"📌 Objetivos de {advisee}",
                         blocks=[{"type": "section", "text": {"type": "mrkdwn", "text": f"📌 *Objetivos de {advisee}:*\n{txt_objetivos}"}}],
                     )
-                slack_app.client.chat_postMessage(
-                    channel=channel,
-                    thread_ts=thread_ts,
-                    text=t("bc.claude_summary_q", _idi),
-                    blocks=[
-                        {
-                            "type": "section",
-                            "text": {"type": "mrkdwn", "text": t("bc.claude_summary_q_full", _idi)},
-                        },
-                        {
-                            "type": "actions",
-                            "block_id": f"blq_claude_{user_id}",
-                            "elements": [
-                                {
-                                    "type": "button",
-                                    "text": {"type": "plain_text", "text": t("bc.yes", _idi)},
-                                    "value": "si",
-                                    "action_id": "permiso_claude_si",
-                                    "style": "primary",
-                                },
-                                {
-                                    "type": "button",
-                                    "text": {"type": "plain_text", "text": t("bc.no", _idi)},
-                                    "value": "no",
-                                    "action_id": "permiso_claude_no",
-                                },
-                            ],
-                        },
-                    ],
-                )
+                _enviar_pregunta_permiso_claude(channel, thread_ts, _idi, estado)
 
     elif accion == "mostrar_confirmacion_ca":
-        texto_conf = t("bc.conf_summary", _idi, advisee=payload.get('advisee', '?'), opinion=payload.get('opinion', '?'))
-        slack_app.client.chat_postMessage(
-            channel=channel,
-            thread_ts=thread_ts,
-            text=texto_conf,
-            blocks=[
-                {"type": "section", "text": {"type": "mrkdwn", "text": texto_conf}},
-                {
-                    "type": "actions",
-                    "elements": [
-                        {
-                            "type": "button",
-                            "text": {"type": "plain_text", "text": t("bc.btn_save_yes", _idi), "emoji": True},
-                            "style": "primary",
-                            "action_id": "ca_confirmar",
-                        },
-                        {
-                            "type": "button",
-                            "text": {"type": "plain_text", "text": t("bm.edit_btn", _idi), "emoji": True},
-                            "action_id": "ca_modificar",
-                        },
-                    ],
-                },
-            ],
-        )
+        _enviar_confirmacion_ca(channel, thread_ts, _idi, estado)
 
     elif accion == "pedir_modificacion_ca":
-        slack_app.client.chat_postMessage(
-            channel=channel, thread_ts=thread_ts,
-            text=t("bc.mod_which", _idi),
-            blocks=_bloques_menu_modificacion_ca(_idi),
-        )
+        _enviar_menu_modificacion_ca(channel, thread_ts, _idi, estado)
 
     elif accion == "pedir_valor_modificacion_ca":
         campo = estado.get("campo_modificando")
@@ -1100,20 +1157,19 @@ def manejar_mensaje_ca(event, logger) -> None:
                 resumen_claude = generar_resumen_evaluacion(advisee, cargo or "", resumen_bruto)
             except Exception:
                 logging.exception("Error generando resumen Claude para '%s'", advisee)
-        _preg = obtener_preguntas_seguimiento_ca().get("opinion_con_claude", "")
+        with _lock:
+            if conv_key in conversaciones_ca:
+                conversaciones_ca[conv_key]["resumen_actual"] = resumen_claude or resumen_bruto
         if resumen_claude:
-            with _lock:
-                if conv_key in conversaciones_ca:
-                    conversaciones_ca[conv_key]["resumen_actual"] = resumen_claude
-            reply(f"📊 *Resumen generado por Claude:*\n\n{resumen_claude}\n\n{_preg}")
+            _enviar_pregunta_opinion(channel, thread_ts, _idi, estado)
         else:
-            with _lock:
-                if conv_key in conversaciones_ca:
-                    conversaciones_ca[conv_key]["resumen_actual"] = resumen_bruto
-            reply(f"⚠️ No se pudo generar el resumen con Claude.\n\n{_preg}")
+            _preg = obtener_preguntas_seguimiento_ca().get("opinion_con_claude", "")
+            texto_fallo = f"⚠️ No se pudo generar el resumen con Claude.\n\n{_preg}"
+            bloques = [{"type": "section", "text": {"type": "mrkdwn", "text": texto_fallo}}] + fila_atras("atras_ca", "bc.back_btn", estado, _idi)
+            slack_app.client.chat_postMessage(channel=channel, thread_ts=thread_ts, text=texto_fallo, blocks=bloques)
 
     elif accion == "pedir_opinion_sin_claude":
-        reply(obtener_preguntas_seguimiento_ca().get("opinion_sin_claude", ""))
+        _enviar_pregunta_opinion(channel, thread_ts, _idi, estado)
 
     elif accion == "aclarar_permiso_claude":
         reply(t("bc.clarify_claude", _idi))
@@ -1133,8 +1189,10 @@ def manejar_mensaje_ca(event, logger) -> None:
         resumen = estado.get("resumen_actual", "")
         ok, error = _guardar_opinion(ca_nombre, payload["advisee"], payload["opinion"], resumen)
         if ok:
-            guardados = estado.setdefault("advisees_guardados", set())
-            guardados.add(payload["advisee"])
+            with _lock:
+                guardados = estado.setdefault("advisees_guardados", set())
+                guardados.add(payload["advisee"])
+                limpiar_historial(estado)
             _reply_lista_advisees(t("bc.opinion_saved", _idi))
         else:
             _reply_lista_advisees(t("bc.opinion_save_error", _idi, error=error[:300]))
@@ -1457,6 +1515,34 @@ def _handle_mod_ca_opcion(ack, body, logger):
         manejar_mensaje_ca(evento, logger)
     except Exception:
         logger.exception("Error procesando opción de modificación CA")
+
+
+@slack_app.action("atras_ca")
+def _handle_ca_atras(ack, body, client, logger):
+    ack()
+    try:
+        user_id = body["user"]["id"]
+        channel = body["channel"]["id"]
+        msg = body.get("message", {})
+        thread_ts = msg.get("thread_ts") or msg.get("ts", "")
+        idi = idioma_por_slack_id(user_id)
+        try:
+            client.chat_update(
+                channel=channel,
+                ts=msg["ts"],
+                blocks=[{"type": "section", "text": {"type": "mrkdwn", "text": t("bc.back_done", idi)}}],
+                text=t("bc.back_done", idi),
+            )
+        except Exception:
+            logger.warning("No se pudo actualizar el mensaje al volver atrás (CA)")
+
+        with _lock:
+            estado = conversaciones_ca.get(user_id)
+            if not estado or not pop_historial(estado):
+                return
+        _reenviar_pregunta_actual_ca(user_id, channel, thread_ts, estado, logger)
+    except Exception:
+        logger.exception("Error procesando atrás en opiniones CA")
 
 
 @slack_app.action(re.compile(r"^permiso_claude_(si|no)$"))

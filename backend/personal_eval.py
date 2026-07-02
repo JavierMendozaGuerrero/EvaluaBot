@@ -6,6 +6,7 @@ from datetime import datetime, timezone
 
 from . import config
 from .clients import slack_app
+from .conversation_back import boton_atras, fila_atras, limpiar_historial, pop_historial, push_historial, tiene_historial
 from .i18n import t, boton_idioma_slack
 from .notion_service import (
     evaluacion_personal_guardada_desde,
@@ -153,6 +154,49 @@ def _enviar_preguntando_otro(channel, thread_ts, idioma="es"):
     )
 
 
+def _enviar_pregunta_personal(dm_channel, thread_ts, texto, estado, idioma="es"):
+    bloques = [{"type": "section", "text": {"type": "mrkdwn", "text": texto}}]
+    bloques += fila_atras("atras_personal", "bp.back_btn", estado, idioma)
+    slack_app.client.chat_postMessage(channel=dm_channel, thread_ts=thread_ts, text=texto, blocks=bloques)
+
+
+def _enviar_resumen_personal(dm_channel, thread_ts, texto, estado, idioma="es"):
+    elementos = [
+        {
+            "type": "button",
+            "text": {"type": "plain_text", "text": t("bp.btn_save_yes", idioma), "emoji": True},
+            "style": "primary",
+            "action_id": "personal_confirmar",
+        },
+        {
+            "type": "button",
+            "text": {"type": "plain_text", "text": t("bm.edit_btn", idioma), "emoji": True},
+            "action_id": "personal_modificar",
+        },
+    ]
+    if tiene_historial(estado):
+        elementos.append(boton_atras("atras_personal", "bp.back_btn", idioma))
+    slack_app.client.chat_postMessage(
+        channel=dm_channel,
+        thread_ts=thread_ts,
+        text=texto,
+        blocks=[
+            {"type": "section", "text": {"type": "mrkdwn", "text": texto}},
+            {"type": "actions", "elements": elementos},
+        ],
+    )
+
+
+def _reenviar_pregunta_actual_personal(estado, dm_channel, thread_ts):
+    idi = estado.get("idioma", "es")
+    modo = estado.get("modo")
+    if modo == "esperando_comentario":
+        _enviar_pregunta_personal(dm_channel, thread_ts, t("bp.rewrite_comment", idi), estado, idi)
+    elif modo == "confirmacion":
+        texto = t("bp.comment_summary_opts", idi, texto=estado["respuestas"].get("comentario", ""))
+        _enviar_resumen_personal(dm_channel, thread_ts, texto, estado, idi)
+
+
 def notificar_urgencia_personal_web(nombre: str, descripcion: str) -> bool:
     """Notifica la urgencia al CA del empleado. Para uso desde la web."""
     return _notificar_urgencia_al_ca(nombre, descripcion, logging.getLogger(__name__))
@@ -235,6 +279,7 @@ def manejar_mensaje_personal(event, logger) -> None:
 
         elif modo == "esperando_comentario":
             if texto:
+                push_historial(estado)
                 estado["respuestas"]["comentario"] = texto
                 estado["modo"] = "confirmacion"
                 accion = "mostrar_resumen"
@@ -249,6 +294,7 @@ def manejar_mensaje_personal(event, logger) -> None:
                 accion = "guardar"
                 respuestas_snap = dict(estado["respuestas"])
             elif texto_norm in {"modificar", "cambiar", "editar", "modify", "change", "edit"}:
+                push_historial(estado)
                 estado["modo"] = "esperando_comentario"
                 estado["respuestas"].pop("comentario", None)
                 accion = "preguntar"
@@ -290,34 +336,11 @@ def manejar_mensaje_personal(event, logger) -> None:
         return
 
     if accion == "preguntar":
-        reply(pregunta)
+        _enviar_pregunta_personal(dm_channel, thread_ts, pregunta, estado, _idi)
         return
 
     if accion == "mostrar_resumen":
-        slack_app.client.chat_postMessage(
-            channel=dm_channel,
-            thread_ts=thread_ts,
-            text=pregunta,
-            blocks=[
-                {"type": "section", "text": {"type": "mrkdwn", "text": pregunta}},
-                {
-                    "type": "actions",
-                    "elements": [
-                        {
-                            "type": "button",
-                            "text": {"type": "plain_text", "text": t("bp.btn_save_yes", _idi), "emoji": True},
-                            "style": "primary",
-                            "action_id": "personal_confirmar",
-                        },
-                        {
-                            "type": "button",
-                            "text": {"type": "plain_text", "text": t("bm.edit_btn", _idi), "emoji": True},
-                            "action_id": "personal_modificar",
-                        },
-                    ],
-                },
-            ],
-        )
+        _enviar_resumen_personal(dm_channel, thread_ts, pregunta, estado, _idi)
         return
 
     if accion == "preguntar_otro":
@@ -347,6 +370,7 @@ def manejar_mensaje_personal(event, logger) -> None:
             with _lock:
                 if conversaciones_personal.get(user_id, {}).get("modo") == "guardar":
                     conversaciones_personal[user_id]["modo"] = "preguntando_otro"
+                    limpiar_historial(conversaciones_personal[user_id])
             _enviar_preguntando_otro(dm_channel, thread_ts, _idi)
         else:
             reply(t("bp.err_save", _idi))
@@ -387,6 +411,35 @@ def _handle_personal_modificar(ack, body, logger):
         manejar_mensaje_personal(evento, logger)
     except Exception:
         logger.exception("Error procesando modificación personal interactiva")
+
+
+@slack_app.action("atras_personal")
+def _handle_personal_atras(ack, body, client, logger):
+    ack()
+    try:
+        user_id = body["user"]["id"]
+        channel = body["channel"]["id"]
+        msg = body.get("message", {})
+        thread_ts = msg.get("thread_ts") or msg.get("ts", "")
+        dm_channel = personal_dm_canal.get(user_id, channel)
+        idi = idioma_por_slack_id(user_id)
+        try:
+            client.chat_update(
+                channel=channel,
+                ts=msg["ts"],
+                blocks=[{"type": "section", "text": {"type": "mrkdwn", "text": t("bp.back_done", idi)}}],
+                text=t("bp.back_done", idi),
+            )
+        except Exception:
+            logger.warning("No se pudo actualizar el mensaje al volver atrás (personal)")
+
+        with _lock:
+            estado = conversaciones_personal.get(user_id)
+            if not estado or not pop_historial(estado):
+                return
+        _reenviar_pregunta_actual_personal(estado, dm_channel, thread_ts)
+    except Exception:
+        logger.exception("Error procesando atrás en evaluación personal")
 
 
 @slack_app.action("personal_otro_si")

@@ -823,58 +823,58 @@ def _nombre_real(user_id: str, logger) -> str:
         return user_id
 
 
-def _enviar_mas_proyectos(channel, thread_ts, idioma="es"):
+def _enviar_mas_proyectos(channel, thread_ts, idioma="es", estado: dict = None):
     texto = t("bm.more_projects_send", idioma)
+    elementos = [
+        {
+            "type": "button",
+            "text": {"type": "plain_text", "text": t("bm.yes_btn", idioma), "emoji": True},
+            "style": "primary",
+            "action_id": "proyecto_proyectos_si",
+        },
+        {
+            "type": "button",
+            "text": {"type": "plain_text", "text": t("bm.no_btn", idioma), "emoji": True},
+            "action_id": "proyecto_proyectos_no",
+        },
+    ]
+    if estado is not None and tiene_historial(estado):
+        elementos.append(boton_atras("atras_negocio", "bm.back_btn", idioma))
     slack_app.client.chat_postMessage(
         channel=channel,
         thread_ts=thread_ts,
         text=texto,
         blocks=[
             {"type": "section", "text": {"type": "mrkdwn", "text": texto}},
-            {
-                "type": "actions",
-                "elements": [
-                    {
-                        "type": "button",
-                        "text": {"type": "plain_text", "text": t("bm.yes_btn", idioma), "emoji": True},
-                        "style": "primary",
-                        "action_id": "proyecto_proyectos_si",
-                    },
-                    {
-                        "type": "button",
-                        "text": {"type": "plain_text", "text": t("bm.no_btn", idioma), "emoji": True},
-                        "action_id": "proyecto_proyectos_no",
-                    },
-                ],
-            },
+            {"type": "actions", "elements": elementos},
         ],
     )
 
 
-def _enviar_mas_miembros(channel, thread_ts, idioma="es"):
+def _enviar_mas_miembros(channel, thread_ts, idioma="es", estado: dict = None):
     texto = t("bm.saved_more_members", idioma)
+    elementos = [
+        {
+            "type": "button",
+            "text": {"type": "plain_text", "text": t("bm.yes_btn", idioma), "emoji": True},
+            "style": "primary",
+            "action_id": "proyecto_mas_si",
+        },
+        {
+            "type": "button",
+            "text": {"type": "plain_text", "text": t("bm.no_btn", idioma), "emoji": True},
+            "action_id": "proyecto_mas_no",
+        },
+    ]
+    if estado is not None and tiene_historial(estado):
+        elementos.append(boton_atras("atras_negocio", "bm.back_btn", idioma))
     slack_app.client.chat_postMessage(
         channel=channel,
         thread_ts=thread_ts,
         text=texto,
         blocks=[
             {"type": "section", "text": {"type": "mrkdwn", "text": texto}},
-            {
-                "type": "actions",
-                "elements": [
-                    {
-                        "type": "button",
-                        "text": {"type": "plain_text", "text": t("bm.yes_btn", idioma), "emoji": True},
-                        "style": "primary",
-                        "action_id": "proyecto_mas_si",
-                    },
-                    {
-                        "type": "button",
-                        "text": {"type": "plain_text", "text": t("bm.no_btn", idioma), "emoji": True},
-                        "action_id": "proyecto_mas_no",
-                    },
-                ],
-            },
+            {"type": "actions", "elements": elementos},
         ],
     )
 
@@ -1022,6 +1022,10 @@ def _reenviar_pregunta_actual_negocio(estado: dict, dm_channel: str, thread_ts: 
             preguntas_area=estado.get("preguntas_area"),
         )
         _enviar_resumen_con_botones(dm_channel, thread_ts, texto, idi, estado=estado)
+    elif modo == "preguntar_mas_personas":
+        _enviar_mas_miembros(dm_channel, thread_ts, idi, estado=estado)
+    elif modo == "preguntar_mas_proyectos":
+        _enviar_mas_proyectos(dm_channel, thread_ts, idi, estado=estado)
     elif modo == "confirmacion_barbecho":
         labores = estado.get("labores_barbecho", "")
         texto_resumen = t("bm.barbecho_summary", idi, labores=labores)
@@ -1653,6 +1657,7 @@ def handle_message_events(event, logger):
         elif modo == "preguntar_mas_personas":
             _area_mp = estado.get("area", "negocio")
             if _es_si(texto):
+                push_historial(estado)
                 estado["modo"] = "esperando_persona"
                 if _area_mp == "middleoffice":
                     accion = "pedir_persona_mo"
@@ -1669,6 +1674,7 @@ def handle_message_events(event, logger):
                     estado["modo"] = "terminado"
                     accion = "terminar"
                 else:
+                    push_historial(estado)
                     estado["modo"] = "preguntar_mas_proyectos"
                     accion = "pedir_mas_proyectos"
                     pregunta = t("bm.more_projects_q", estado["idioma"])
@@ -1678,6 +1684,7 @@ def handle_message_events(event, logger):
 
         elif modo == "preguntar_mas_proyectos":
             if _es_si(texto):
+                push_historial(estado)
                 estado["modo"] = "esperando_proyecto"
                 estado["proyecto_actual"] = None
                 accion = "pedir_proyecto"
@@ -1715,12 +1722,12 @@ def handle_message_events(event, logger):
     _ACCIONES_PREGUNTA = {
         "preguntar",
         "pedir_persona", "pedir_persona_mismo_proyecto",
-        "pedir_proyecto",
+        "pedir_proyecto", "pedir_mas_personas",
     }
-    # Estas pertenecen al submenú de "Modificar" tras confirmar, o son preguntas
-    # posteriores al guardado: no ofrecen "Atrás" (no hay reenvío implementado para ellas).
+    # Esta pertenece al submenú de "Modificar" tras confirmar: no ofrece "Atrás"
+    # (no hay reenvío implementado para ella).
     _ACCIONES_PREGUNTA_SIN_ATRAS = {
-        "pedir_valor_modificacion", "pedir_mas_personas",
+        "pedir_valor_modificacion",
     }
     if accion == "pedir_situacion":
         _enviar_pregunta_situacion(dm_channel, thread_ts, estado["idioma"], estado)
@@ -1792,7 +1799,7 @@ def handle_message_events(event, logger):
         _enviar_pregunta_texto(dm_channel, thread_ts, pregunta if pregunta else "", estado, estado.get("idioma", "es"))
         return
     if accion == "pedir_mas_proyectos":
-        _enviar_mas_proyectos(dm_channel, thread_ts, estado.get("idioma", "es"))
+        _enviar_mas_proyectos(dm_channel, thread_ts, estado.get("idioma", "es"), estado=estado)
         return
     if accion == "preguntar_valoracion":
         slack_app.client.chat_postMessage(
@@ -1851,7 +1858,7 @@ def handle_message_events(event, logger):
                     "area": estado.get("area", "negocio"),
                     "respuestas": dict(respuestas_finales),
                 })
-            _enviar_mas_miembros(dm_channel, thread_ts, estado.get("idioma", "es"))
+            _enviar_mas_miembros(dm_channel, thread_ts, estado.get("idioma", "es"), estado=estado)
             return
         reply(t("bm.err_save_notion", estado.get("idioma", "es")))
         return
@@ -1958,7 +1965,7 @@ def handle_proyecto_confirmar(ack, body, logger):
                 "area": estado.get("area", "negocio"),
                 "respuestas": dict(respuestas_finales),
             })
-        _enviar_mas_miembros(dm_channel, thread_ts, estado.get("idioma", "es"))
+        _enviar_mas_miembros(dm_channel, thread_ts, estado.get("idioma", "es"), estado=estado)
         return
     reply(t("bm.err_save_notion", estado.get("idioma", "es")))
 
@@ -1981,6 +1988,7 @@ def handle_proyecto_mas_si(ack, body):
         if not es_activo or not estado or estado.get("modo") != "preguntar_mas_personas":
             return
         _area_mp = estado.get("area", "negocio")
+        push_historial(estado)
         estado["modo"] = "esperando_persona"
 
     if _area_mp == "middleoffice":
@@ -1988,16 +1996,17 @@ def handle_proyecto_mas_si(ack, body):
         mo_ev = obtener_evaluados_middleoffice(nombre_ev or user_id, [user_id])
         if mo_ev:
             lista = "\n".join(f"- {e}" for e in mo_ev)
-            reply(t("bm.ask_who_list", estado.get("idioma", "es"), lista=lista))
+            _enviar_pregunta_texto(dm_channel, thread_ts, t("bm.ask_who_list", estado.get("idioma", "es"), lista=lista), estado, estado.get("idioma", "es"))
         else:
-            reply(t("bm.ask_who", estado.get("idioma", "es")))
+            _enviar_pregunta_texto(dm_channel, thread_ts, t("bm.ask_who", estado.get("idioma", "es")), estado, estado.get("idioma", "es"))
     else:
         proyecto = estado.get("proyecto_actual") or ""
-        reply(
+        texto = (
             t("bm.ask_other_member_proj", estado.get("idioma", "es"), proy=proyecto)
             if proyecto
             else t("bm.ask_other_member", estado.get("idioma", "es"))
         )
+        _enviar_pregunta_texto(dm_channel, thread_ts, texto, estado, estado.get("idioma", "es"))
 
 
 @slack_app.action("proyecto_mas_no")
@@ -2022,6 +2031,7 @@ def handle_proyecto_mas_no(ack, body):
             estado["modo"] = "terminado"
             _evs_mo = [e for e in (estado.get("evaluaciones_guardadas") or []) if time.time() - e["ts"] <= 2 * 24 * 3600]
         else:
+            push_historial(estado)
             estado["modo"] = "preguntar_mas_proyectos"
             _evs_mo = []
 
@@ -2030,7 +2040,7 @@ def handle_proyecto_mas_no(ack, body):
         if _evs_mo:
             _enviar_boton_modificar(dm_channel, thread_ts, estado.get("idioma", "es"))
     else:
-        _enviar_mas_proyectos(dm_channel, thread_ts, estado.get("idioma", "es"))
+        _enviar_mas_proyectos(dm_channel, thread_ts, estado.get("idioma", "es"), estado=estado)
 
 
 @slack_app.action("proyecto_modificar_eval")
@@ -2175,10 +2185,11 @@ def handle_proyecto_proyectos_si(ack, body):
         estado = conversaciones.get(user_id)
         if not es_activo or not estado or estado.get("modo") != "preguntar_mas_proyectos":
             return
+        push_historial(estado)
         estado["modo"] = "esperando_proyecto"
         estado["proyecto_actual"] = None
 
-    reply(t("bm.ask_project_more", estado.get("idioma", "es")))
+    _enviar_pregunta_texto(dm_channel, thread_ts, t("bm.ask_project_more", estado.get("idioma", "es")), estado, estado.get("idioma", "es"))
 
 
 @slack_app.action("proyecto_proyectos_no")

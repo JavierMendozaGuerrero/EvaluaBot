@@ -16,10 +16,18 @@ estos scopes en **OAuth & Permissions -> Bot Token Scopes**:
 
 - `chat:write`
 - `channels:history`
-- `users:read`   <- nuevo, necesario para obtener el nombre de quien responde
+- `users:read`
+- `lists:write`   <- solo si activas `SLACK_LISTAS_PENDIENTES_HABILITADO`, requiere workspace de Slack en plan de pago
+- `lists:read`    <- ídem, opcional, solo para depurar/consultar la lista
 
 Si añades un scope nuevo, tienes que volver a pulsar **"Reinstall to Workspace"**
 para que el token tenga los permisos actualizados.
+
+La lista de "Evaluaciones pendientes" (Slack Lists) está desactivada por
+defecto (`SLACK_LISTAS_PENDIENTES_HABILITADO=false` en `.env`) porque requiere
+plan de pago. Actívala solo cuando el bot esté en el workspace definitivo de
+la empresa (que sí es de pago) — el resto del bot funciona igual con esto
+desactivado.
 
 ## 2. Configurar Notion
 

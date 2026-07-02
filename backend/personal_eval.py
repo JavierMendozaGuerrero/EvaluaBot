@@ -7,6 +7,7 @@ from datetime import datetime, timezone
 from . import config
 from .clients import slack_app
 from .conversation_back import boton_atras, fila_atras, limpiar_historial, pop_historial, push_historial, tiene_historial
+from .slack_lists import añadir_pendiente, enlace_lista_pendientes, quitar_pendiente
 from .i18n import t, boton_idioma_slack
 from .notion_service import (
     evaluacion_personal_guardada_desde,
@@ -59,9 +60,9 @@ def _obtener_bloques_oportunidad(idioma: str = "es") -> list:
     return bloques
 
 
-def _bloques_dm_personal(idioma):
+def _bloques_dm_personal(idioma, enlace_pendientes=None):
     """Bloques del DM inicial de la evaluación personal, con botón de cambio de idioma en la cabecera."""
-    return [
+    bloques = [
         {
             "type": "section",
             "text": {"type": "mrkdwn", "text": t("bp.pending_intro", idioma)},
@@ -82,8 +83,11 @@ def _bloques_dm_personal(idioma):
             "type": "section",
             "text": {"type": "mrkdwn", "text": t("bp.send_to_start", idioma)},
         },
-        {"type": "divider"},
     ]
+    if enlace_pendientes:
+        bloques.append({"type": "section", "text": {"type": "mrkdwn", "text": t("bp.pendientes_link", idioma, url=enlace_pendientes)}})
+    bloques.append({"type": "divider"})
+    return bloques
 
 
 def enviar_pregunta_inicial_personal() -> None:
@@ -100,6 +104,7 @@ def enviar_pregunta_inicial_personal() -> None:
         with _lock:
             personal_dm_activas.clear()
 
+        enlace_pendientes = enlace_lista_pendientes()
         for user_id in slack_ids:
             try:
                 resp_dm = slack_app.client.conversations_open(users=[user_id])
@@ -108,7 +113,7 @@ def enviar_pregunta_inicial_personal() -> None:
                 resp = slack_app.client.chat_postMessage(
                     channel=dm_channel,
                     text=t("bp.pending_fallback", idioma),
-                    blocks=_bloques_dm_personal(idioma),
+                    blocks=_bloques_dm_personal(idioma, enlace_pendientes),
                 )
                 msg_ts = resp["ts"]
                 with _lock:
@@ -117,6 +122,7 @@ def enviar_pregunta_inicial_personal() -> None:
                     personal_dm_canal[user_id] = dm_channel
                     personal_hora[user_id] = time.time()
                     conversaciones_personal.pop(user_id, None)
+                añadir_pendiente("personal", user_id, t("bp.pendientes_titulo", idioma))
                 logging.info("Evaluación personal enviada a %s", user_id)
             except Exception as exc:
                 err_str = str(exc)
@@ -373,6 +379,7 @@ def manejar_mensaje_personal(event, logger) -> None:
                 if conversaciones_personal.get(user_id, {}).get("modo") == "guardar":
                     conversaciones_personal[user_id]["modo"] = "preguntando_otro"
                     limpiar_historial(conversaciones_personal[user_id])
+            quitar_pendiente("personal", user_id)
             _enviar_preguntando_otro(dm_channel, thread_ts, _idi)
         else:
             reply(t("bp.err_save", _idi))

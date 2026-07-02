@@ -46,6 +46,10 @@ def _require_env(name):
 SLACK_BOT_TOKEN = _require_env("SLACK_BOT_TOKEN")
 SLACK_APP_TOKEN = _require_env("SLACK_APP_TOKEN")
 SLACK_TEST_USER_ID = os.environ.get("SLACK_TEST_USER_ID", "").strip()
+# Slack Lists requiere workspace de pago. Desactivado por defecto: se
+# probó en un workspace gratuito de pruebas; activar (env var a "true")
+# solo cuando el bot esté en el workspace de pago definitivo de la empresa.
+SLACK_LISTAS_PENDIENTES_HABILITADO = env_bool("SLACK_LISTAS_PENDIENTES_HABILITADO", "false")
 NOTION_TOKEN = _require_env("NOTION_TOKEN")
 NOTION_DATABASE_ID = _require_env("NOTION_DATABASE_ID")
 NOTION_EMPLOYEES_DATABASE_ID = os.environ.get("NOTION_EMPLOYEES_DATABASE_ID", NOTION_DATABASE_ID).strip()

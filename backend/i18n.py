@@ -29,6 +29,8 @@ TEXTOS: dict[str, dict[str, str]] = {
     # --- Bot Slack: evaluacion mensual de proyecto (slack_bot.py) ---
     "bm.back_btn": {"es": "⬅️ Atrás", "en": "⬅️ Back"},
     "bm.back_done": {"es": "⬅️ Volviste atrás", "en": "⬅️ Went back"},
+    "bm.pendientes_link": {"es": "📋 También la tienes en tu <{url}|lista de pendientes>", "en": "📋 You can also find it in your <{url}|pending list>"},
+    "bm.pendientes_titulo": {"es": "Evaluación mensual", "en": "Monthly evaluation"},
     "bm.pending_fallback": {"es": "📍 Tienes una evaluación mensual pendiente", "en": "📍 You have a monthly evaluation pending"},
     "bm.pending_intro": {
         "es": ("📍 *Tienes una evaluación mensual pendiente.*\n\n"
@@ -141,6 +143,8 @@ TEXTOS: dict[str, dict[str, str]] = {
     # --- Bot Slack: seguimiento personal (personal_eval.py) ---
     "bp.back_btn": {"es": "⬅️ Atrás", "en": "⬅️ Back"},
     "bp.back_done": {"es": "⬅️ Volviste atrás", "en": "⬅️ Went back"},
+    "bp.pendientes_link": {"es": "📋 También la tienes en tu <{url}|lista de pendientes>", "en": "📋 You can also find it in your <{url}|pending list>"},
+    "bp.pendientes_titulo": {"es": "Seguimiento personal", "en": "Personal tracking"},
     "bp.opp_header": {"es": "*Esta es tu oportunidad para:*", "en": "*This is your chance to:*"},
     "bp.current_goals_header": {"es": "\U0001F4CC *Tus objetivos actuales:*", "en": "\U0001F4CC *Your current goals:*"},
     "bp.no_current_goals": {"es": "\U0001F4CC No tienes objetivos registrados actualmente.", "en": "\U0001F4CC You don't have any goals recorded at the moment."},
@@ -169,8 +173,11 @@ TEXTOS: dict[str, dict[str, str]] = {
     "bp.reminder": {"es": "⏰ Recuerda que tienes una evaluación personal pendiente. Responde en este hilo cuando puedas.", "en": "⏰ Remember you have a personal evaluation pending. Reply in this thread when you can."},
 
     # --- Bot Slack: revision del CA sobre sus advisees (ca_reviews.py) ---
+    "bc.informe_final_disponible": {"es": "🎉 Ya tienes disponible tu informe final. Puedes verlo en la web.", "en": "🎉 Your final report is now available. You can view it on the web."},
     "bc.back_btn": {"es": "⬅️ Atrás", "en": "⬅️ Back"},
     "bc.back_done": {"es": "⬅️ Volviste atrás", "en": "⬅️ Went back"},
+    "bc.pendientes_link": {"es": "📋 También la tienes en tu <{url}|lista de pendientes>", "en": "📋 You can also find it in your <{url}|pending list>"},
+    "bc.pendientes_titulo": {"es": "Opiniones CA", "en": "CA opinions"},
     "bc.mod_which": {"es": "¿Qué respuesta quieres modificar?\n1. Advisee\n2. Opinión\n\nResponde con el número o el nombre del campo.", "en": "Which answer do you want to edit?\n1. Advisee\n2. Opinion\n\nReply with the number or the field name."},
     "bc.mod_which_bold": {"es": "*¿Qué respuesta quieres modificar?*", "en": "*Which answer do you want to edit?*"},
     "bc.opinion_label": {"es": "Opinión", "en": "Opinion"},
@@ -228,6 +235,11 @@ TEXTOS: dict[str, dict[str, str]] = {
     "pe.err_add_member": {"es": "Error interno al añadir miembro.", "en": "Internal error while adding member."},
     "pe.err_member_not_found": {"es": "No se encontró ese miembro en el proyecto.", "en": "That member was not found in the project."},
     "pe.err_remove_member": {"es": "Error interno al eliminar miembro.", "en": "Internal error while removing member."},
+
+    # --- Evaluaciones extra (fuera de proyecto) (evaluaciones_extra.py) ---
+    "evex.err_db_access": {"es": "No se pudo acceder a la BD de solicitudes en Notion.", "en": "Could not access the requests database in Notion."},
+    "evex.err_request": {"es": "Error interno al crear la solicitud.", "en": "Internal error while creating the request."},
+    "evex.slack_solicitud": {"es": "📩 *{evaluado}* te ha pedido que le evalúes sobre: _{contexto}_\nEs opcional: si quieres responder, hazlo en la web de evaluaciones.", "en": "📩 *{evaluado}* has asked you to evaluate them on: _{contexto}_\nIt's optional: if you want to answer, do it on the evaluations website."},
     "pe.err_missing_project": {"es": "Falta el nombre del proyecto.", "en": "The project name is missing."},
     "pe.err_select_employee": {"es": "Debes seleccionar al menos un empleado.", "en": "You must select at least one employee."},
     "pe.err_missing_fields": {"es": "Faltan campos obligatorios.", "en": "Required fields are missing."},
@@ -287,6 +299,8 @@ TEXTOS: dict[str, dict[str, str]] = {
     "anual.src_proyecto": {"es": "Evaluación de proyecto", "en": "Project evaluation"},
     "anual.src_seguimiento": {"es": "Seguimiento personal", "en": "Personal tracking"},
     "anual.src_barbecho": {"es": "Barbecho", "en": "Bench"},
+    "anual.src_extra": {"es": "Evaluación extra", "en": "Extra evaluation"},
+    "anual.additional_evals": {"es": "EVALUACIONES ADICIONALES", "en": "ADDITIONAL EVALUATIONS"},
     "anual.doc_title": {"es": "EVALUACIÓN ANUAL", "en": "ANNUAL EVALUATION"},
     "anual.employee": {"es": "Empleado", "en": "Employee"},
     "anual.date": {"es": "Fecha", "en": "Date"},

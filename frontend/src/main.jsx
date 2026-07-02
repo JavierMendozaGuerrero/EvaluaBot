@@ -324,6 +324,10 @@ function AdminPanel({ token, onBack }) {
   const [anonLoading, setAnonLoading] = useState(false);
   const [generandoFuente, setGenerandoFuente] = useState("");
   const [fuenteError, setFuenteError] = useState("");
+  const [feedbackConfidencial, setFeedbackConfidencial] = useState(null);
+  const [vistaGlobalConfidencial, setVistaGlobalConfidencial] = useState(false);
+  const [feedbackGlobal, setFeedbackGlobal] = useState(null);
+  const [buscarGlobalConfidencial, setBuscarGlobalConfidencial] = useState("");
 
   useEffect(() => {
     apiRequest("/api/evaluados", { token })
@@ -333,6 +337,20 @@ function AdminPanel({ token, onBack }) {
       .then((data) => setAnonimato(data))
       .catch(() => {});
   }, [token]);
+
+  useEffect(() => {
+    if (!vistaGlobalConfidencial) return;
+    setFeedbackGlobal(null);
+    apiRequest("/api/feedback-confidencial-todos", { token })
+      .then((data) => setFeedbackGlobal(data.feedback || []))
+      .catch(() => setFeedbackGlobal([]));
+  }, [token, vistaGlobalConfidencial]);
+
+  const feedbackGlobalFiltrado = (feedbackGlobal || []).filter((f) => {
+    const q = buscarGlobalConfidencial.trim().toLowerCase();
+    if (!q) return true;
+    return (f.evaluado || "").toLowerCase().includes(q) || (f.proyecto || "").toLowerCase().includes(q);
+  });
 
   async function toggleGlobalAnonimo() {
     if (!anonimato || anonLoading) return;
@@ -368,6 +386,14 @@ function AdminPanel({ token, onBack }) {
     apiRequest(`/api/informe-final?evaluado=${encodeURIComponent(selected.nombre)}`, { token })
       .then((data) => setInformeFinal(data))
       .catch(() => setInformeFinal({ disponible: false, mensaje: t("admin.err_load_report") }));
+  }, [token, selected?.nombre]);
+
+  useEffect(() => {
+    if (!selected) return;
+    setFeedbackConfidencial(null);
+    apiRequest(`/api/feedback-confidencial?evaluado=${encodeURIComponent(selected.nombre)}`, { token })
+      .then((data) => setFeedbackConfidencial(data.feedback || []))
+      .catch(() => setFeedbackConfidencial([]));
   }, [token, selected?.nombre]);
 
   async function selectEmpleado(item) {
@@ -503,11 +529,77 @@ function AdminPanel({ token, onBack }) {
                   })()}
                 </div>
               )}
+              <div style={{ marginTop: 20 }}>
+                <p className="kicker">{t("admin.confidential_feedback_title")}</p>
+                <p className="fine">{t("admin.confidential_feedback_note")}</p>
+                {feedbackConfidencial === null ? (
+                  <p className="fine">{t("common.loading")}</p>
+                ) : feedbackConfidencial.length === 0 ? (
+                  <p className="fine">{t("admin.confidential_feedback_empty")}</p>
+                ) : (
+                  <div className="objetivos-list">
+                    {feedbackConfidencial.map((f, i) => (
+                      <article key={i} className="objetivo-item">
+                        <p className="opinion-fecha fine">
+                          {f.fecha ? f.fecha.slice(0, 10) : t("common.no_date")}
+                          {f.proyecto ? ` · ${f.proyecto}` : ""}
+                        </p>
+                        {f.q1 && <p className="objetivo-texto"><strong>{f.q1}</strong></p>}
+                        {f.q2 && <p className="objetivo-texto">{f.q2}</p>}
+                      </article>
+                    ))}
+                  </div>
+                )}
+              </div>
               {statusMsg && (
                 <p className="fine error">{statusMsg}</p>
               )}
             </div>
           </div>
+        </div>
+        <Footer />
+      </main>
+    );
+  }
+
+  if (vistaGlobalConfidencial) {
+    return (
+      <main className="page">
+        <nav className="nav">
+          <a className="brand" href="/"><img src="/src/logo.png" alt="igeneris" className="brand-logo" /></a>
+          <button className="link-button" onClick={() => setVistaGlobalConfidencial(false)} style={{ marginLeft: "auto" }}>{t("common.back")}</button>
+        </nav>
+        <div className="admin-search-wrap">
+          <p className="kicker">{t("role.admin_title")}</p>
+          <h2>{t("admin.confidential_feedback_title")}</h2>
+          <p className="fine">{t("admin.confidential_feedback_all_note")}</p>
+          <div className="admin-search-field" style={{ marginTop: 16 }}>
+            <input
+              type="text"
+              placeholder={t("admin.confidential_feedback_search_ph")}
+              value={buscarGlobalConfidencial}
+              onChange={(e) => setBuscarGlobalConfidencial(e.target.value)}
+            />
+          </div>
+          {feedbackGlobal === null ? (
+            <p className="fine" style={{ marginTop: 20 }}>{t("common.loading")}</p>
+          ) : feedbackGlobalFiltrado.length === 0 ? (
+            <p className="fine" style={{ marginTop: 20 }}>{t("admin.confidential_feedback_empty")}</p>
+          ) : (
+            <div className="objetivos-list" style={{ marginTop: 20 }}>
+              {feedbackGlobalFiltrado.map((f, i) => (
+                <article key={i} className="objetivo-item">
+                  <p className="opinion-fecha fine">
+                    {f.fecha ? f.fecha.slice(0, 10) : t("common.no_date")}
+                    {f.proyecto ? ` · ${f.proyecto}` : ""}
+                  </p>
+                  <p className="objetivo-titulo"><strong>{f.evaluado}</strong></p>
+                  {f.q1 && <p className="objetivo-texto"><strong>{f.q1}</strong></p>}
+                  {f.q2 && <p className="objetivo-texto">{f.q2}</p>}
+                </article>
+              ))}
+            </div>
+          )}
         </div>
         <Footer />
       </main>
@@ -530,6 +622,15 @@ function AdminPanel({ token, onBack }) {
             › {anonimato.global_anonimo ? "Revelar todos los evaluadores" : "Ocultar todos los evaluadores"}
           </button>
         )}
+        <button
+          className="link-button"
+          onClick={() => setVistaGlobalConfidencial(true)}
+          style={{ color: "var(--accent)" }}
+          onMouseEnter={(e) => e.currentTarget.style.color = "#0a0a0a"}
+          onMouseLeave={(e) => e.currentTarget.style.color = "var(--accent)"}
+        >
+          › {t("admin.confidential_feedback_all_btn")}
+        </button>
         <button className="link-button" onClick={onBack} style={{ marginLeft: "auto" }}>{t("common.back")}</button>
       </nav>
       <div className="admin-search-wrap">
@@ -2183,10 +2284,13 @@ function Dashboard({ token, user, onLogout, onNavigate, onBackToRoleSelect = nul
   const [informesOpen, setInformesOpen] = useState(false);
   const [objOpen, setObjOpen] = useState(true);
   const [projOpen, setProjOpen] = useState(true);
+  const [extraEvalOpen, setExtraEvalOpen] = useState(false);
   const [seccionActiva, setSeccionActiva] = useState(null);
   const [proyectosActivos, setProyectosActivos] = useState([]);
   const [proyectosManager, setProyectosManager] = useState(null);
   const [proyectosVersion, setProyectosVersion] = useState(0);
+  const [proyectosProgreso, setProyectosProgreso] = useState({});
+  const [evaluacionesExtraPendientes, setEvaluacionesExtraPendientes] = useState([]);
 
   useEffect(() => {
     const apply = (data) => { setEvaluados(data.evaluados || []); setEvaluado(data.evaluados?.[0]?.value || ""); };
@@ -2288,6 +2392,41 @@ function Dashboard({ token, user, onLogout, onNavigate, onBackToRoleSelect = nul
       .then((d) => setProyectosManager(d.proyectos || []))
       .catch(() => setProyectosManager([]));
   }, [token, isAdmin, proyectosVersion]);
+
+  useEffect(() => {
+    apiRequest("/api/evaluaciones-extra-pendientes", { token })
+      .then((d) => setEvaluacionesExtraPendientes(d.pendientes || []))
+      .catch(() => setEvaluacionesExtraPendientes([]));
+  }, [token]);
+
+  useEffect(() => {
+    if (isAdmin || !proyectosActivos.length) { setProyectosProgreso({}); return; }
+    const persona = user?.persona || user?.username || "";
+    let cancelado = false;
+    Promise.all(
+      proyectosActivos.map((p) =>
+        Promise.all([
+          apiRequest(`/api/equipo-proyecto?proyecto=${encodeURIComponent(p.nombre_proyecto)}`, { token }),
+          apiRequest(`/api/evaluaciones-proyecto-completadas?proyecto=${encodeURIComponent(p.nombre_proyecto)}`, { token }),
+        ])
+          .then(([equipoData, completadasData]) => {
+            const equipo = equipoData.empleados || [];
+            const completadasKeys = (completadasData.completadas || []).map((c) => `${c.tipo}:${c.evaluado}`);
+            const lista = construirEvaluacionesProyectoAHacer(persona, p.activado_por || "", equipo);
+            const total = lista.length;
+            const done = lista.filter((it) => completadasKeys.includes(`${it.tipo}:${it.evaluado}`)).length;
+            return [p.nombre_proyecto, { done, total }];
+          })
+          .catch(() => [p.nombre_proyecto, null])
+      )
+    ).then((resultados) => {
+      if (cancelado) return;
+      const progreso = {};
+      resultados.forEach(([nombre, val]) => { if (val) progreso[nombre] = val; });
+      setProyectosProgreso(progreso);
+    });
+    return () => { cancelado = true; };
+  }, [token, isAdmin, proyectosActivos, user?.persona, user?.username]);
 
   const role = isAdmin ? "Admin" : "";
   const ownEvaluado = user?.persona || user?.username || "";
@@ -2425,6 +2564,60 @@ function Dashboard({ token, user, onLogout, onNavigate, onBackToRoleSelect = nul
               {!isAdmin && (
                 <DashNavItem label={t("dash.nav_activate_proj")} onClick={() => onNavigate({ type: "activar-evaluaciones-proyecto" })} />
               )}
+              <div style={{ borderBottom: "1px solid var(--border)" }}>
+                <div
+                  role="button"
+                  tabIndex={0}
+                  onClick={() => setExtraEvalOpen((v) => !v)}
+                  style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "11px 0", fontSize: 14, fontWeight: 400, cursor: "pointer", color: "#000", userSelect: "none" }}
+                >
+                  <span>{t("dash.nav_extra_evals")}</span>
+                  <span style={{ display: "inline-flex", alignItems: "center", gap: 8, flexShrink: 0 }}>
+                    {evaluacionesExtraPendientes.length > 0 && (
+                      <span style={{ display: "inline-flex", alignItems: "center", gap: 6, flexShrink: 0 }}>
+                        <span style={{ fontSize: 11, fontWeight: 400, color: "#000", opacity: 0.65, whiteSpace: "nowrap" }}>
+                          {t("eep.to_complete")}
+                        </span>
+                        <span
+                          title={t("dash.nav_pending_extra_evals")}
+                          style={{
+                            display: "inline-flex", alignItems: "center", justifyContent: "center",
+                            minWidth: 20, height: 20, padding: "0 5px", borderRadius: 4,
+                            background: "rgba(242,60,20,.16)", color: "#000", opacity: 0.65,
+                            fontSize: 11, fontWeight: 400, whiteSpace: "nowrap",
+                          }}
+                        >
+                          {evaluacionesExtraPendientes.length}
+                        </span>
+                      </span>
+                    )}
+                    <svg viewBox="0 0 24 24" fill="none" stroke="rgba(0,0,0,.3)" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"
+                      style={{ width: 11, height: 11, flexShrink: 0, transform: extraEvalOpen ? "rotate(180deg)" : "rotate(0deg)", transition: "transform .25s" }}>
+                      <polyline points="18 15 12 9 6 15" />
+                    </svg>
+                  </span>
+                </div>
+                {extraEvalOpen && (
+                  <div style={{ display: "flex", flexDirection: "column", gap: 6, paddingBottom: 12 }}>
+                    {evaluacionesExtraPendientes.map((p) => (
+                      <div
+                        key={p.page_id}
+                        onClick={() => onNavigate({ type: "formulario-evaluacion-extra", solicitudPageId: p.page_id, evaluado: p.evaluado, contexto: p.contexto })}
+                        style={{ display: "flex", flexDirection: "column", gap: 2, fontSize: 13, color: "#000", cursor: "pointer", padding: "5px 0", paddingLeft: 4 }}
+                      >
+                        <span>{t("eep.requested_by", { nombre: p.evaluado })}</span>
+                        <span style={{ fontSize: 12, fontWeight: 200, color: "rgba(0,0,0,.55)" }}>{p.contexto}</span>
+                      </div>
+                    ))}
+                    <div
+                      onClick={() => onNavigate({ type: "solicitar-evaluacion-extra" })}
+                      style={{ fontSize: 13, color: "var(--accent)", cursor: "pointer", padding: "5px 0", paddingLeft: 4 }}
+                    >
+                      {t("dash.nav_request_extra_eval")}
+                    </div>
+                  </div>
+                )}
+              </div>
               {!isAdmin && proyectosActivos.length > 0 && (
                 <div style={{ borderBottom: "1px solid var(--border)" }}>
                   <div
@@ -2441,15 +2634,46 @@ function Dashboard({ token, user, onLogout, onNavigate, onBackToRoleSelect = nul
                   </div>
                   {projOpen && (
                     <div style={{ display: "flex", flexDirection: "column", gap: 6, paddingBottom: 12 }}>
-                      {proyectosActivos.map((p) => (
-                        <div
-                          key={p.nombre_proyecto}
-                          onClick={() => onNavigate({ type: "evaluaciones-proyecto", proyectos: proyectosActivos, initialProyecto: p.nombre_proyecto })}
-                          style={{ fontSize: 13, color: "#000", cursor: "pointer", padding: "5px 0", paddingLeft: 4 }}
-                        >
-                          {p.nombre_proyecto}
-                        </div>
-                      ))}
+                      {proyectosActivos.map((p) => {
+                        const prog = proyectosProgreso[p.nombre_proyecto];
+                        const restantes = prog ? prog.total - prog.done : 0;
+                        return (
+                          <div
+                            key={p.nombre_proyecto}
+                            onClick={() => onNavigate({ type: "evaluaciones-proyecto", proyectos: proyectosActivos, initialProyecto: p.nombre_proyecto })}
+                            style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8, fontSize: 13, color: "#000", cursor: "pointer", padding: "5px 0", paddingLeft: 4 }}
+                          >
+                            <span>{p.nombre_proyecto}</span>
+                            {prog && restantes > 0 && (
+                              <span style={{ display: "inline-flex", alignItems: "center", gap: 6, flexShrink: 0 }}>
+                                <span style={{ fontSize: 11, fontWeight: 400, color: "#000", opacity: 0.65, whiteSpace: "nowrap" }}>
+                                  {t("dash.proj_evals_complete_label")}
+                                </span>
+                                <span
+                                  title={t("dash.proj_evals_pending")}
+                                  style={{
+                                    display: "inline-flex",
+                                    alignItems: "center",
+                                    justifyContent: "center",
+                                    minWidth: 26,
+                                    height: 20,
+                                    padding: "0 5px",
+                                    borderRadius: 4,
+                                    background: "rgba(242,60,20,.16)",
+                                    color: "#000",
+                                    opacity: 0.65,
+                                    fontSize: 11,
+                                    fontWeight: 400,
+                                    whiteSpace: "nowrap",
+                                  }}
+                                >
+                                  {restantes}/{prog.total}
+                                </span>
+                              </span>
+                            )}
+                          </div>
+                        );
+                      })}
                     </div>
                   )}
                 </div>
@@ -2504,7 +2728,7 @@ function Dashboard({ token, user, onLogout, onNavigate, onBackToRoleSelect = nul
                   <button
                     type="button"
                     onClick={abrirEdicionPais}
-                    style={{ border: "none", background: "none", cursor: "pointer", padding: 0, minHeight: "auto", fontSize: 12, fontWeight: 600, color: "var(--accent)", marginLeft: "auto", flexShrink: 0 }}
+                    style={{ border: "none", background: "none", cursor: "pointer", padding: 0, minHeight: "auto", fontSize: 12, fontWeight: 400, color: "rgba(0,0,0,.55)", marginLeft: "auto", flexShrink: 0 }}
                   >{t("dash.country_change")}</button>
                 )}
               </div>
@@ -2842,6 +3066,7 @@ function AdviseeDetail({ token, advisee, advisees, onBack, onNavigate }) {
   const [manualOpen, setManualOpen] = useState(false);
   const [generandoFuente, setGenerandoFuente] = useState("");
   const [fuenteError, setFuenteError] = useState("");
+  const [tieneEvaluacionesExtra, setTieneEvaluacionesExtra] = useState(false);
 
   // Descarga un PDF de una fuente (opiniones, evals proyecto, seguimiento, evals mensuales).
   async function descargarFuentePdf(endpoint, etiqueta) {
@@ -2883,6 +3108,12 @@ function AdviseeDetail({ token, advisee, advisees, onBack, onNavigate }) {
       .then((data) => setNotas(data.opiniones || []))
       .catch(() => setNotas([]))
       .finally(() => setLoadingNotas(false));
+  }, [token, advisee.nombre]);
+
+  useEffect(() => {
+    apiRequest(`/api/evaluaciones-extra-recibidas?evaluado=${encodeURIComponent(advisee.nombre)}`, { token })
+      .then((data) => setTieneEvaluacionesExtra((data.evaluaciones || []).length > 0))
+      .catch(() => setTieneEvaluacionesExtra(false));
   }, [token, advisee.nombre]);
 
   async function toggleAccesoIndividual() {
@@ -3046,6 +3277,12 @@ function AdviseeDetail({ token, advisee, advisees, onBack, onNavigate }) {
                           onClick={() => descargarFuentePdf("/api/generar-pdf-evals-mensuales", "evals_mensuales")}>
                           {generandoFuente === "/api/generar-pdf-evals-mensuales" ? t("ad.generating") : t("ad.dl_monthly_evals")}
                         </button>
+                        {tieneEvaluacionesExtra && (
+                          <button className="secondary" disabled={!!generandoFuente}
+                            onClick={() => descargarFuentePdf("/api/generar-pdf-evals-extra", "evals_extra")}>
+                            {generandoFuente === "/api/generar-pdf-evals-extra" ? t("ad.generating") : t("ad.dl_extra_evals")}
+                          </button>
+                        )}
                         {fuenteError && <p className="form-error">{fuenteError}</p>}
                       </div>
                     )}
@@ -3538,6 +3775,23 @@ const TIPOS_EVAL_INFO = [
   { tipo: "manager_a_miembros", label: "Evaluación de managers a miembros del equipo", desc: "Evalúa el desempeño de un miembro de tu equipo." },
 ];
 
+function construirEvaluacionesProyectoAHacer(persona, managerDelProyecto, equipo) {
+  if (!equipo.length) return [];
+  const personaNorm = persona.toLowerCase().trim();
+  const managerNorm = managerDelProyecto.toLowerCase().trim();
+  const esManager = personaNorm === managerNorm;
+  const lista = [{ tipo: "autoevaluacion", evaluado: persona, label: "Autoevaluación" }];
+  if (esManager) {
+    equipo.filter((m) => m.toLowerCase().trim() !== managerNorm)
+      .forEach((m) => lista.push({ tipo: "manager_a_miembros", evaluado: m, label: `Evaluación a miembro — ${m}` }));
+  } else {
+    lista.push({ tipo: "miembros_a_manager", evaluado: managerDelProyecto, label: `Evaluación al responsable — ${managerDelProyecto}` });
+    equipo.filter((m) => m.toLowerCase().trim() !== personaNorm && m.toLowerCase().trim() !== managerNorm)
+      .forEach((m) => lista.push({ tipo: "mismos_miembros", evaluado: m, label: `Evaluación a compañero — ${m}` }));
+  }
+  return lista;
+}
+
 function EvaluacionesProyectoPage({ token, user, proyectos, onBack, onNavigate, completedEvals = {}, initialProyecto }) {
   const [proyectoSeleccionado, setProyectoSeleccionado] = useState(initialProyecto || proyectos[0]?.nombre_proyecto || "");
   const [equipo, setEquipo] = useState([]);
@@ -3562,22 +3816,10 @@ function EvaluacionesProyectoPage({ token, user, proyectos, onBack, onNavigate, 
       .finally(() => setLoadingEquipo(false));
   }, [token, proyectoSeleccionado]);
 
-  const evaluacionesAHacer = useMemo(() => {
-    if (!equipo.length) return [];
-    const personaNorm = persona.toLowerCase().trim();
-    const managerNorm = managerDelProyecto.toLowerCase().trim();
-    const esManager = personaNorm === managerNorm;
-    const lista = [{ tipo: "autoevaluacion", evaluado: persona, label: "Autoevaluación" }];
-    if (esManager) {
-      equipo.filter((m) => m.toLowerCase().trim() !== managerNorm)
-        .forEach((m) => lista.push({ tipo: "manager_a_miembros", evaluado: m, label: `Evaluación a miembro — ${m}` }));
-    } else {
-      lista.push({ tipo: "miembros_a_manager", evaluado: managerDelProyecto, label: `Evaluación al responsable — ${managerDelProyecto}` });
-      equipo.filter((m) => m.toLowerCase().trim() !== personaNorm && m.toLowerCase().trim() !== managerNorm)
-        .forEach((m) => lista.push({ tipo: "mismos_miembros", evaluado: m, label: `Evaluación a compañero — ${m}` }));
-    }
-    return lista;
-  }, [equipo, persona, managerDelProyecto]);
+  const evaluacionesAHacer = useMemo(
+    () => construirEvaluacionesProyectoAHacer(persona, managerDelProyecto, equipo),
+    [equipo, persona, managerDelProyecto]
+  );
 
   const items = evaluacionesAHacer.map(({ tipo, evaluado, label }) => {
     const evalKey = `${tipo}:${evaluado}`;
@@ -3919,6 +4161,269 @@ function FormularioEvaluacionProyecto({ token, user, proyecto, tipo, manager, ev
           <div className="actions">
             <button type="submit" disabled={enviando || preguntas.length === 0}>
               {enviando ? t("common.saving") : t("fep.submit")}
+            </button>
+          </div>
+        </form>
+      )}
+      <Footer />
+    </main>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Evaluaciones extra (fuera de proyecto)
+// ---------------------------------------------------------------------------
+
+function SolicitarEvaluacionExtraPage({ token, user, onBack }) {
+  const [todosEmpleados, setTodosEmpleados] = useState([]);
+  const [loadingEmpleados, setLoadingEmpleados] = useState(true);
+  const [busqueda, setBusqueda] = useState("");
+  const [evaluador, setEvaluador] = useState("");
+  const [contexto, setContexto] = useState("");
+  const [loading, setLoading] = useState(false);
+  const [status, setStatus] = useState("");
+  const [enviado, setEnviado] = useState(false);
+
+  const persona = user?.persona || user?.username || "";
+
+  useEffect(() => {
+    apiRequest("/api/todos-empleados", { token })
+      .then((d) => setTodosEmpleados((d.empleados || []).filter((n) => n !== persona)))
+      .catch(() => setTodosEmpleados([]))
+      .finally(() => setLoadingEmpleados(false));
+  }, [token, persona]);
+
+  async function enviar(e) {
+    e.preventDefault();
+    if (!evaluador) { setStatus(t("sex.err_select_employee")); return; }
+    if (!contexto.trim()) { setStatus(t("sex.err_context")); return; }
+    setLoading(true);
+    setStatus("");
+    try {
+      const data = await apiRequest("/api/solicitar-evaluacion-extra", {
+        token,
+        method: "POST",
+        body: { evaluador, contexto: contexto.trim() },
+      });
+      if (data.ok) {
+        setStatus(t("sex.sent", { nombre: evaluador }));
+        setEnviado(true);
+      } else {
+        setStatus(data.error || t("sex.err_send"));
+      }
+    } catch (err) {
+      setStatus(err.message);
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  const filtrados = todosEmpleados.filter((n) => n.toLowerCase().includes(busqueda.toLowerCase().trim()));
+  const canSubmit = Boolean(evaluador) && contexto.trim().length > 0 && !loading;
+
+  return (
+    <main className="page">
+      <nav className="nav">
+        <a className="brand" href="/"><img src="/src/logo.png" alt="igeneris" className="brand-logo" /></a>
+        <button className="link-button" onClick={onBack}>{t("common.back")}</button>
+      </nav>
+
+      <div style={{ flex: 1, width: "100%", paddingTop: 40, paddingBottom: 48 }}>
+        <p className="eyebrow">{t("sex.kicker")}</p>
+        <h1>{t("sex.title")}</h1>
+        <p className="fine" style={{ marginTop: 10, color: "rgba(0,0,0,.6)" }}>
+          {t("sex.desc")}
+        </p>
+        <hr style={{ border: "none", borderTop: "1px solid var(--border)", margin: "24px 0" }} />
+
+        {enviado ? (
+          <>
+            <div style={{ display: "flex", alignItems: "center", gap: 10, fontSize: 14, color: "#000" }}>
+              <span style={{ display: "inline-flex", alignItems: "center", justifyContent: "center", width: 22, height: 22, borderRadius: "50%", background: "#000", color: "#fff", fontSize: 12, flexShrink: 0 }}>✓</span>
+              {status}
+            </div>
+            <div className="actions">
+              <button onClick={() => { setEnviado(false); setEvaluador(""); setContexto(""); setStatus(""); setBusqueda(""); }}>
+                {t("sex.request_another")}
+              </button>
+              <button className="secondary" onClick={onBack}>{t("sex.back_home")}</button>
+            </div>
+          </>
+        ) : (
+          <form onSubmit={enviar}>
+            <label>{t("sex.who_label")}</label>
+            {loadingEmpleados ? (
+              <p className="fine">{t("aep.loading_employees")}</p>
+            ) : (
+              <>
+                <div style={{ position: "relative" }}>
+                  <span style={{ position: "absolute", left: 11, top: "50%", transform: "translateY(-50%)", color: "rgba(0,0,0,.35)", display: "flex", pointerEvents: "none" }}>
+                    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+                  </span>
+                  <input
+                    type="text"
+                    value={busqueda}
+                    onChange={(e) => setBusqueda(e.target.value)}
+                    placeholder={t("aep.search_by_name")}
+                    style={{ paddingLeft: 32 }}
+                  />
+                </div>
+                <div style={{ marginTop: 8, maxHeight: 220, overflowY: "auto", border: "1px solid var(--border)", borderRadius: "var(--radius-md)", background: "#fff" }}>
+                  {filtrados.map((nombre) => {
+                    const selected = evaluador === nombre;
+                    return (
+                      <div
+                        key={nombre}
+                        onClick={() => setEvaluador(nombre)}
+                        style={{ display: "flex", alignItems: "center", gap: 10, padding: "9px 12px", borderBottom: "1px solid var(--border)", cursor: "pointer", userSelect: "none", background: selected ? "rgba(0,0,0,.04)" : "transparent" }}
+                      >
+                        <span style={{ width: 14, height: 14, borderRadius: "50%", border: `1px solid ${selected ? "#000" : "var(--border)"}`, background: selected ? "#000" : "#fff", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
+                          {selected && <span style={{ width: 6, height: 6, borderRadius: "50%", background: "#fff" }} />}
+                        </span>
+                        <span style={{ fontSize: 13, fontWeight: 400, color: "#000" }}>{nombre}</span>
+                      </div>
+                    );
+                  })}
+                  {filtrados.length === 0 && (
+                    <p className="fine" style={{ margin: 0, padding: "12px" }}>{t("admin.no_results", { q: busqueda })}</p>
+                  )}
+                </div>
+              </>
+            )}
+
+            <label style={{ marginTop: 24 }}>{t("sex.context_label")}</label>
+            <p className="fine" style={{ marginTop: -2, marginBottom: 8, color: "rgba(0,0,0,.45)", fontSize: 11 }}>
+              {t("sex.context_hint")}
+            </p>
+            <textarea
+              value={contexto}
+              onChange={(e) => setContexto(e.target.value)}
+              rows={4}
+              placeholder={t("sex.context_placeholder")}
+              style={{ width: "100%", border: "1px solid #DBDBDE", borderRadius: "6px", padding: "12px 14px", fontSize: "14px", lineHeight: "1.6", resize: "vertical", background: "transparent", color: "#000000", outline: "none", fontFamily: "inherit", boxSizing: "border-box" }}
+            />
+
+            {status && <p className="error" style={{ marginTop: 8 }}>{status}</p>}
+
+            <button
+              type="submit"
+              disabled={!canSubmit}
+              style={{
+                marginTop: 16, height: 36, padding: "0 20px", borderRadius: "var(--radius-pill)",
+                border: "none", fontSize: 13, letterSpacing: "0.02em",
+                background: canSubmit ? "var(--accent)" : "var(--border)",
+                color: canSubmit ? "#fff" : "rgba(0,0,0,.35)",
+                cursor: canSubmit ? "pointer" : "not-allowed",
+              }}
+            >
+              {loading ? t("sex.sending") : t("sex.submit")}
+            </button>
+          </form>
+        )}
+      </div>
+      <Footer />
+    </main>
+  );
+}
+
+function FormularioEvaluacionExtra({ token, evaluado, contexto, solicitudPageId, onBack }) {
+  const [nota, setNota] = useState(null);
+  const [justificacion, setJustificacion] = useState("");
+  const [enviando, setEnviando] = useState(false);
+  const [status, setStatus] = useState("");
+  const [enviado, setEnviado] = useState(false);
+
+  async function enviar(e) {
+    e.preventDefault();
+    if (!nota) { setStatus(t("fex.err_score")); return; }
+    if (!justificacion.trim()) { setStatus(t("fex.err_justification")); return; }
+    setEnviando(true);
+    setStatus("");
+    try {
+      const data = await apiRequest("/api/guardar-evaluacion-extra", {
+        token,
+        method: "POST",
+        body: { evaluado, contexto, nota, justificacion: justificacion.trim(), solicitudPageId },
+      });
+      if (data.ok) {
+        setEnviado(true);
+      } else {
+        setStatus(data.error || t("fex.err_save"));
+      }
+    } catch (err) {
+      setStatus(err.message);
+    } finally {
+      setEnviando(false);
+    }
+  }
+
+  return (
+    <main className="page">
+      <nav className="nav">
+        <a className="brand" href="/"><img src="/src/logo.png" alt="igeneris" className="brand-logo" /></a>
+        <button className="link-button" onClick={onBack}>{t("common.back")}</button>
+      </nav>
+      <section className="hero">
+        <div>
+          <p className="kicker">{t("fex.kicker")}</p>
+          <h1 style={{ fontSize: "clamp(24px,4vw,52px)", lineHeight: 1.1 }}>{t("fex.title", { nombre: evaluado })}</h1>
+        </div>
+      </section>
+
+      {enviado ? (
+        <section className="panel" style={{ marginTop: "32px" }}>
+          <p className="fine" style={{ color: "#166534" }}>{t("fex.saved_ok")}</p>
+          <div className="actions">
+            <button className="secondary" onClick={onBack}>{t("auth.back_word")}</button>
+          </div>
+        </section>
+      ) : (
+        <form className="panel" style={{ marginTop: "32px" }} onSubmit={enviar}>
+          <p className="fine" style={{ marginBottom: 16 }}>{t("fex.context_label")}</p>
+          <p style={{ fontSize: 14, marginBottom: 24 }}>{contexto}</p>
+
+          <label style={{ fontWeight: 400, fontSize: "14px", marginBottom: "12px", display: "block", color: "#000000" }}>
+            {t("fex.score_label")}
+          </label>
+          <div style={{ display: "flex", border: "1px solid #DBDBDE", borderRadius: "8px", overflow: "hidden", width: "100%", maxWidth: "320px" }}>
+            {[1, 2, 3, 4].map((val, idx) => (
+              <label
+                key={val}
+                style={{
+                  flex: 1, display: "flex", alignItems: "center", justifyContent: "center",
+                  padding: "14px 8px", cursor: "pointer",
+                  background: nota === val ? "#000000" : "#FFFFFF",
+                  color: nota === val ? "#FFFFFF" : "rgba(0,0,0,0.55)",
+                  borderLeft: idx > 0 ? "1px solid #DBDBDE" : "none",
+                  userSelect: "none", transition: "background 0.15s, color 0.15s",
+                }}
+              >
+                <input
+                  type="radio"
+                  name="nota"
+                  value={val}
+                  checked={nota === val}
+                  onChange={() => setNota(val)}
+                  style={{ position: "absolute", opacity: 0, width: 0, height: 0, pointerEvents: "none" }}
+                />
+                <span style={{ fontSize: "14px", fontWeight: 400 }}>{val}</span>
+              </label>
+            ))}
+          </div>
+
+          <label style={{ marginTop: 24, display: "block" }}>{t("fex.justification_label")}</label>
+          <textarea
+            value={justificacion}
+            onChange={(e) => setJustificacion(e.target.value)}
+            rows={5}
+            placeholder={t("cep.ph_answer")}
+            style={{ width: "100%", border: "1px solid #DBDBDE", borderRadius: "6px", padding: "12px 14px", fontSize: "14px", lineHeight: "1.6", resize: "vertical", background: "transparent", color: "#000000", outline: "none", fontFamily: "inherit", boxSizing: "border-box" }}
+          />
+
+          {status && <p className="error" style={{ marginTop: "16px" }}>{status}</p>}
+          <div className="actions">
+            <button type="submit" disabled={enviando}>
+              {enviando ? t("common.saving") : t("fex.submit")}
             </button>
           </div>
         </form>
@@ -4358,6 +4863,20 @@ function App() {
         onNavigate={navigate}
         completedEvals={completedEvals}
         initialProyecto={page.initialProyecto}
+      />
+    );
+  }
+  if (page?.type === "solicitar-evaluacion-extra") {
+    return <SolicitarEvaluacionExtraPage token={token} user={user} onBack={() => navigate(null)} />;
+  }
+  if (page?.type === "formulario-evaluacion-extra") {
+    return (
+      <FormularioEvaluacionExtra
+        token={token}
+        evaluado={page.evaluado}
+        contexto={page.contexto}
+        solicitudPageId={page.solicitudPageId}
+        onBack={() => navigate(null)}
       />
     );
   }

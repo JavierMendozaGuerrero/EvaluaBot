@@ -784,16 +784,24 @@ def _obtener_o_crear_bbdd_preguntas():
         return None
 
 
-_Q4_BOTTOM_TOP = "¿Cómo valorarías del 1 al 4 la contribución del Project Leader al buen avance del proyecto?"
+_Q4_BOTTOM_TOP = (
+    "¿Cómo valorarías del 1 al 4 la contribución del Project Leader al buen avance del proyecto? "
+    "(Esta respuesta es totalmente privada y anónima: no la puede ver nadie de la empresa, "
+    "ni tu CA ni la persona evaluada, salvo la Head of People, Ana.)"
+)
 _Q4_TOP_BOTTOM = "¿Cómo valorarías del 1 al 4 la contribución de {nombre} al buen avance del proyecto?"
 _Q4_SAME_LEVEL = "¿Cómo valorarías del 1 al 4 la contribución de {nombre} al buen avance del proyecto?"
 _Q5_TEXTO = "Indica un ejemplo concreto que justifique tu valoración"
+_Q5_BOTTOM_TOP = (
+    "Indica un ejemplo concreto que justifique tu valoración. "
+    "Recuerda: esta respuesta es totalmente privada y anónima, solo la ve la Head of People (Ana)."
+)
 
 _PREGUNTAS_INICIALES = [
     ("Top-Bottom", "q1", _Q4_TOP_BOTTOM),
     ("Top-Bottom", "q2", _Q5_TEXTO),
     ("Bottom-Top", "q1", _Q4_BOTTOM_TOP),
-    ("Bottom-Top", "q2", _Q5_TEXTO),
+    ("Bottom-Top", "q2", _Q5_BOTTOM_TOP),
     ("Same Level", "q1", _Q4_SAME_LEVEL),
     ("Same Level", "q2", _Q5_TEXTO),
 ]
@@ -1069,7 +1077,7 @@ _PREGUNTAS_PALANTIR_DEFAULT = [
     ("Top-Bottom", "q1", _Q4_TOP_BOTTOM),
     ("Top-Bottom", "q2", _Q5_TEXTO),
     ("Bottom-Top", "q1", _Q4_BOTTOM_TOP),
-    ("Bottom-Top", "q2", _Q5_TEXTO),
+    ("Bottom-Top", "q2", _Q5_BOTTOM_TOP),
     ("Same Level", "q1", _Q4_SAME_LEVEL),
     ("Same Level", "q2", _Q5_TEXTO),
 ]
@@ -1532,6 +1540,8 @@ def _texto_propiedad(propiedades, nombre_propiedad):
         return " ".join(item.get("plain_text", "") for item in propiedad.get("rich_text", [])).strip()
     if tipo == "select":
         return (propiedad.get("select") or {}).get("name", "").strip()
+    if tipo == "status":
+        return (propiedad.get("status") or {}).get("name", "").strip()
     if tipo == "multi_select":
         return ", ".join(item.get("name", "") for item in propiedad.get("multi_select", [])).strip()
     if tipo == "people":
@@ -1608,6 +1618,24 @@ def _codigo_idioma(valor: str) -> str:
     return ""
 
 
+def _normalizar_area(valor: str) -> str:
+    """Mapea la columna Área/Area de la Lista de empleados a 'negocio' | 'palantir' | 'middleoffice'.
+
+    Acepta variantes como 'Negocio', 'Palantir', 'MiddleOffice', 'Middle Office', 'MO'...
+    Devuelve '' si no reconoce el valor (para que el bot pregunte como fallback).
+    """
+    v = (valor or "").strip().lower().replace(" ", "")
+    if not v:
+        return ""
+    if "negocio" in v or v == "business":
+        return "negocio"
+    if "palantir" in v:
+        return "palantir"
+    if "middle" in v or v == "mo":
+        return "middleoffice"
+    return ""
+
+
 def _normalizar_idioma(valor: str) -> str:
     """Mapea la columna Idioma de Notion a un idioma soportado. Por defecto 'es'.
 
@@ -1678,6 +1706,13 @@ def _obtener_registros_empleados() -> list[dict]:
                         if cargo:
                             break
 
+                area = ""
+                for area_prop in ("Área", "Area", "Departamento", "Department"):
+                    if area_prop in props:
+                        area = _normalizar_area(_texto_propiedad(props, area_prop))
+                        if area:
+                            break
+
                 id_usuario = ""
                 for id_prop in ("ID_usuario", "ID usuario", "Slack ID"):
                     if id_prop in props:
@@ -1715,7 +1750,7 @@ def _obtener_registros_empleados() -> list[dict]:
                         break
 
                 baja = bool((props.get("Baja") or {}).get("checkbox", False))
-                registros.append({"nombre": nombre, "email": email.strip(), "aliases": aliases, "cargo": cargo, "id_usuario": id_usuario, "foto": foto, "idioma": idioma, "pais": pais, "baja": baja, "page_id": pagina.get("id", ""), "idioma_prop": idioma_prop, "idioma_prop_tipo": idioma_prop_tipo, "pais_prop": pais_prop, "pais_prop_tipo": pais_prop_tipo})
+                registros.append({"nombre": nombre, "email": email.strip(), "aliases": aliases, "cargo": cargo, "area": area, "id_usuario": id_usuario, "foto": foto, "idioma": idioma, "pais": pais, "baja": baja, "page_id": pagina.get("id", ""), "idioma_prop": idioma_prop, "idioma_prop_tipo": idioma_prop_tipo, "pais_prop": pais_prop, "pais_prop_tipo": pais_prop_tipo})
             if not resp.get("has_more"):
                 break
             cursor = resp.get("next_cursor")
@@ -2181,6 +2216,15 @@ def obtener_cargo_por_slack_id(user_id: str) -> str | None:
     return None
 
 
+def obtener_area_por_slack_id(user_id: str) -> str | None:
+    """Devuelve 'negocio' | 'palantir' | 'middleoffice' segun la columna Área de la Lista de
+    empleados para ese Slack ID, o None si no hay empleado o no tiene área asignada en Notion."""
+    for registro in _obtener_registros_empleados():
+        if registro.get("id_usuario") == user_id:
+            return registro.get("area") or None
+    return None
+
+
 def idioma_por_slack_id(user_id: str) -> str:
     """Devuelve el idioma ('es' | 'en') del empleado cuyo Slack ID coincide. Por defecto 'es'."""
     for registro in _obtener_registros_empleados():
@@ -2492,6 +2536,37 @@ def obtener_evaluaciones_por_evaluado(evaluado):
         if bbdd["evaluado"] == evaluado:
             return obtener_evaluaciones_de_bbdd(bbdd["id"], bbdd["evaluado"])
     raise RuntimeError(f"No se encontró una tabla de evaluaciones para {evaluado}.")
+
+
+def excluir_feedback_confidencial(evaluaciones: list[dict]) -> list[dict]:
+    """Quita el feedback bottom-to-top (subordinado evaluando a un superior):
+    es confidencial, solo accesible para administradores desde el panel dedicado."""
+    return [e for e in evaluaciones if e.get("relacion") != "inferior"]
+
+
+def obtener_feedback_confidencial_por_evaluado(evaluado: str) -> list[dict]:
+    """Feedback bottom-to-top (subordinado -> superior) de un evaluado.
+    Confidencial: solo para el panel de administración. Nunca incluye
+    quién lo escribió."""
+    evaluaciones = obtener_evaluaciones_por_evaluado(evaluado)
+    return [
+        {"proyecto": e.get("proyecto", ""), "q1": e.get("q1", ""),
+         "q2": e.get("q2", ""), "fecha": e.get("fecha", "")}
+        for e in evaluaciones if e.get("relacion") == "inferior"
+    ]
+
+
+def obtener_todo_el_feedback_confidencial() -> list[dict]:
+    """Todo el feedback bottom-to-top (subordinado -> superior) de todas las personas,
+    para la vista agregada del panel de administración. Nunca incluye quién lo escribió.
+    Ordenado por fecha descendente (más reciente primero)."""
+    resultado = [
+        {"evaluado": e.get("evaluado", ""), "proyecto": e.get("proyecto", ""),
+         "q1": e.get("q1", ""), "q2": e.get("q2", ""), "fecha": e.get("fecha", "")}
+        for e in obtener_evaluaciones() if e.get("relacion") == "inferior"
+    ]
+    resultado.sort(key=lambda e: e.get("fecha", ""), reverse=True)
+    return resultado
 
 
 def obtener_historial_mis_evaluaciones(evaluado: str, evaluador: str, proyecto_web: str) -> list:

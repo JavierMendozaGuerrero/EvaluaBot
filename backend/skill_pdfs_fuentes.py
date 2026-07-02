@@ -19,12 +19,14 @@ from datetime import datetime, timezone
 from . import config
 from .utils import slug_archivo
 from .notion_service import (
+    excluir_feedback_confidencial,
     obtener_ca_de_empleado,
     obtener_comentarios_personales,
     obtener_evaluaciones_por_evaluado,
     obtener_opiniones_ca_por_advisee,
 )
 from .project_evals import obtener_evaluaciones_proyecto_por_evaluado
+from .evaluaciones_extra import obtener_evaluaciones_extra_por_evaluado
 # Reutiliza la maquetación de marca del PDF de opiniones
 from .skill_opiniones_ca import _registrar_fuentes, _LOGO_PATH, _REPORTLAB_OK, _MESES
 
@@ -158,7 +160,7 @@ def generar_pdf_seguimiento_personal(advisee: str, anonimo: bool = True) -> str:
 
 
 def generar_pdf_evals_mensuales(advisee: str, anonimo: bool = True) -> str:
-    datos = obtener_evaluaciones_por_evaluado(advisee)
+    datos = excluir_feedback_confidencial(obtener_evaluaciones_por_evaluado(advisee))
     datos = sorted(datos, key=lambda x: x.get("fecha", ""))
     _REL = {"superior": "líder", "igual": "igual", "inferior": "subordinado", "": "sin nivel"}
     entradas = []
@@ -179,6 +181,22 @@ def generar_pdf_evals_mensuales(advisee: str, anonimo: bool = True) -> str:
         })
     slug = slug_archivo(advisee)
     _construir_pdf("Evaluaciones mensuales", advisee, _ca_de(advisee), entradas, f"evals_mensuales_{slug}.pdf")
+    return slug
+
+
+def generar_pdf_evals_extra(advisee: str, anonimo: bool = True) -> str:
+    datos = sorted(obtener_evaluaciones_extra_por_evaluado(advisee), key=lambda x: x.get("fecha", ""))
+    entradas = [{
+        "header": d.get("contexto") or "Sin contexto",
+        "meta": " · ".join(p for p in [
+            None if anonimo else d.get("evaluador"),
+            f"Nota: {d['nota']}/4" if d.get("nota") is not None else None,
+            _fecha_es(d.get("fecha", "")),
+        ] if p),
+        "cuerpo": d.get("justificacion", ""),
+    } for d in datos]
+    slug = slug_archivo(advisee)
+    _construir_pdf("Evaluaciones extra (fuera de proyecto)", advisee, _ca_de(advisee), entradas, f"evals_extra_{slug}.pdf")
     return slug
 
 
@@ -205,7 +223,7 @@ def _entradas_seguimiento(advisee, anonimo):
 
 def _entradas_evals_mensuales(advisee, anonimo):
     _REL = {"superior": "líder", "igual": "igual", "inferior": "subordinado", "": "sin nivel"}
-    datos = sorted(obtener_evaluaciones_por_evaluado(advisee), key=lambda x: x.get("fecha", ""))
+    datos = sorted(excluir_feedback_confidencial(obtener_evaluaciones_por_evaluado(advisee)), key=lambda x: x.get("fecha", ""))
     out = []
     for d in datos:
         cuerpo = []
@@ -223,6 +241,19 @@ def _entradas_evals_mensuales(advisee, anonimo):
             "cuerpo": "\n".join(cuerpo),
         })
     return out
+
+
+def _entradas_evals_extra(advisee, anonimo):
+    datos = sorted(obtener_evaluaciones_extra_por_evaluado(advisee), key=lambda x: x.get("fecha", ""))
+    return [{
+        "header": d.get("contexto") or "Sin contexto",
+        "meta": " · ".join(p for p in [
+            None if anonimo else d.get("evaluador"),
+            f"Nota: {d['nota']}/4" if d.get("nota") is not None else None,
+            _fecha_es(d.get("fecha", "")),
+        ] if p),
+        "cuerpo": d.get("justificacion", ""),
+    } for d in datos]
 
 
 def _entradas_opiniones(advisee, ca, anonimo=True):
@@ -297,6 +328,7 @@ def generar_pdf_completo(advisee: str, anonimo: bool = True) -> str:
         ("Evaluaciones mensuales", _entradas_evals_mensuales(advisee, anonimo)),
         ("Evaluaciones de proyecto", _entradas_evals_proyecto(advisee, anonimo=False)),
         ("Seguimiento personal", _entradas_seguimiento(advisee, anonimo)),
+        ("Evaluaciones extra (fuera de proyecto)", _entradas_evals_extra(advisee, anonimo=False)),
     ]
     slug = slug_archivo(advisee)
     _construir_pdf_secciones("Información completa recibida", advisee, ca, secciones, f"info_completa_{slug}.pdf")

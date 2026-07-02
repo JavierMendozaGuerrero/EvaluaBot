@@ -3220,7 +3220,7 @@ function MisProyectosActivosPage({ token, user, onBack }) {
         ) : proyectos.length === 0 ? (
           <p className="fine">{t("mpa.no_projects")}</p>
         ) : (
-          proyectos.map((p) => {
+          proyectos.map((p, idx) => {
             const nombre = p.nombre_proyecto;
             const estado = estadoMap[nombre];
             const mostrarAnadir = añadirMap[nombre];
@@ -3307,15 +3307,18 @@ function MisProyectosActivosPage({ token, user, onBack }) {
                 {/* Add member */}
                 {mostrarAnadir ? (
                   <div style={{ display: "flex", gap: 8, marginTop: 12, alignItems: "center", flexWrap: "wrap" }}>
-                    <select
+                    <input
+                      type="text"
+                      list={`emp-list-${idx}`}
                       value={valorAnadir}
                       onChange={(e) => setAñadirValor((prev) => ({ ...prev, [nombre]: e.target.value }))}
+                      placeholder={t("mpa.select_person")}
                       style={{ flex: 1, minWidth: 180 }}
-                    >
-                      <option value="">{t("mpa.select_person")}</option>
-                      {disponibles.map((e) => <option key={e} value={e}>{e}</option>)}
-                    </select>
-                    <button disabled={!valorAnadir} onClick={() => modificarMiembro("añadir", nombre, valorAnadir)}>{t("mpa.add")}</button>
+                    />
+                    <datalist id={`emp-list-${idx}`}>
+                      {disponibles.map((e) => <option key={e} value={e} />)}
+                    </datalist>
+                    <button disabled={!disponibles.includes(valorAnadir)} onClick={() => modificarMiembro("añadir", nombre, valorAnadir)}>{t("mpa.add")}</button>
                     <button className="secondary" onClick={() => setAñadirMap((prev) => ({ ...prev, [nombre]: false }))}>{t("common.cancel")}</button>
                   </div>
                 ) : (

@@ -17,6 +17,7 @@ from datetime import datetime, timedelta, timezone
 from . import config
 from .clients import notion, slack_app
 from .conversation_back import boton_atras, fila_atras, limpiar_historial, pop_historial, push_historial, tiene_historial
+from .slack_lists import añadir_pendiente, enlace_lista_pendientes, quitar_pendiente
 from .i18n import t, boton_idioma_slack
 from .notion_service import (
     _coincide_parent_bbdd,
@@ -34,6 +35,7 @@ from .notion_service import (
     invalidar_cache_empleados,
     buscar_empleado_en_lista,
     buscar_empleado_y_cargo,
+    excluir_feedback_confidencial,
     obtener_advisees,
     obtener_comentarios_personales,
     obtener_config_calendario,
@@ -42,6 +44,7 @@ from .notion_service import (
     obtener_nombre_por_id_usuario,
     obtener_objetivos_persona,
     obtener_preguntas_seguimiento_ca,
+    obtener_slack_id_por_nombre,
     obtener_slack_ids_empleados,
     siguiente_envio_calendario,
     sugerir_empleados_parecidos,
@@ -291,7 +294,7 @@ def _texto_evals_proyecto(advisee: str, desde_fecha: str | None, anonimo: bool =
 def _texto_evals_mensuales(advisee: str, desde_fecha: str | None, anonimo: bool = True) -> str:
     """Evaluaciones mensuales del bot de Slack: 'Evaluaciones - {nombre}' (Resultados Evaluaciones Mensuales)."""
     try:
-        evaluaciones = obtener_evaluaciones_por_evaluado(advisee)
+        evaluaciones = excluir_feedback_confidencial(obtener_evaluaciones_por_evaluado(advisee))
     except Exception:
         logging.exception("Error leyendo evaluaciones mensuales de '%s'", advisee)
         return ""
@@ -353,7 +356,7 @@ def _resumen_advisee(advisee: str, desde_fecha: str | None, anonimo: bool = True
     (ver _texto_evals_proyecto / _texto_evals_mensuales / _texto_seguimiento_personal).
     """
     try:
-        evaluaciones = obtener_evaluaciones_por_evaluado(advisee)
+        evaluaciones = excluir_feedback_confidencial(obtener_evaluaciones_por_evaluado(advisee))
     except RuntimeError:
         return f"No hay evaluaciones registradas para *{advisee}*."
     except Exception:
@@ -679,9 +682,9 @@ def _advisee_permitido_para_ca(ca_nombre: str, ca_aliases: list[str], advisee: s
 # Envío del mensaje inicial por DM
 # ---------------------------------------------------------------------------
 
-def _bloques_dm_ca(idioma):
+def _bloques_dm_ca(idioma, enlace_pendientes=None):
     """Bloques del DM inicial de las evaluaciones CA, con botón de cambio de idioma en la cabecera."""
-    return [
+    bloques = [
         {
             "type": "section",
             "text": {"type": "mrkdwn", "text": t("bc.pending_intro", idioma)},
@@ -702,8 +705,11 @@ def _bloques_dm_ca(idioma):
             "type": "section",
             "text": {"type": "mrkdwn", "text": t("bp.send_to_start", idioma)},
         },
-        {"type": "divider"},
     ]
+    if enlace_pendientes:
+        bloques.append({"type": "section", "text": {"type": "mrkdwn", "text": t("bc.pendientes_link", idioma, url=enlace_pendientes)}})
+    bloques.append({"type": "divider"})
+    return bloques
 
 
 def enviar_pregunta_inicial_ca() -> None:
@@ -721,6 +727,7 @@ def enviar_pregunta_inicial_ca() -> None:
         with _lock:
             ca_dm_activas.clear()
 
+        enlace_pendientes = enlace_lista_pendientes()
         for user_id in slack_ids:
             try:
                 ca_nombre, ca_aliases = _identidad_usuario_slack(user_id, logging)
@@ -735,7 +742,7 @@ def enviar_pregunta_inicial_ca() -> None:
                 resp = slack_app.client.chat_postMessage(
                     channel=dm_channel,
                     text=t("bc.pending_fallback", _idi),
-                    blocks=_bloques_dm_ca(_idi),
+                    blocks=_bloques_dm_ca(_idi, enlace_pendientes),
                 )
                 with _lock:
                     ca_dm_activas.add(user_id)
@@ -743,6 +750,7 @@ def enviar_pregunta_inicial_ca() -> None:
                     ca_dm_ts[user_id] = resp["ts"]
                     ca_hora_dm[user_id] = time.time()
                     conversaciones_ca.pop(user_id, None)
+                añadir_pendiente("ca", user_id, t("bc.pendientes_titulo", _idi))
                 logging.info(f"Mensaje CA enviado por DM a {user_id}, ts={resp['ts']}")
             except Exception:
                 logging.exception(f"Error enviando DM CA a {user_id}")
@@ -763,6 +771,7 @@ def _enviar_lista_advisees(user_id, channel, thread_ts, estado, idioma, logger, 
         with _lock:
             if user_id in conversaciones_ca:
                 conversaciones_ca[user_id]["modo"] = "terminado"
+        quitar_pendiente("ca", user_id)
         slack_app.client.chat_postMessage(
             channel=channel, thread_ts=thread_ts, text=prefijo + t("bc.all_advisees_done", idioma),
         )
@@ -1374,6 +1383,32 @@ def ciclo_recordatorios_ca() -> None:
                     ca_ultimo_recordatorio_dm[uid] = time.time()
             except Exception:
                 logging.exception(f"Error enviando recordatorio CA DM a {uid}")
+
+
+def notificar_acceso_informe_final_web(advisee: str) -> bool:
+    """Avisa por Slack al advisee de que su CA le ha dado acceso al informe final. Para uso desde la web."""
+    slack_id = obtener_slack_id_por_nombre(advisee)
+    if not slack_id:
+        logging.warning("No se encontró Slack ID para '%s', no se puede notificar acceso a informe final", advisee)
+        return False
+    try:
+        dm = slack_app.client.conversations_open(users=[slack_id])
+        channel = dm["channel"]["id"]
+        slack_app.client.chat_postMessage(
+            channel=channel,
+            text=t("bc.informe_final_disponible", idioma_por_slack_id(slack_id)),
+        )
+        logging.info("Notificación de informe final disponible enviada a '%s'", advisee)
+        return True
+    except Exception as e:
+        if "user_not_found" in str(e):
+            logging.warning(
+                "Slack ID '%s' de '%s' no encontrado en el workspace. Comprueba el campo ID_usuario en Notion.",
+                slack_id, advisee,
+            )
+        else:
+            logging.exception("Error notificando acceso a informe final a '%s'", advisee)
+        return False
 
 
 def obtener_resumen_advisee_para_ca(ca_nombre: str, advisee: str) -> tuple[str, bool]:

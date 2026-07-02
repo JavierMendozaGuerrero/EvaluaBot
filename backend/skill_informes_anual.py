@@ -18,6 +18,7 @@ from . import config
 from .clients import Document, anthropic_client
 from .i18n import t
 from .notion_service import (
+    excluir_feedback_confidencial,
     listar_bbdd_evaluados,
     obtener_ca_de_empleado,
     obtener_evaluaciones_por_evaluado,
@@ -29,6 +30,7 @@ from .notion_service import (
     idioma_de_persona,
 )
 from .project_evals import obtener_evaluaciones_proyecto_por_evaluado
+from .evaluaciones_extra import obtener_evaluaciones_extra_por_evaluado
 from .utils import slug_archivo
 
 
@@ -118,12 +120,12 @@ _LABELS_NIVEL = [
 # Claves de comentarios que contienen bullets agrupados por nivel (dict lider/equipo/sin_nivel)
 _CLAVES_POR_NIVEL = {c for c, _ in (*_DIMS_PROYECTOS, *_DIMS_LIDERAZGO)}
 # Claves de comentarios que son texto plano con bullets
-_CLAVES_PLANAS = {"contribution_to_firm"}
+_CLAVES_PLANAS = {"contribution_to_firm", "evaluaciones_adicionales"}
 
 # Token de cita por tipo de fuente:
 #   E = evaluación mensual · O = opinión CA · P = evaluación de proyecto
-#   S = seguimiento personal · B = barbecho
-_CITE_RE = re.compile(r"\[([EOPSB]\d+)\]")
+#   S = seguimiento personal · B = barbecho · X = evaluación extra (fuera de proyecto)
+_CITE_RE = re.compile(r"\[([EOPSBX]\d+)\]")
 
 _MESES_ES = [
     "Enero", "Febrero", "Marzo", "Abril", "Mayo", "Junio",
@@ -393,7 +395,7 @@ def obtener_datos_empleado_anual(nombre: str) -> dict:
     # 1. Evaluaciones mensuales
     evaluaciones = []
     try:
-        evaluaciones = obtener_evaluaciones_por_evaluado(nombre)
+        evaluaciones = excluir_feedback_confidencial(obtener_evaluaciones_por_evaluado(nombre))
     except Exception:
         logging.warning("No se encontraron evaluaciones mensuales para %s.", nombre)
 
@@ -440,6 +442,13 @@ def obtener_datos_empleado_anual(nombre: str) -> dict:
     except Exception:
         logging.warning("No se encontraron registros de barbecho para %s.", nombre)
 
+    # 7. Evaluaciones extra (fuera de proyecto)
+    evals_extra = []
+    try:
+        evals_extra = obtener_evaluaciones_extra_por_evaluado(nombre)
+    except Exception:
+        logging.warning("No se encontraron evaluaciones extra para %s.", nombre)
+
     return {
         "empleado": nombre,
         "ca": ca_nombre,
@@ -448,6 +457,7 @@ def obtener_datos_empleado_anual(nombre: str) -> dict:
         "evals_proyecto": evals_proyecto,
         "seguimiento": seguimiento,
         "barbecho": barbecho,
+        "evals_extra": evals_extra,
         "objetivos": objetivos,
     }
 
@@ -590,6 +600,27 @@ def _formatear_contexto(emp_data: dict) -> tuple[str, dict]:
                 "label": f"Barbecho{f' ({area})' if area else ''} · {fecha}", "texto": labores,
             }
             bloques.append(f"[{cid}] [{_mes_tag(fecha)}] Barbecho ({area}): {labores}")
+
+    # ── Evaluaciones extra (fuera de proyecto) ── [X#] ───────────────────────
+    evals_extra = sorted(emp_data.get("evals_extra", []), key=lambda x: (x.get("fecha") or ""))
+    if evals_extra:
+        bloques.append("\n=== EVALUACIONES EXTRA (fuera de proyecto, orden cronológico) ===")
+        for i, ee in enumerate(evals_extra, 1):
+            cid = f"X{i}"
+            evaluador = ee.get("evaluador") or "Desconocido"
+            contexto = ee.get("contexto") or "Sin contexto"
+            fecha = (ee.get("fecha") or "")[:10]
+            respuestas = ee.get("respuestas") or ""
+            fuentes[cid] = {
+                "url": ee.get("url", ""), "tipo": "extra", "fecha": fecha,
+                "label": f"{contexto} · {fecha}".strip(" ·"),
+                "evaluador": evaluador,
+                "texto": respuestas,
+            }
+            bloques.append(
+                f"[{cid}] [{_mes_tag(fecha)}] Contexto: {contexto} | Evaluador: {evaluador} | "
+                f"Respuestas: {respuestas}"
+            )
 
     texto = "\n".join(bloques) if bloques else "(Sin datos de evaluación disponibles)"
     return texto, fuentes
@@ -772,7 +803,8 @@ def interpretar_evaluaciones_anual(emp_data: dict, cargo: str = "", criterios: s
         "  [E#] evaluación mensual (con jerarquía líder/equipo)\n"
         "  [P#] evaluación de proyecto\n"
         "  [S#] seguimiento personal\n"
-        "  [B#] barbecho (labores en periodos sin proyecto)\n\n"
+        "  [B#] barbecho (labores en periodos sin proyecto)\n"
+        "  [X#] evaluación extra fuera de proyecto (tema puntual, con justificación)\n\n"
         "REGLA DE TRAZABILIDAD (obligatoria, sin excepciones):\n"
         "TODA afirmación que escribas debe terminar con la etiqueta o etiquetas de las que proviene, "
         "p. ej. 'Entrega su trabajo a tiempo [E3][P2]'. "
@@ -787,6 +819,9 @@ def interpretar_evaluaciones_anual(emp_data: dict, cargo: str = "", criterios: s
         "no es comparable a uno cómodo.\n\n"
         "BARBECHO: las labores de barbecho [B#] son, casi siempre, evidencia de 'contribution_to_firm' "
         "(contribución a la firma), no de las dimensiones de proyecto.\n\n"
+        "EVALUACIONES EXTRA: las evaluaciones [X#] tratan temas puntuales fuera de proyecto; agrúpalas "
+        "bajo 'evaluaciones_adicionales', no las fuerces en las dimensiones de proyecto salvo que el tema "
+        "coincida claramente con una de ellas.\n\n"
         "Devuelve ÚNICAMENTE un JSON válido (sin bloques markdown) con esta estructura:\n"
         "{\n"
         '  "<clave_dimension>": {\n'
@@ -796,22 +831,23 @@ def interpretar_evaluaciones_anual(emp_data: dict, cargo: str = "", criterios: s
         "  },\n"
         "  ...\n"
         '  "contribution_to_firm": "bullets de contribución a la firma, cada uno con su cita [B1][O1]",\n'
+        '  "evaluaciones_adicionales": "bullets de evaluaciones extra fuera de proyecto, cada uno con su cita [X1][X2]",\n'
         '  "resultado": "valoración global en 2-3 frases que resuma la evolución del año"\n'
         "}\n\n"
-        f"Dimensiones requeridas: {dims_lista}, contribution_to_firm, resultado.\n"
+        f"Dimensiones requeridas: {dims_lista}, contribution_to_firm, evaluaciones_adicionales, resultado.\n"
         "Para cada dimensión agrupa: 'lider' = evaluadores superiores, "
         "'equipo' = mismo nivel o subordinados, 'sin_nivel' = sin jerarquía clara "
         "(coloca seguimiento personal y proyecto en el nivel que corresponda según quién evalúa). "
         "Omite las claves que no tengan datos. "
-        "contribution_to_firm y resultado son cadenas planas, no objetos. "
+        "contribution_to_firm, evaluaciones_adicionales y resultado son cadenas planas, no objetos. "
         "resultado es una síntesis de lo ya afirmado; puede no llevar citas."
     )
     if idioma == "en":
         system += (
             "\n\nLANGUAGE: Write ALL comment text in English (the fields 'lider', 'equipo', "
-            "'sin_nivel', 'contribution_to_firm' and 'resultado'). The source data may be in "
-            "Spanish; translate the meaning, do not copy Spanish text. Keep the JSON keys and the "
-            "citation tags like [E3] exactly as specified. When there is no evidence for a "
+            "'sin_nivel', 'contribution_to_firm', 'evaluaciones_adicionales' and 'resultado'). The source "
+            "data may be in Spanish; translate the meaning, do not copy Spanish text. Keep the JSON keys "
+            "and the citation tags like [E3] exactly as specified. When there is no evidence for a "
             "dimension, write exactly 'Not enough information' (without a citation)."
         )
     elif idioma == "pt":
@@ -1099,6 +1135,12 @@ def guardar_informe_anual_html(emp_data: dict, comentarios: dict, cargo: str = "
         <table class="et"><thead><tr><th>{t("anual.col_dimension", idioma)}</th><th class="nc">{t("anual.col_score", idioma)}</th><th>{t("anual.col_eval_comments", idioma)}</th></tr></thead>
         <tbody>{filas_dims(_DIMS_LIDERAZGO)}</tbody></table>"""
 
+    evals_adicionales_bloque = ""
+    if emp_data.get("evals_extra"):
+        evals_adicionales_bloque = f"""
+        <h2 class="sec">{t("anual.additional_evals", idioma)}</h2>
+        <p>{bullets_html(comentarios.get('evaluaciones_adicionales',''))}</p>"""
+
     objetivos_html = ""
     objetivos = emp_data.get("objetivos", [])
     if objetivos:
@@ -1156,9 +1198,9 @@ def guardar_informe_anual_html(emp_data: dict, comentarios: dict, cargo: str = "
     _TIPO_LABEL = {
         "opinion": t("anual.src_opinion", idioma), "evaluacion": t("anual.src_evaluacion", idioma),
         "proyecto": t("anual.src_proyecto", idioma), "seguimiento": t("anual.src_seguimiento", idioma),
-        "barbecho": t("anual.src_barbecho", idioma),
+        "barbecho": t("anual.src_barbecho", idioma), "extra": t("anual.src_extra", idioma),
     }
-    _ORDEN_TIPO = {"O": 0, "E": 1, "P": 2, "S": 3, "B": 4}
+    _ORDEN_TIPO = {"O": 0, "E": 1, "P": 2, "S": 3, "B": 4, "X": 5}
 
     def _sort_fuente(cid):
         return (_ORDEN_TIPO.get(cid[:1], 9), int(cid[1:]) if cid[1:].isdigit() else 0)
@@ -1255,6 +1297,8 @@ def guardar_informe_anual_html(emp_data: dict, comentarios: dict, cargo: str = "
 
 <h2 class="sec">CONTRIBUTION TO THE FIRM</h2>
 <p>{bullets_html(comentarios.get('contribution_to_firm',''))}</p>
+
+{evals_adicionales_bloque}
 
 <h2 class="sec">{t("anual.result", idioma)}</h2>
 <div class="rg">
@@ -1425,11 +1469,11 @@ def guardar_informe_anual_word(emp_data: dict, comentarios: dict, cargo: str = "
 
     # ── FUENTES / EVIDENCIA (anexo, cada cita salta aquí) ─────────────────────
     if fuentes:
-        _ORDEN = {"O": 0, "E": 1, "P": 2, "S": 3, "B": 4}
+        _ORDEN = {"O": 0, "E": 1, "P": 2, "S": 3, "B": 4, "X": 5}
         _TIPO = {
             "opinion": t("anual.src_opinion", idioma), "evaluacion": t("anual.src_evaluacion", idioma),
             "proyecto": t("anual.src_proyecto", idioma), "seguimiento": t("anual.src_seguimiento", idioma),
-            "barbecho": t("anual.src_barbecho", idioma),
+            "barbecho": t("anual.src_barbecho", idioma), "extra": t("anual.src_extra", idioma),
         }
         doc.add_paragraph()
         _dxt(doc, t("anual.sources_evidence", idioma))
@@ -1460,12 +1504,13 @@ def guardar_informe_anual_word(emp_data: dict, comentarios: dict, cargo: str = "
 
 def _huella_datos(emp_data: dict, cargo: str = "", criterios: str = "") -> str:
     datos = {
-        "v": 4,
+        "v": 5,
         "opiniones": emp_data.get("opiniones_ca", []),
         "evaluaciones": emp_data.get("evaluaciones", []),
         "evals_proyecto": emp_data.get("evals_proyecto", []),
         "seguimiento": emp_data.get("seguimiento", []),
         "barbecho": emp_data.get("barbecho", []),
+        "evals_extra": emp_data.get("evals_extra", []),
         "cargo": (cargo or "").strip().lower(),
         # Criterios DTI de Notion (varían por grupo: Negocio/MiddleOffice/Palantir).
         # Si cambian en Notion, la huella cambia y el informe se regenera.

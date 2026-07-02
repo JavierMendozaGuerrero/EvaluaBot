@@ -9,7 +9,7 @@ from datetime import datetime, timezone
 from . import config
 from .clients import Document, anthropic_client
 from .i18n import t
-from .notion_service import obtener_comentarios_personales, obtener_evaluaciones_por_evaluado, idioma_de_persona
+from .notion_service import excluir_feedback_confidencial, obtener_comentarios_personales, obtener_evaluaciones_por_evaluado, idioma_de_persona
 from .utils import slug_archivo
 
 
@@ -146,7 +146,7 @@ def guardar_informe_word(informe, evaluaciones, evaluado, idioma="es"):
 def generar_archivos_informe(evaluado=""):
     if not evaluado:
         raise RuntimeError("Selecciona una persona evaluada.")
-    evaluaciones = obtener_evaluaciones_por_evaluado(evaluado)
+    evaluaciones = excluir_feedback_confidencial(obtener_evaluaciones_por_evaluado(evaluado))
     comentarios = obtener_comentarios_personales(evaluado)
     nombre = evaluado
     slug = slug_archivo(nombre)
@@ -310,7 +310,7 @@ render();
 def generar_archivo_trayectoria(evaluado=""):
     if not evaluado:
         raise RuntimeError("Selecciona una persona evaluada.")
-    evaluaciones = obtener_evaluaciones_por_evaluado(evaluado)
+    evaluaciones = excluir_feedback_confidencial(obtener_evaluaciones_por_evaluado(evaluado))
     nombre = evaluado
     guardar_trayectoria_react(evaluaciones, nombre, idioma=idioma_de_persona(nombre))
     return len(evaluaciones), slug_archivo(nombre)

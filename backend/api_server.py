@@ -56,6 +56,8 @@ from .notion_service import (
     sugerir_empleados_parecidos,
     obtener_historial_mis_evaluaciones,
     obtener_criterios_evaluacion,
+    obtener_feedback_confidencial_por_evaluado,
+    obtener_todo_el_feedback_confidencial,
 )
 from .hierarchy import comparar_jerarquia, tipo_relacion
 from .project_evals import (
@@ -72,7 +74,13 @@ from .project_evals import (
     obtener_evals_completadas_proyecto,
     LABELS_TIPOS,
 )
-from .ca_reviews import guardar_nota_ca_web, obtener_resumen_advisee_para_ca
+from .evaluaciones_extra import (
+    solicitar_evaluacion_extra,
+    obtener_solicitudes_pendientes,
+    guardar_evaluacion_extra,
+    obtener_evaluaciones_extra_por_evaluado,
+)
+from .ca_reviews import guardar_nota_ca_web, notificar_acceso_informe_final_web, obtener_resumen_advisee_para_ca
 from .personal_eval import notificar_urgencia_personal_web
 from .reports import generar_archivo_trayectoria, generar_archivos_informe
 from .skill_informes_anual import generar_informe_anual, obtener_empleados_evaluacion_anual
@@ -83,6 +91,7 @@ from .skill_pdfs_fuentes import (
     generar_pdf_seguimiento_personal,
     generar_pdf_evals_mensuales,
     generar_pdf_completo,
+    generar_pdf_evals_extra,
 )
 from .users import (
     autenticar_usuario,
@@ -275,6 +284,31 @@ class ApiHandler(BaseHTTPRequestHandler):
                 perfil = obtener_perfil_empleado(nombre)
                 self.responder_json(perfil)
                 return
+            if ruta == "/api/feedback-confidencial":
+                sesion = self.sesion_actual()
+                if not sesion:
+                    raise PermissionError("Inicia sesión para acceder.")
+                if not sesion.get("is_admin"):
+                    raise PermissionError("Solo administradores pueden acceder a este contenido.")
+                query_params = urllib.parse.parse_qs(parsed.query)
+                evaluado = query_params.get("evaluado", [""])[0]
+                if not evaluado:
+                    self.responder_json({"error": "Falta el parámetro evaluado."}, 400)
+                    return
+                try:
+                    feedback = obtener_feedback_confidencial_por_evaluado(evaluado)
+                except RuntimeError:
+                    feedback = []
+                self.responder_json({"feedback": feedback})
+                return
+            if ruta == "/api/feedback-confidencial-todos":
+                sesion = self.sesion_actual()
+                if not sesion:
+                    raise PermissionError("Inicia sesión para acceder.")
+                if not sesion.get("is_admin"):
+                    raise PermissionError("Solo administradores pueden acceder a este contenido.")
+                self.responder_json({"feedback": obtener_todo_el_feedback_confidencial()})
+                return
             if ruta == "/api/criterios-evaluacion":
                 sesion = self.sesion_actual()
                 if not sesion:
@@ -451,6 +485,27 @@ class ApiHandler(BaseHTTPRequestHandler):
                         m["evaluadores"] = []
                         m["pendientes"] = []
                 self.responder_json({"estado": estado})
+                return
+            if ruta == "/api/evaluaciones-extra-pendientes":
+                sesion = self.sesion_actual()
+                if not sesion:
+                    raise PermissionError("Inicia sesión para acceder.")
+                persona = sesion.get("persona", "")
+                pendientes = obtener_solicitudes_pendientes(persona)
+                self.responder_json({"pendientes": pendientes})
+                return
+            if ruta == "/api/evaluaciones-extra-recibidas":
+                sesion = self.sesion_actual()
+                if not sesion:
+                    raise PermissionError("Inicia sesión para acceder.")
+                query_params = urllib.parse.parse_qs(parsed.query)
+                evaluado = query_params.get("evaluado", [""])[0]
+                if not evaluado:
+                    self.responder_json({"error": "Falta el parámetro evaluado."}, 400)
+                    return
+                self._exigir_acceso_advisee(sesion, evaluado)
+                evaluaciones = obtener_evaluaciones_extra_por_evaluado(evaluado)
+                self.responder_json({"evaluaciones": evaluaciones})
                 return
             if ruta.startswith("/api/eval-anual/"):
                 sesion = self.sesion_actual()
@@ -718,7 +773,7 @@ class ApiHandler(BaseHTTPRequestHandler):
                     "htmlUrl": self.url_archivo(f"opiniones_ca_{slug}.html", evaluado),
                 })
                 return
-            if ruta in ("/api/generar-pdf-evals-proyecto", "/api/generar-pdf-seguimiento", "/api/generar-pdf-evals-mensuales", "/api/generar-pdf-completo"):
+            if ruta in ("/api/generar-pdf-evals-proyecto", "/api/generar-pdf-seguimiento", "/api/generar-pdf-evals-mensuales", "/api/generar-pdf-completo", "/api/generar-pdf-evals-extra"):
                 evaluado = (datos.get("evaluado", "") or datos.get("advisee", "")).strip()
                 if not evaluado:
                     self.responder_json({"error": "Selecciona un advisee."}, 400)
@@ -731,9 +786,10 @@ class ApiHandler(BaseHTTPRequestHandler):
                     "/api/generar-pdf-seguimiento": (generar_pdf_seguimiento_personal, "seguimiento_personal"),
                     "/api/generar-pdf-evals-mensuales": (generar_pdf_evals_mensuales, "evals_mensuales"),
                     "/api/generar-pdf-completo": (generar_pdf_completo, "info_completa"),
+                    "/api/generar-pdf-evals-extra": (generar_pdf_evals_extra, "evals_extra"),
                 }
                 generador, prefijo = _GEN[ruta]
-                anonimo_ruta = False if ruta == "/api/generar-pdf-evals-proyecto" else _anonimo
+                anonimo_ruta = False if ruta in ("/api/generar-pdf-evals-proyecto", "/api/generar-pdf-evals-extra") else _anonimo
                 slug = generador(evaluado, anonimo=anonimo_ruta, idioma=idioma_de_persona(evaluado))
                 self.responder_json({"pdfUrl": self.url_archivo(f"{prefijo}_{slug}.pdf", evaluado)})
                 return
@@ -827,6 +883,8 @@ class ApiHandler(BaseHTTPRequestHandler):
                 exito = toggle_acceso_advisee_individual(sesion.get("persona", ""), advisee_nombre, activo)
                 if not exito:
                     raise RuntimeError("No se pudo actualizar el acceso individual.")
+                if activo:
+                    notificar_acceso_informe_final_web(advisee_nombre)
                 self.responder_json({"ok": True, "activo": activo})
                 return
             if ruta == "/api/subir-informe-final":
@@ -936,6 +994,33 @@ class ApiHandler(BaseHTTPRequestHandler):
                     return
                 preguntas = obtener_preguntas_tipo(tipo, idioma_por_sesion(sesion))
                 ok = guardar_evaluacion_proyecto(evaluador, evaluado, proyecto, tipo, respuestas, preguntas)
+                if ok:
+                    self.responder_json({"ok": True})
+                else:
+                    self.responder_json({"error": "No se pudo guardar la evaluación en Notion."}, 500)
+                return
+            if ruta == "/api/solicitar-evaluacion-extra":
+                evaluado = sesion.get("persona", "")
+                _idi = idioma_por_sesion(sesion)
+                evaluador = datos.get("evaluador", "").strip()
+                contexto = datos.get("contexto", "").strip()
+                if not evaluador or not contexto:
+                    self.responder_json({"error": "Faltan campos obligatorios."}, 400)
+                    return
+                resultado = solicitar_evaluacion_extra(evaluado, evaluador, contexto, _idi)
+                self.responder_json(resultado)
+                return
+            if ruta == "/api/guardar-evaluacion-extra":
+                evaluador = sesion.get("persona", "")
+                evaluado = datos.get("evaluado", "").strip()
+                contexto = datos.get("contexto", "").strip()
+                nota = datos.get("nota")
+                justificacion = datos.get("justificacion", "").strip()
+                solicitud_page_id = datos.get("solicitudPageId", "").strip()
+                if not evaluado or not justificacion or nota not in (1, 2, 3, 4):
+                    self.responder_json({"error": "Faltan campos obligatorios o la nota no es válida (1-4)."}, 400)
+                    return
+                ok = guardar_evaluacion_extra(evaluado, evaluador, contexto, nota, justificacion, solicitud_page_id)
                 if ok:
                     self.responder_json({"ok": True})
                 else:

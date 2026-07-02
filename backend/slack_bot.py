@@ -9,6 +9,7 @@ from slack_bolt.adapter.socket_mode import SocketModeHandler
 from . import config
 from .i18n import t, boton_idioma_slack
 from .conversation_back import boton_atras, fila_atras, limpiar_historial, pop_historial, push_historial, tiene_historial
+from .slack_lists import añadir_pendiente, enlace_lista_pendientes, quitar_pendiente
 from .ca_reviews import ca_dm_activas, ca_dm_ts, manejar_mensaje_ca
 from .personal_eval import (
     enviar_pregunta_inicial_personal,
@@ -25,6 +26,7 @@ from .notion_service import (
     guardar_barbecho_en_notion,
     actualizar_en_notion,
     guardar_en_notion,
+    obtener_area_por_slack_id,
     obtener_cargo_por_slack_id,
     idioma_por_slack_id,
     toggle_idioma_slack,
@@ -53,9 +55,9 @@ from .state import (
 from .utils import normalizar_nombre
 
 
-def _bloques_dm_mensual(idioma):
+def _bloques_dm_mensual(idioma, enlace_pendientes=None):
     """Bloques del DM inicial de la evaluación mensual, con botón de cambio de idioma en la cabecera."""
-    return [
+    bloques = [
         {
             "type": "section",
             "text": {"type": "mrkdwn", "text": t("bm.pending_intro", idioma)},
@@ -76,8 +78,11 @@ def _bloques_dm_mensual(idioma):
             "type": "section",
             "text": {"type": "mrkdwn", "text": t("bm.send_to_start", idioma)},
         },
-        {"type": "divider"},
     ]
+    if enlace_pendientes:
+        bloques.append({"type": "section", "text": {"type": "mrkdwn", "text": t("bm.pendientes_link", idioma, url=enlace_pendientes)}})
+    bloques.append({"type": "divider"})
+    return bloques
 
 
 def enviar_una_evaluacion():
@@ -94,6 +99,7 @@ def enviar_una_evaluacion():
         with lock:
             evaluaciones_dm_expiradas.update(evaluaciones_dm_activas)
             evaluaciones_dm_activas.clear()
+        enlace_pendientes = enlace_lista_pendientes()
         for user_id in slack_ids:
             try:
                 resp_dm = slack_app.client.conversations_open(users=[user_id])
@@ -102,7 +108,7 @@ def enviar_una_evaluacion():
                 resp = slack_app.client.chat_postMessage(
                     channel=dm_channel,
                     text=t("bm.pending_fallback", idioma),
-                    blocks=_bloques_dm_mensual(idioma),
+                    blocks=_bloques_dm_mensual(idioma, enlace_pendientes),
                 )
                 with lock:
                     evaluaciones_dm_activas.add(user_id)
@@ -110,6 +116,7 @@ def enviar_una_evaluacion():
                     evaluacion_dm_ts[user_id] = resp["ts"]
                     evaluacion_hora[user_id] = time.time()
                     conversaciones.pop(user_id, None)
+                añadir_pendiente("mensual", user_id, t("bm.pendientes_titulo", idioma))
                 logging.info(f"Evaluación enviada por DM a {user_id}, ts={resp['ts']}")
             except Exception as exc:
                 if "user_not_found" in str(exc) or "channel_not_found" in str(exc):
@@ -551,6 +558,7 @@ def _handle_barbecho_entregar(ack, body, logger):
         if guardado:
             with lock:
                 limpiar_historial(estado)
+            quitar_pendiente("mensual", user_id)
             slack_app.client.chat_postMessage(channel=dm_channel, thread_ts=thread_ts, text=t("bm.barbecho_saved", _idi))
         else:
             slack_app.client.chat_postMessage(channel=dm_channel, thread_ts=thread_ts, text=t("bm.err_save_notion", _idi))
@@ -1329,6 +1337,7 @@ def handle_message_events(event, logger):
 
     # Comprobar si ya completó la evaluación en este ciclo (solo para conversaciones nuevas)
     _ya_respondio = False
+    _area_notion_pre = None
     if _modo_peek == "pre_inicial":
         # Primer mensaje del hilo: barra de carga mientras preparamos la respuesta.
         with AnimacionCargando(dm_channel, thread_ts, idioma_por_slack_id(user_id)):
@@ -1339,6 +1348,12 @@ def handle_message_events(event, logger):
                     _ya_respondio = evaluacion_proyecto_guardada_desde(_nombre_ya, _hora_env)
             except Exception:
                 logger.exception("Error comprobando si ya respondió en este ciclo")
+            try:
+                # El área (Negocio/Palantir/MiddleOffice) ya está en la Lista de Empleados
+                # de Notion, así que no hace falta preguntarla si Notion la tiene.
+                _area_notion_pre = obtener_area_por_slack_id(user_id)
+            except Exception:
+                logger.exception("Error consultando el área del empleado en Notion")
 
     # Máquina de estados en un único bloque con lock
     with lock:
@@ -1358,9 +1373,20 @@ def handle_message_events(event, logger):
         pregunta = None
 
         if modo == "pre_inicial":
-            estado["modo"] = "esperando_area"
-            accion = "pedir_area"
-            pregunta = t("bm.ask_area_q", estado["idioma"])
+            if _area_notion_pre:
+                # Área ya conocida por Notion (Lista de Empleados): nos saltamos la pregunta.
+                estado["area"] = _area_notion_pre
+                if _area_notion_pre == "middleoffice":
+                    estado["respuestas"]["proyecto"] = ""
+                    estado["modo"] = "esperando_persona"
+                    accion = "pedir_persona_mo"
+                else:
+                    estado["modo"] = "esperando_situacion"
+                    accion = "pedir_situacion"
+            else:
+                estado["modo"] = "esperando_area"
+                accion = "pedir_area"
+                pregunta = t("bm.ask_area_q", estado["idioma"])
 
         elif modo == "esperando_area":
             _AREA_MAP = {
@@ -1768,6 +1794,7 @@ def handle_message_events(event, logger):
         if guardado:
             with lock:
                 limpiar_historial(estado)
+            quitar_pendiente("mensual", user_id)
             reply(t("bm.barbecho_saved", estado["idioma"]))
         else:
             reply(t("bm.err_save_notion", estado["idioma"]))
@@ -1862,6 +1889,7 @@ def handle_message_events(event, logger):
                     "area": estado.get("area", "negocio"),
                     "respuestas": dict(respuestas_finales),
                 })
+            quitar_pendiente("mensual", user_id)
             _enviar_mas_miembros(dm_channel, thread_ts, estado.get("idioma", "es"), estado=estado)
             return
         reply(t("bm.err_save_notion", estado.get("idioma", "es")))
@@ -1969,6 +1997,7 @@ def handle_proyecto_confirmar(ack, body, logger):
                 "area": estado.get("area", "negocio"),
                 "respuestas": dict(respuestas_finales),
             })
+        quitar_pendiente("mensual", user_id)
         _enviar_mas_miembros(dm_channel, thread_ts, estado.get("idioma", "es"), estado=estado)
         return
     reply(t("bm.err_save_notion", estado.get("idioma", "es")))

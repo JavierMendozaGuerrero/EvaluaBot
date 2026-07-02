@@ -95,6 +95,8 @@ from .users import (
 from .utils import normalizar_nombre, slug_archivo
 from .anonimato import cargar_config as cargar_anonimato, guardar_config as guardar_anonimato, evaluadores_visibles_para_advisee
 
+PAISES_PERMITIDOS = ("España", "México", "Portugal")
+
 
 class ReusableTCPServer(ThreadingHTTPServer):
     allow_reuse_address = True
@@ -662,6 +664,8 @@ class ApiHandler(BaseHTTPRequestHandler):
                 return
             if ruta == "/api/set-pais":
                 pais = (datos.get("pais") or "").strip()[:80]
+                if pais not in PAISES_PERMITIDOS:
+                    raise ValueError("País no permitido.")
                 guardado = guardar_pais_por_sesion(sesion, pais)
                 self.responder_json({"ok": True, "pais": guardado})
                 return

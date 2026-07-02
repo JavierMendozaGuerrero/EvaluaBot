@@ -59,14 +59,16 @@ def _bloques_dm_mensual(idioma):
             "text": {"type": "mrkdwn", "text": t("bm.pending_intro", idioma)},
             "accessory": boton_idioma_slack(idioma, "lang_toggle_mensual"),
         },
+        {"type": "section", "text": {"type": "mrkdwn", "text": t("bm.example_label", idioma)}},
         {
-            "type": "section",
-            "text": {"type": "mrkdwn", "text": t("bm.example_label", idioma)},
-            "accessory": {
-                "type": "button",
-                "text": {"type": "plain_text", "text": t("bm.see_example", idioma)},
-                "action_id": "mensual_ver_ejemplo",
-            },
+            "type": "actions",
+            "elements": [
+                {
+                    "type": "button",
+                    "text": {"type": "plain_text", "text": t("bm.see_example", idioma)},
+                    "action_id": "mensual_ver_ejemplo",
+                },
+            ],
         },
         {
             "type": "section",

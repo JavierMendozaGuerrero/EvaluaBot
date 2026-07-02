@@ -347,26 +347,79 @@ _NOTION_PAGE_STYLE = {
     config.NOTION_DATA_LISTS_PAGE_NAME: {
         "emoji": "🗂️",
         "color": "green",
-        "title": "Zona operativa para administracion",
-        "body": "Aqui viven las listas maestras que se mantienen a mano: empleados, usuarios, CA y datos de soporte.",
+        "title": "Datos a Monitorizar",
+        "body": "Listas maestras que se mantienen a mano: empleados, usuarios, CA y datos de soporte.",
+    },
+    config.NOTION_DATA_MODIFICABLES_PAGE_NAME: {
+        "emoji": "⚙️",
+        "color": "gray",
+        "title": "Datos opcionalmente modificables",
+        "body": "Configuración personalizable del chatbot: preguntas, criterios de evaluación y ejemplos de guía.",
+    },
+    config.NOTION_PREGUNTAS_CHATBOT_PAGE_NAME: {
+        "emoji": "💬",
+        "color": "blue",
+        "title": "Preguntas del chatbot",
+        "body": "Banco de preguntas que el bot envía en cada evaluación mensual, organizado por área.",
+    },
+    config.NOTION_RESULTADOS_EVAL_PAGE_NAME: {
+        "emoji": "📈",
+        "color": "orange",
+        "title": "Resultados de evaluaciones",
+        "body": "Espacio generado automáticamente. Aquí se acumulan todos los resultados y logs del chatbot.",
+    },
+    config.NOTION_ACTIVACIONES_PERMISOS_PAGE_NAME: {
+        "emoji": "🔐",
+        "color": "red",
+        "title": "Control de permisos",
+        "body": "Activa o desactiva funcionalidades del bot por empleado o equipo.",
     },
     config.NOTION_INDIVIDUAL_EVALUATIONS_PAGE_NAME: {
         "emoji": "📊",
         "color": "blue",
-        "title": "Evaluaciones individuales",
-        "body": "Espacio generado por el bot. Cada tabla recoge feedback recibido sobre una persona evaluada.",
+        "title": "Evaluaciones mensuales individuales",
+        "body": "Espacio generado por el bot. Cada tabla recoge el feedback recibido sobre una persona evaluada.",
     },
     config.NOTION_CA_TRACKING_PAGE_NAME: {
-        "emoji": "💬",
+        "emoji": "🗣️",
         "color": "purple",
         "title": "Seguimiento Career Advisor",
-        "body": "Opiniones y revisiones de CA generadas desde Slack. Pensado para consulta, no para mantenimiento diario.",
+        "body": "Opiniones y revisiones de CA generadas desde Slack. Pensado para consulta, no para edición manual.",
     },
-    config.NOTION_CONTINUOUS_EVALUATIONS_PAGE_NAME: {
-        "emoji": "📝",
-        "color": "yellow",
-        "title": "Evaluaciones Continuas",
-        "body": "Registros de empleados en barbecho: área y labores que están realizando.",
+}
+
+_NOTION_DATABASE_STYLE: dict[str, dict] = {
+    "Lista de empleados": {
+        "emoji": "👥",
+        "description": "Directorio principal. Define quién puede ser evaluado, su cargo y sus alias de Slack.",
+    },
+    "Usuarios Web": {
+        "emoji": "🌐",
+        "description": "Cuentas con acceso al portal web del asistente de evaluación.",
+    },
+    "Evaluaciones anuales": {
+        "emoji": "🏆",
+        "description": "Informes anuales generados en la sesión asistida entre el CA y el bot.",
+    },
+    "Preguntas Negocio": {
+        "emoji": "❓",
+        "description": "Preguntas enviadas en evaluaciones mensuales para equipos de Negocio.",
+    },
+    "Preguntas MiddleOffice": {
+        "emoji": "❓",
+        "description": "Preguntas enviadas en evaluaciones mensuales para MiddleOffice.",
+    },
+    "Preguntas Palantir": {
+        "emoji": "❓",
+        "description": "Preguntas enviadas en evaluaciones mensuales para Palantir.",
+    },
+    "Log evaluacion anual asistida": {
+        "emoji": "📋",
+        "description": "Auditoría: decisiones del CA frente a la propuesta del bot en cada evaluación anual.",
+    },
+    "Resultados Barbecho": {
+        "emoji": "🌱",
+        "description": "Registros de empleados en periodo de barbecho: área y labores que realizan.",
     },
 }
 
@@ -395,8 +448,11 @@ def _decorar_pagina_notion(page_id, nombre_pagina):
             page_id=page_id,
             icon={"type": "emoji", "emoji": estilo["emoji"]},
         )
-    except Exception:
+    except Exception as exc:
+        if getattr(exc, "status", 0) == 404:
+            return  # El ID pertenece a una BD, no a una página; se decora por separado
         logging.exception("No se pudo actualizar el icono de la pagina %s", nombre_pagina)
+        return
 
     try:
         for bloque in _iter_blocks(page_id):
@@ -427,19 +483,66 @@ def _decorar_pagina_notion(page_id, nombre_pagina):
         logging.exception("No se pudo decorar la pagina de Notion %s", nombre_pagina)
 
 
+def _decorar_bbdd_notion(db_id: str, nombre_bbdd: str) -> None:
+    estilo = _NOTION_DATABASE_STYLE.get(nombre_bbdd)
+    if not estilo:
+        return
+    try:
+        payload: dict = {
+            "icon": {"type": "emoji", "emoji": estilo["emoji"]},
+            "description": [{"type": "text", "text": {"content": estilo["description"]}}],
+        }
+        if _usa_data_sources():
+            try:
+                notion.data_sources.update(data_source_id=db_id, **payload)
+            except Exception:
+                notion.databases.update(database_id=db_id, **payload)
+        else:
+            notion.databases.update(database_id=db_id, **payload)
+    except Exception:
+        logging.exception("No se pudo decorar la BD de Notion '%s'", nombre_bbdd)
+
+
 def aplicar_estetica_notion():
     parent_raiz = _parent_bbdd_referencia()
+    root_id = parent_raiz["page_id"]
+
+    _PAGINAS_SOLO_SI_EXISTEN = {
+        config.NOTION_DATA_LISTS_PAGE_NAME,
+        config.NOTION_DATA_MODIFICABLES_PAGE_NAME,
+        config.NOTION_PREGUNTAS_CHATBOT_PAGE_NAME,
+        config.NOTION_RESULTADOS_EVAL_PAGE_NAME,
+        config.NOTION_ACTIVACIONES_PERMISOS_PAGE_NAME,
+    }
+
     for nombre_pagina in (
         config.NOTION_DATA_LISTS_PAGE_NAME,
+        config.NOTION_DATA_MODIFICABLES_PAGE_NAME,
+        config.NOTION_PREGUNTAS_CHATBOT_PAGE_NAME,
+        config.NOTION_RESULTADOS_EVAL_PAGE_NAME,
+        config.NOTION_ACTIVACIONES_PERMISOS_PAGE_NAME,
         config.NOTION_INDIVIDUAL_EVALUATIONS_PAGE_NAME,
         config.NOTION_CA_TRACKING_PAGE_NAME,
     ):
-        page_id = _page_or_database_link_by_name(parent_raiz["page_id"], nombre_pagina)
+        page_id = _buscar_pagina_en_jerarquia(nombre_pagina, root_id)
         if page_id:
             _decorar_pagina_notion(page_id, nombre_pagina)
-            continue
-        if nombre_pagina != config.NOTION_DATA_LISTS_PAGE_NAME:
+        elif nombre_pagina not in _PAGINAS_SOLO_SI_EXISTEN:
             _parent_bbdd_en_pagina(nombre_pagina, crear=True)
+
+    for nombre_bbdd in _NOTION_DATABASE_STYLE:
+        try:
+            resultado = notion.search(
+                query=nombre_bbdd,
+                filter={"value": _tipo_objeto_busqueda_bbdd(), "property": "object"},
+                page_size=10,
+            )
+            for bbdd in resultado.get("results", []):
+                if normalizar_nombre(_extraer_titulo_bbdd(bbdd)) == normalizar_nombre(nombre_bbdd):
+                    _decorar_bbdd_notion(_data_source_id(bbdd), nombre_bbdd)
+                    break
+        except Exception:
+            logging.exception("No se pudo decorar la BD '%s'", nombre_bbdd)
 
 
 def _buscar_pagina_en_jerarquia(nombre_pagina: str, root_id: str) -> str | None:
@@ -673,6 +776,7 @@ def _obtener_o_crear_bbdd_preguntas():
             )
         bbdd_id = _data_source_id(nueva)
         logging.info("BD '%s' creada en Notion: %s", titulo, bbdd_id)
+        _decorar_bbdd_notion(bbdd_id, titulo)
         _poblar_bbdd_preguntas(bbdd_id)
         return bbdd_id
     except Exception:
@@ -842,6 +946,7 @@ def _obtener_o_crear_bbdd_preguntas_mo() -> str | None:
                 )
             db_id = _data_source_id(nueva)
             logging.info("BD '%s' creada en Notion", _NOMBRE_BBDD_PREGUNTAS_MO)
+            _decorar_bbdd_notion(db_id, _NOMBRE_BBDD_PREGUNTAS_MO)
             _poblar_bbdd_preguntas_mo(db_id)
         except Exception:
             logging.exception("Error creando BD '%s'", _NOMBRE_BBDD_PREGUNTAS_MO)
@@ -1008,6 +1113,7 @@ def _obtener_o_crear_bbdd_preguntas_palantir() -> str | None:
                 )
             db_id = _data_source_id(nueva)
             logging.info("BD '%s' creada en Notion", _NOMBRE_BBDD_PREGUNTAS_PALANTIR)
+            _decorar_bbdd_notion(db_id, _NOMBRE_BBDD_PREGUNTAS_PALANTIR)
             _poblar_bbdd_preguntas_palantir(db_id)
         except Exception:
             logging.exception("Error creando BD '%s'", _NOMBRE_BBDD_PREGUNTAS_PALANTIR)
@@ -1236,6 +1342,7 @@ def _obtener_o_crear_bbdd_continuas() -> str:
     with lock:
         _cache_bbdd_continuas["db_id"] = new_id
     logging.info("Base de datos '%s' creada", titulo)
+    _decorar_bbdd_notion(new_id, titulo)
     return new_id
 
 
@@ -1348,6 +1455,7 @@ def _obtener_o_crear_bbdd_sesiones_anual() -> str | None:
         with lock:
             _cache_bbdd_sesiones_anual["db_id"] = new_id
         logging.info("Base de datos '%s' creada", titulo)
+        _decorar_bbdd_notion(new_id, titulo)
         return new_id
     except Exception:
         logging.exception("No se pudo obtener/crear la BD del log de evaluación anual")
@@ -2858,20 +2966,18 @@ def _obtener_o_crear_bbdd_objetivos_persona(nombre: str) -> str:
         if cache_key in _cache_objetivos_persona:
             return _cache_objetivos_persona[cache_key]
 
-    # Busca o crea la página contenedora "Objetivos empleados"
-    parent = _parent_bbdd_en_pagina("Objetivos empleados", crear=True)
+    # Busca la base exacta entre los hijos de "Objetivos empleados" (evita la
+    # búsqueda difusa de notion.search, que con muchas bases "Objetivos - X"
+    # puede no traer la correcta entre sus primeros resultados y acaba
+    # creando una base vacía duplicada).
+    db_id = _buscar_bbdd_en_pagina("Objetivos empleados", titulo)
+    if db_id:
+        with lock:
+            _cache_objetivos_persona[cache_key] = db_id
+        return db_id
 
-    resultado = notion.search(
-        query=titulo,
-        filter={"value": _tipo_objeto_busqueda_bbdd(), "property": "object"},
-        page_size=20,
-    )
-    for bbdd in resultado.get("results", []):
-        if normalizar_nombre(_extraer_titulo_bbdd(bbdd)) == cache_key:
-            db_id = _data_source_id(bbdd)
-            with lock:
-                _cache_objetivos_persona[cache_key] = db_id
-            return db_id
+    # No existe todavía: crea la página contenedora "Objetivos empleados" (si hace falta) y la base
+    parent = _parent_bbdd_en_pagina("Objetivos empleados", crear=True)
 
     if _usa_data_sources():
         nueva = notion.databases.create(
@@ -3430,8 +3536,8 @@ PREGUNTAS_PERSONALES_DEFAULT = {
     ),
     "item_1": 'Explicar cómo estás ayudando en _"Contribution to the firm"_',
     "item_2": "Cómo te estás acercando a tus objetivos",
-    "item_3": "Señalar limitaciones o aspectos relevantes respecto al cumplimiento de los criterios de evaluación",
-    "item_4": "Si necesitas ayuda con algún tema o has tenido alguna dificultad que quieras comentar",
+    "item_3": "Recordar los criterios de evaluación",
+    "item_4": "Solicitar apoyo en alguna área o informar sobre alguna dificultad.",
 }
 
 _mensaje_inicial_migrado: set = set()

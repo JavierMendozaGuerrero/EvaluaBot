@@ -2151,6 +2151,7 @@ function DashCollapsible({ title, open, onToggle, children }) {
 }
 
 const DASH_DIVIDER = { border: "none", borderTop: "1px solid var(--border)", margin: "16px 0" };
+const PAISES_PERMITIDOS = ["España", "México", "Portugal"];
 
 function Dashboard({ token, user, onLogout, onNavigate, onBackToRoleSelect = null }) {
   const [evaluados, setEvaluados] = useState([]);
@@ -2174,10 +2175,8 @@ function Dashboard({ token, user, onLogout, onNavigate, onBackToRoleSelect = nul
   // comportarse igual que cualquier otro empleado, con los mismos botones del To-do.
   const isAdmin = Boolean(user?.is_admin) && !onBackToRoleSelect;
   const [perfil, setPerfil] = useState({ foto: "", cargo: "", pais: "" });
-  const [paisesDisponibles, setPaisesDisponibles] = useState([]);
   const [editandoPais, setEditandoPais] = useState(false);
   const [paisSel, setPaisSel] = useState("");
-  const [paisOtro, setPaisOtro] = useState("");
   const [paisGuardando, setPaisGuardando] = useState(false);
   const [paisMsg, setPaisMsg] = useState("");
   const [misObjetivos, setMisObjetivos] = useState([]);
@@ -2244,30 +2243,15 @@ function Dashboard({ token, user, onLogout, onNavigate, onBackToRoleSelect = nul
       .catch(() => {});
   }, [token]);
 
-  useEffect(() => {
-    apiRequest("/api/paises", { token })
-      .then((data) => setPaisesDisponibles(Array.isArray(data.paises) ? data.paises : []))
-      .catch(() => {});
-  }, [token]);
-
   function abrirEdicionPais() {
     const actual = perfil.pais || "";
-    if (actual && paisesDisponibles.includes(actual)) {
-      setPaisSel(actual);
-      setPaisOtro("");
-    } else if (actual) {
-      setPaisSel("__otro__");
-      setPaisOtro(actual);
-    } else {
-      setPaisSel("");
-      setPaisOtro("");
-    }
+    setPaisSel(PAISES_PERMITIDOS.includes(actual) ? actual : "");
     setPaisMsg("");
     setEditandoPais(true);
   }
 
   async function guardarPais() {
-    const valor = (paisSel === "__otro__" ? paisOtro : paisSel).trim();
+    const valor = paisSel.trim();
     if (!valor) return;
     setPaisGuardando(true);
     setPaisMsg("");
@@ -2276,7 +2260,6 @@ function Dashboard({ token, user, onLogout, onNavigate, onBackToRoleSelect = nul
       const nuevo = data.pais || valor;
       setPerfil((p) => ({ ...p, pais: nuevo }));
       clearApiCache();
-      setPaisesDisponibles((prev) => (prev.includes(nuevo) ? prev : [...prev, nuevo].sort((a, b) => a.localeCompare(b))));
       setEditandoPais(false);
       setPaisMsg(t("dash.country_saved"));
     } catch {
@@ -2533,25 +2516,15 @@ function Dashboard({ token, user, onLogout, onNavigate, onBackToRoleSelect = nul
                     style={{ fontSize: 14 }}
                   >
                     <option value="">{t("dash.country_placeholder")}</option>
-                    {paisesDisponibles.map((p) => (
+                    {PAISES_PERMITIDOS.map((p) => (
                       <option key={p} value={p}>{p}</option>
                     ))}
-                    <option value="__otro__">{t("dash.country_other")}</option>
                   </select>
-                  {paisSel === "__otro__" && (
-                    <input
-                      type="text"
-                      value={paisOtro}
-                      onChange={(e) => setPaisOtro(e.target.value)}
-                      placeholder={t("dash.country_other_ph")}
-                      style={{ fontSize: 14 }}
-                    />
-                  )}
                   <div style={{ display: "flex", gap: 8 }}>
                     <button
                       type="button"
                       onClick={guardarPais}
-                      disabled={paisGuardando || !(paisSel === "__otro__" ? paisOtro.trim() : paisSel)}
+                      disabled={paisGuardando || !paisSel}
                       style={{ fontSize: 13, padding: "5px 12px", minHeight: "auto" }}
                     >{paisGuardando ? t("common.loading") : t("common.save")}</button>
                     <button
@@ -3811,17 +3784,27 @@ function FormularioEvaluacionProyecto({ token, user, proyecto, tipo, manager, ev
             return preguntas.map((p) => {
               const cambioCat = p.categoria && p.categoria !== categoriaActual;
               if (cambioCat) categoriaActual = p.categoria;
+              const textoEsCategoria = (p.texto || "").trim().toLowerCase() === (p.categoria || "").trim().toLowerCase();
+              const mostrarLabel = p.tipo !== "radio_3" && !textoEsCategoria && Boolean(p.texto);
+              const opcionesBase = p.tipo === "radio_3"
+                ? (p.opciones?.length ? p.opciones : ["Exceeds", "Achieves", "Expects more"])
+                : [];
+              const opciones = [...opcionesBase].reverse();
               return (
                 <React.Fragment key={p.id}>
                   {cambioCat && (
-                    <p style={{ fontWeight: 800, fontSize: "13px", marginTop: "28px", marginBottom: "4px", textTransform: "uppercase", letterSpacing: "0.05em" }}>
-                      {p.categoria}
-                    </p>
+                    <div style={{ marginTop: "32px", paddingBottom: "10px", borderBottom: "1px solid #DBDBDE" }}>
+                      <span style={{ fontSize: "11px", fontWeight: 400, textTransform: "uppercase", letterSpacing: "0.1em", color: "rgba(0,0,0,0.55)" }}>
+                        {p.categoria}
+                      </span>
+                    </div>
                   )}
                   <div style={{ marginTop: "18px" }}>
-                    <label style={{ fontWeight: 600, fontSize: "14px", marginBottom: "10px", display: "block" }}>
-                      {p.texto}
-                    </label>
+                    {mostrarLabel && (
+                      <label style={{ fontWeight: 400, fontSize: "14px", marginBottom: "12px", display: "block", color: "#000000" }}>
+                        {p.texto}
+                      </label>
+                    )}
                     {p.tipo === "escala_1_5" && (
                       <div style={{ display: "flex", gap: "12px", flexWrap: "wrap", alignItems: "center" }}>
                         <span className="fine" style={{ fontSize: "12px" }}>{t("fep.scale_low")}</span>
@@ -3842,20 +3825,40 @@ function FormularioEvaluacionProyecto({ token, user, proyecto, tipo, manager, ev
                       </div>
                     )}
                     {p.tipo === "radio_3" && (
-                      <div style={{ display: "flex", gap: "16px", flexWrap: "wrap" }}>
-                        {(p.opciones.length ? p.opciones : ["Exceeds", "Achieves", "Expects more"]).map((op) => (
-                          <label key={op} style={{ display: "flex", alignItems: "center", gap: "6px", cursor: "pointer", fontSize: "14px", fontWeight: respuestas[p.id] === op ? 800 : 400 }}>
-                            <input
-                              type="radio"
-                              name={p.id}
-                              value={op}
-                              checked={respuestas[p.id] === op}
-                              onChange={() => setRespuesta(p.id, op)}
-                              style={{ width: "auto" }}
-                            />
-                            {op}
-                          </label>
-                        ))}
+                      <div style={{ display: "flex", border: "1px solid #DBDBDE", borderRadius: "8px", overflow: "hidden", width: "100%", maxWidth: "480px" }}>
+                        {opciones.map((op, idx) => {
+                          const selected = respuestas[p.id] === op;
+                          return (
+                            <label
+                              key={op}
+                              style={{
+                                flex: 1,
+                                display: "flex",
+                                alignItems: "center",
+                                justifyContent: "center",
+                                padding: "14px 8px",
+                                cursor: "pointer",
+                                background: selected ? "#000000" : "#FFFFFF",
+                                color: selected ? "#FFFFFF" : "rgba(0,0,0,0.55)",
+                                borderLeft: idx > 0 ? "1px solid #DBDBDE" : "none",
+                                userSelect: "none",
+                                transition: "background 0.15s, color 0.15s",
+                              }}
+                            >
+                              <input
+                                type="radio"
+                                name={p.id}
+                                value={op}
+                                checked={selected}
+                                onChange={() => setRespuesta(p.id, op)}
+                                style={{ position: "absolute", opacity: 0, width: 0, height: 0, pointerEvents: "none" }}
+                              />
+                              <span style={{ fontSize: "11px", fontWeight: 400, letterSpacing: "0.1em", textTransform: "uppercase" }}>
+                                {op}
+                              </span>
+                            </label>
+                          );
+                        })}
                       </div>
                     )}
                     {p.tipo === "abierta" && (
@@ -3863,7 +3866,7 @@ function FormularioEvaluacionProyecto({ token, user, proyecto, tipo, manager, ev
                         value={respuestas[p.id] || ""}
                         onChange={(e) => setRespuesta(p.id, e.target.value)}
                         rows={4}
-                        style={{ width: "100%", border: "1px solid #d8d8d8", padding: "10px", fontSize: "14px", resize: "vertical", background: "transparent", color: "#101010", outline: "none", fontFamily: "inherit" }}
+                        style={{ width: "100%", border: "1px solid #DBDBDE", borderRadius: "6px", padding: "12px 14px", fontSize: "14px", lineHeight: "1.6", resize: "vertical", background: "transparent", color: "#000000", outline: "none", fontFamily: "inherit", boxSizing: "border-box" }}
                         placeholder={t("cep.ph_answer")}
                       />
                     )}

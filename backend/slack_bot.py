@@ -28,6 +28,7 @@ from .notion_service import (
     obtener_cargo_por_slack_id,
     idioma_por_slack_id,
     toggle_idioma_slack,
+    invalidar_cache_empleados,
     obtener_config_calendario,
     obtener_ejemplos_guia,
     obtener_evaluados_middleoffice,
@@ -81,6 +82,7 @@ def _bloques_dm_mensual(idioma):
 
 def enviar_una_evaluacion():
     try:
+        invalidar_cache_empleados()  # leer el idioma actual de Notion, no una copia cacheada
         if config.APP_MODE != "produccion" and config.SLACK_TEST_USER_ID:
             slack_ids = [config.SLACK_TEST_USER_ID]
             logging.info(f"Modo prueba: enviando solo a {config.SLACK_TEST_USER_ID}")
@@ -643,14 +645,14 @@ def _handle_sugerencia_interactiva(ack, body, client, logger):
         if _area_peek == "middleoffice":
             _nombre_ev = obtener_nombre_por_id_usuario(user_id)
             _mo_evaluados = obtener_evaluados_middleoffice(_nombre_ev or "") if _nombre_ev else []
-            _preguntas_area_pre = obtener_preguntas_mo()
+            _preguntas_area_pre = obtener_preguntas_mo(_idi)
             if _mo_evaluados and not any(normalizar_nombre(_empleado) == normalizar_nombre(e) for e in _mo_evaluados):
                 _mo_invalido = True
         elif _area_peek == "palantir":
             if _cargo_ev_peek is None:
                 _cargo_evaluador = obtener_cargo_por_slack_id(user_id)
             _relacion = comparar_jerarquia(_cargo_evaluador or "", _cargo or "")
-            _preguntas_area_pre = obtener_preguntas_palantir(tipo_relacion(_relacion))
+            _preguntas_area_pre = obtener_preguntas_palantir(tipo_relacion(_relacion), _idi)
         else:
             if _cargo_ev_peek is None:
                 _cargo_evaluador = obtener_cargo_por_slack_id(user_id)
@@ -1295,7 +1297,7 @@ def handle_message_events(event, logger):
                 if _empleado_pre:
                     _sugerencias_por_usuario.pop(user_id, None)
                     if _area_peek == "middleoffice":
-                        _preguntas_area_pre = obtener_preguntas_mo()
+                        _preguntas_area_pre = obtener_preguntas_mo(idioma_por_slack_id(user_id))
                         if _mo_evaluados and not any(
                             normalizar_nombre(_empleado_pre) == normalizar_nombre(e) for e in _mo_evaluados
                         ):
@@ -1306,12 +1308,12 @@ def handle_message_events(event, logger):
                         if _cargo_ev_peek is None:
                             _cargo_evaluador_pre = obtener_cargo_por_slack_id(user_id)
                         _relacion_pre = comparar_jerarquia(_cargo_evaluador_pre or "", _cargo_pre or "")
-                        _preguntas_area_pre = obtener_preguntas_palantir(tipo_relacion(_relacion_pre))
+                        _preguntas_area_pre = obtener_preguntas_palantir(tipo_relacion(_relacion_pre), idioma_por_slack_id(user_id))
                     else:
                         if _cargo_ev_peek is None:
                             _cargo_evaluador_pre = obtener_cargo_por_slack_id(user_id)
                         _relacion_pre = comparar_jerarquia(_cargo_evaluador_pre or "", _cargo_pre or "")
-                        _preguntas_pre = obtener_preguntas_desde_notion(tipo_relacion(_relacion_pre))
+                        _preguntas_pre = obtener_preguntas_desde_notion(tipo_relacion(_relacion_pre), idioma_por_slack_id(user_id))
                 else:
                     if _area_peek == "middleoffice":
                         _mo_invalido = True
@@ -2265,7 +2267,7 @@ _RECORDATORIO_PROYECTO_SEGUNDOS = 7 * 24 * 60 * 60  # 1 semana
 # ---------------------------------------------------------------------------
 
 def _build_ejemplo_mensual_view(idioma="es") -> dict:
-    ejemplos = obtener_ejemplos_guia()
+    ejemplos = obtener_ejemplos_guia(idioma)
     ejemplo = ejemplos.get("Mensual", t("bm.no_example", idioma))
     return {
         "type": "modal",
@@ -2286,17 +2288,33 @@ def _build_ejemplo_mensual_view(idioma="es") -> dict:
     }
 
 
+def _vista_modal_cargando() -> dict:
+    """Modal ligero de carga: se abre al instante para no agotar el trigger_id de Slack."""
+    return {
+        "type": "modal",
+        "title": {"type": "plain_text", "text": "Ejemplo"},
+        "close": {"type": "plain_text", "text": "Cerrar"},
+        "blocks": [{"type": "section", "text": {"type": "mrkdwn", "text": "⏳ Cargando… / Loading…"}}],
+    }
+
+
 @slack_app.action("mensual_ver_ejemplo")
 def _handle_mensual_ver_ejemplo(ack, body, logger):
     ack()
     trigger_id = body.get("trigger_id")
     if not trigger_id:
         return
+    # Abrir modal de carga YA (sin lecturas de Notion) para no agotar el trigger_id (~3s).
     try:
-        _idi = idioma_por_slack_id(body.get("user", {}).get("id", ""))
-        slack_app.client.views_open(trigger_id=trigger_id, view=_build_ejemplo_mensual_view(_idi))
+        resp = slack_app.client.views_open(trigger_id=trigger_id, view=_vista_modal_cargando())
     except Exception:
         logger.exception("Error abriendo modal de ejemplo mensual")
+        return
+    try:
+        _idi = idioma_por_slack_id(body.get("user", {}).get("id", ""))
+        slack_app.client.views_update(view_id=resp["view"]["id"], view=_build_ejemplo_mensual_view(_idi))
+    except Exception:
+        logger.exception("Error actualizando modal de ejemplo mensual")
 
 
 @slack_app.action("lang_toggle_mensual")

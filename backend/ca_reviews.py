@@ -30,6 +30,7 @@ from .notion_service import (
     _usa_data_sources,
     idioma_por_slack_id,
     toggle_idioma_slack,
+    invalidar_cache_empleados,
     buscar_empleado_en_lista,
     buscar_empleado_y_cargo,
     obtener_advisees,
@@ -259,14 +260,17 @@ def _ca_guardo_desde(ca_nombre: str, desde_ts: float) -> bool:
 # --- Textos por tipo de evaluación (cada uno devuelve "" si no hay nada nuevo) ---
 
 def _texto_evals_proyecto(advisee: str, desde_fecha: str | None, anonimo: bool = True) -> str:
-    """Evaluaciones de proyecto: 'Resultados Evaluaciones al final de proyecto' (campo Evaluado)."""
+    """Evaluaciones de proyecto: 'Resultados Evaluaciones al final de proyecto' (campo Evaluado).
+
+    A diferencia de las mensuales, NO se filtran por fecha: son evaluaciones de fin de
+    proyecto (poco frecuentes y a menudo anteriores a la última revisión del CA), así que
+    se muestran siempre todas las recibidas.
+    """
     try:
         evals = obtener_evaluaciones_proyecto_por_evaluado(advisee)
     except Exception:
         logging.exception("Error leyendo evaluaciones de proyecto de '%s'", advisee)
         return ""
-    if desde_fecha:
-        evals = [e for e in evals if (e.get("fecha") or "") > desde_fecha]
     if not evals:
         return ""
     lineas = []
@@ -555,7 +559,7 @@ def _texto_pregunta_ca_por_clave(clave: str, idioma="es") -> str:
     if clave == "advisee":
         return t("bc.ask_advisee_name", idioma)
     if clave == "opinion":
-        return obtener_preguntas_seguimiento_ca().get("opinion", "")
+        return obtener_preguntas_seguimiento_ca(idioma).get("opinion", "")
     return t("bc.enter_new_answer", idioma)
 
 
@@ -701,6 +705,7 @@ def _bloques_dm_ca(idioma):
 
 def enviar_pregunta_inicial_ca() -> None:
     try:
+        invalidar_cache_empleados()  # leer el idioma actual de Notion, no una copia cacheada
         if config.APP_MODE != "produccion" and config.SLACK_TEST_USER_ID:
             slack_ids = [config.SLACK_TEST_USER_ID]
             logging.info(f"Modo prueba CA: enviando solo a {config.SLACK_TEST_USER_ID}")
@@ -817,7 +822,7 @@ def _enviar_pregunta_permiso_claude(channel, thread_ts, idioma, estado):
 
 
 def _enviar_pregunta_opinion(channel, thread_ts, idioma, estado):
-    preguntas = obtener_preguntas_seguimiento_ca()
+    preguntas = obtener_preguntas_seguimiento_ca(idioma)
     if estado.get("opinion_via_claude"):
         texto = f"📊 *Resumen generado por Claude:*\n\n{estado.get('resumen_actual', '')}\n\n{preguntas.get('opinion_con_claude', '')}"
     else:
@@ -915,12 +920,16 @@ def manejar_mensaje_ca(event, logger) -> None:
     accion = None
     payload = {}
 
+    # Idioma del CA (receptor), leído fresco para reflejar cambios recientes en Notion
+    # y no quedar congelado en el estado de una conversación previa.
+    _idi = idioma_por_slack_id(user_id)
     with _lock:
         estado = conversaciones_ca.get(conv_key)
         if estado is None:
-            estado = {"modo": "pre_inicial", "ca_nombre": None, "idioma": idioma_por_slack_id(user_id)}
+            estado = {"modo": "pre_inicial", "ca_nombre": None, "idioma": _idi}
             conversaciones_ca[conv_key] = estado
-        _idi = estado.get("idioma", "es")
+        else:
+            estado["idioma"] = _idi
 
         modo = estado["modo"]
 
@@ -1163,7 +1172,7 @@ def manejar_mensaje_ca(event, logger) -> None:
         if resumen_claude:
             _enviar_pregunta_opinion(channel, thread_ts, _idi, estado)
         else:
-            _preg = obtener_preguntas_seguimiento_ca().get("opinion_con_claude", "")
+            _preg = obtener_preguntas_seguimiento_ca(_idi).get("opinion_con_claude", "")
             texto_fallo = f"⚠️ No se pudo generar el resumen con Claude.\n\n{_preg}"
             bloques = [{"type": "section", "text": {"type": "mrkdwn", "text": texto_fallo}}] + fila_atras("atras_ca", "bc.back_btn", estado, _idi)
             slack_app.client.chat_postMessage(channel=channel, thread_ts=thread_ts, text=texto_fallo, blocks=bloques)
@@ -1380,7 +1389,7 @@ def obtener_resumen_advisee_para_ca(ca_nombre: str, advisee: str) -> tuple[str, 
 # ---------------------------------------------------------------------------
 
 def _build_ejemplo_ca_view(idioma="es") -> dict:
-    ejemplos = obtener_ejemplos_guia()
+    ejemplos = obtener_ejemplos_guia(idioma)
     ejemplo = ejemplos.get("CA", t("bm.no_example", idioma))
     return {
         "type": "modal",
@@ -1420,17 +1429,33 @@ def _handle_lang_toggle_ca(ack, body, logger):
         logger.exception("Error cambiando idioma (CA)")
 
 
+def _vista_modal_cargando() -> dict:
+    """Modal ligero de carga: se abre al instante para no agotar el trigger_id de Slack."""
+    return {
+        "type": "modal",
+        "title": {"type": "plain_text", "text": "Ejemplo"},
+        "close": {"type": "plain_text", "text": "Cerrar"},
+        "blocks": [{"type": "section", "text": {"type": "mrkdwn", "text": "⏳ Cargando… / Loading…"}}],
+    }
+
+
 @slack_app.action("ca_ver_ejemplo")
 def _handle_ca_ver_ejemplo(ack, body, logger):
     ack()
     trigger_id = body.get("trigger_id")
     if not trigger_id:
         return
+    # Abrir modal de carga YA (sin lecturas de Notion) para no agotar el trigger_id (~3s).
     try:
-        _idi = idioma_por_slack_id(body.get("user", {}).get("id", ""))
-        slack_app.client.views_open(trigger_id=trigger_id, view=_build_ejemplo_ca_view(_idi))
+        resp = slack_app.client.views_open(trigger_id=trigger_id, view=_vista_modal_cargando())
     except Exception:
         logger.exception("Error abriendo modal de ejemplo CA")
+        return
+    try:
+        _idi = idioma_por_slack_id(body.get("user", {}).get("id", ""))
+        slack_app.client.views_update(view_id=resp["view"]["id"], view=_build_ejemplo_ca_view(_idi))
+    except Exception:
+        logger.exception("Error actualizando modal de ejemplo CA")
 
 
 def ciclo_envio_ca() -> None:

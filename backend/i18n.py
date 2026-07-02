@@ -142,6 +142,8 @@ TEXTOS: dict[str, dict[str, str]] = {
     "bp.back_btn": {"es": "⬅️ Atrás", "en": "⬅️ Back"},
     "bp.back_done": {"es": "⬅️ Volviste atrás", "en": "⬅️ Went back"},
     "bp.opp_header": {"es": "*Esta es tu oportunidad para:*", "en": "*This is your chance to:*"},
+    "bp.current_goals_header": {"es": "\U0001F4CC *Tus objetivos actuales:*", "en": "\U0001F4CC *Your current goals:*"},
+    "bp.no_current_goals": {"es": "\U0001F4CC No tienes objetivos registrados actualmente.", "en": "\U0001F4CC You don't have any goals recorded at the moment."},
     "bp.opp_1": {"es": '*1.* Explicar cómo estás ayudando en _"Contribution to the firm"_', "en": '*1.* Explain how you\'re helping with _"Contribution to the firm"_'},
     "bp.opp_2": {"es": "*2.* Cómo te estás acercando a tus objetivos", "en": "*2.* How you're getting closer to your goals"},
     "bp.btn_view_goals": {"es": "📋 Ver mis objetivos", "en": "📋 View my goals"},

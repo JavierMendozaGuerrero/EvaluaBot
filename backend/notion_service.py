@@ -993,19 +993,22 @@ def _poblar_bbdd_preguntas_mo(db_id: str) -> None:
     _preguntas_mo_bbdd_pobladas.add(db_id)
 
 
-def obtener_preguntas_mo() -> list[dict]:
-    """Devuelve [{clave, texto}] para MiddleOffice (cacheado 5 min)."""
+def obtener_preguntas_mo(idioma: str = "es") -> list[dict]:
+    """Devuelve [{clave, texto}] para MiddleOffice en el idioma dado (cacheado 5 min).
+
+    Filtra por la columna 'Idioma' (ES/EN). Si se pide 'en' y una clave no tiene fila EN,
+    cae a la versión ES. Sin columna Idioma, todo se trata como ES."""
+    idioma = "en" if idioma == "en" else "es"
     ahora = time.time()
     with _lock_preguntas_mo:
-        cached = _cache_preguntas_mo_data.get("data")
-        ts = _cache_preguntas_mo_data.get("ts", 0.0)
-    if cached is not None and (ahora - ts) < _PREGUNTAS_MO_TTL:
-        return cached
+        entry = _cache_preguntas_mo_data.get(idioma)
+    if entry and (ahora - entry["ts"]) < _PREGUNTAS_MO_TTL:
+        return entry["data"]
     db_id = _obtener_o_crear_bbdd_preguntas_mo()
     if not db_id:
         return [{"clave": c, "texto": t} for c, t in _PREGUNTAS_MO_DEFAULT]
     try:
-        resultado = []
+        es_map, en_map = {}, {}
         cursor = None
         while True:
             kwargs: dict = {"page_size": 100}
@@ -1016,21 +1019,25 @@ def obtener_preguntas_mo() -> list[dict]:
                 props = fila.get("properties", {})
                 clave = "".join(p.get("plain_text", "") for p in props.get("Clave", {}).get("title", [])).strip()
                 texto = "".join(p.get("plain_text", "") for p in props.get("Texto", {}).get("rich_text", [])).strip()
-                if clave and texto:
-                    resultado.append({"clave": clave, "texto": texto})
+                if not (clave and texto):
+                    continue
+                if _normalizar_idioma(_texto_propiedad(props, "Idioma")) == "en":
+                    en_map[clave] = texto
+                else:
+                    es_map[clave] = texto
             if not resp.get("has_more"):
                 break
             cursor = resp.get("next_cursor")
-        if not resultado:
-            resultado = [{"clave": c, "texto": t} for c, t in _PREGUNTAS_MO_DEFAULT]
-        # Filtrar solo claves conocidas y ordenar según _PREGUNTAS_MO_DEFAULT
-        resultado = [q for q in resultado if q["clave"] in set(_CLAVES_MO_ORDEN)]
-        resultado.sort(key=lambda q: _CLAVES_MO_ORDEN.index(q["clave"]))
+        base = en_map if idioma == "en" else es_map
+        resultado = []
+        for c in _CLAVES_MO_ORDEN:
+            texto = base.get(c) or es_map.get(c)  # fallback EN->ES
+            if texto:
+                resultado.append({"clave": c, "texto": texto})
         if not resultado:
             resultado = [{"clave": c, "texto": t} for c, t in _PREGUNTAS_MO_DEFAULT]
         with _lock_preguntas_mo:
-            _cache_preguntas_mo_data["data"] = resultado
-            _cache_preguntas_mo_data["ts"] = time.time()
+            _cache_preguntas_mo_data[idioma] = {"data": resultado, "ts": time.time()}
         return resultado
     except Exception:
         logging.exception("Error leyendo preguntas MiddleOffice desde Notion")
@@ -1161,19 +1168,23 @@ def _poblar_bbdd_preguntas_palantir(db_id: str) -> None:
     _preguntas_palantir_bbdd_pobladas.add(db_id)
 
 
-def obtener_preguntas_palantir(tipo: str) -> list[dict]:
-    """Devuelve [{clave, texto}] para el tipo de jerarquía dado en Palantir (cacheado 5 min)."""
+def obtener_preguntas_palantir(tipo: str, idioma: str = "es") -> list[dict]:
+    """Devuelve [{clave, texto}] para el tipo de jerarquía dado en Palantir (cacheado 5 min).
+
+    Filtra por la columna 'Idioma' (ES/EN) con fallback EN->ES por clave."""
+    idioma = "en" if idioma == "en" else "es"
     ahora = time.time()
+    cache_key = f"{tipo}|{idioma}"
     with _lock_preguntas_palantir:
-        cached = _cache_preguntas_palantir_data.get(tipo)
-        ts = _cache_preguntas_palantir_ts.get(tipo, 0.0)
+        cached = _cache_preguntas_palantir_data.get(cache_key)
+        ts = _cache_preguntas_palantir_ts.get(cache_key, 0.0)
     if cached is not None and (ahora - ts) < _PREGUNTAS_PALANTIR_TTL:
         return cached
     db_id = _obtener_o_crear_bbdd_preguntas_palantir()
     if not db_id:
         return [{"clave": c, "texto": t} for tp, c, t in _PREGUNTAS_PALANTIR_DEFAULT if tp == tipo]
     try:
-        resultado = []
+        es_map, en_map = {}, {}
         cursor = None
         while True:
             kwargs: dict = {"page_size": 100}
@@ -1187,17 +1198,26 @@ def obtener_preguntas_palantir(tipo: str) -> list[dict]:
                     continue
                 clave = "".join(p.get("plain_text", "") for p in props.get("Clave", {}).get("title", [])).strip()
                 texto = "".join(p.get("plain_text", "") for p in props.get("Texto", {}).get("rich_text", [])).strip()
-                if clave and texto:
-                    resultado.append({"clave": clave, "texto": texto})
+                if not (clave and texto):
+                    continue
+                if _normalizar_idioma(_texto_propiedad(props, "Idioma")) == "en":
+                    en_map[clave] = texto
+                else:
+                    es_map[clave] = texto
             if not resp.get("has_more"):
                 break
             cursor = resp.get("next_cursor")
+        base = en_map if idioma == "en" else es_map
+        claves = sorted(set(es_map) | set(en_map))
+        resultado = [{"clave": c, "texto": base.get(c) or es_map.get(c)} for c in claves if (base.get(c) or es_map.get(c))]
         if not resultado:
-            resultado = [{"clave": c, "texto": t} for tp, c, t in _PREGUNTAS_PALANTIR_DEFAULT if tp == tipo]
-        resultado.sort(key=lambda x: x["clave"])
+            resultado = sorted(
+                [{"clave": c, "texto": t} for tp, c, t in _PREGUNTAS_PALANTIR_DEFAULT if tp == tipo],
+                key=lambda x: x["clave"],
+            )
         with _lock_preguntas_palantir:
-            _cache_preguntas_palantir_data[tipo] = resultado
-            _cache_preguntas_palantir_ts[tipo] = time.time()
+            _cache_preguntas_palantir_data[cache_key] = resultado
+            _cache_preguntas_palantir_ts[cache_key] = time.time()
         return resultado
     except Exception:
         logging.exception("Error leyendo preguntas Palantir tipo '%s'", tipo)
@@ -1719,6 +1739,14 @@ def _obtener_registros_empleados() -> list[dict]:
         return []
 
 
+def invalidar_cache_empleados() -> None:
+    """Fuerza que la próxima lectura de empleados vuelva a Notion (para reflejar cambios recientes,
+    p. ej. la columna Idioma). Útil antes de enviar los DM iniciales."""
+    global _empleados_cache_ts
+    with _lock_empleados:
+        _empleados_cache_ts = 0.0
+
+
 def obtener_lista_empleados() -> list[str]:
     """Lee los nombres canonicos de empleados desde Notion."""
     return [registro["nombre"] for registro in _obtener_registros_empleados()]
@@ -1846,14 +1874,18 @@ def _obtener_db_criterios(grupo: str) -> str | None:
         return None
 
 
-def obtener_criterios_evaluacion(grupo: str) -> dict:
+def obtener_criterios_evaluacion(grupo: str, idioma: str = "es") -> dict:
     """
-    Devuelve {dimension_label: {nivel: [textos]}} para el grupo indicado.
+    Devuelve {dimension_label: {nivel: [textos]}} para el grupo indicado, en el idioma dado.
     Lee de 'Criterios de evaluaciones/{grupo}' en Notion. Cachea 5 min.
+    Filtra por la columna 'Idioma' (ES/EN); el nombre del Criterio es la clave estable
+    (no se traduce) y se cae a ES cuando un criterio no tiene fila EN.
     """
+    idioma = "en" if idioma == "en" else "es"
     ahora = time.time()
+    cache_key = f"{grupo}|{idioma}"
     with _lock_criterios:
-        cached = _cache_criterios.get(grupo)
+        cached = _cache_criterios.get(cache_key)
         if cached and (ahora - cached[1]) < _CRITERIOS_CACHE_TTL:
             return cached[0]
 
@@ -1866,7 +1898,8 @@ def obtener_criterios_evaluacion(grupo: str) -> dict:
     def _rt(prop):
         return "".join(t.get("plain_text", "") for t in (prop or {}).get("rich_text", [])).strip()
 
-    resultado: dict = {}
+    es_res: dict = {}
+    en_res: dict = {}
     try:
         cursor = None
         while True:
@@ -1885,8 +1918,12 @@ def obtener_criterios_evaluacion(grupo: str) -> dict:
                     texto = _rt(props.get(nivel))
                     if texto:
                         niveles[nivel] = [texto]
-                if niveles:
-                    resultado[criterio] = niveles
+                if not niveles:
+                    continue
+                if _normalizar_idioma(_texto_propiedad(props, "Idioma")) == "en":
+                    en_res[criterio] = niveles
+                else:
+                    es_res[criterio] = niveles
             if not resp.get("has_more"):
                 break
             cursor = resp.get("next_cursor")
@@ -1894,8 +1931,13 @@ def obtener_criterios_evaluacion(grupo: str) -> dict:
         logging.exception("Error leyendo criterios para grupo '%s'", grupo)
         return {}
 
+    if idioma == "en":
+        resultado = {c: (en_res.get(c) or es_res.get(c)) for c in (list(es_res) + [k for k in en_res if k not in es_res])}
+    else:
+        resultado = es_res
+
     with _lock_criterios:
-        _cache_criterios[grupo] = (resultado, time.time())
+        _cache_criterios[cache_key] = (resultado, time.time())
     return resultado
 
 
@@ -1905,7 +1947,7 @@ def obtener_criterios_evaluacion(grupo: str) -> dict:
 
 _NOMBRE_PAGINA_EJEMPLOS = "Ejemplos de Guia para bot"
 _NOMBRES_PAGINA_EJEMPLOS_FALLBACK = ("Ejemplos de guia", "Ejemplos de guía")
-_cache_ejemplos: dict | None = None
+_cache_ejemplos: dict = {}  # idioma -> (data, ts)
 _cache_ejemplos_ts: float = 0.0
 _ejemplos_db_id: str | None = None
 _ejemplos_db_id_ts: float = 0.0
@@ -1972,17 +2014,19 @@ def _obtener_db_ejemplos() -> str | None:
     return None
 
 
-def obtener_ejemplos_guia() -> dict:
+def obtener_ejemplos_guia(idioma: str = "es") -> dict:
     """
-    Devuelve {tipo: texto_ejemplo} leyendo la BD 'Ejemplos de guia' en 'Listas de datos'.
-    La BD debe tener columna 'Tipo' (title) y una columna rich_text con el ejemplo.
-    Cachea 5 min.
+    Devuelve {tipo: texto_ejemplo} leyendo la BD 'Ejemplos de Guia para bot' en el idioma dado.
+    La BD tiene una columna título ('Tipo', la clave) y una columna rich_text con el ejemplo.
+    Filtra por la columna 'Idioma' (ES/EN) con fallback EN->ES por tipo. Cachea 5 min.
     """
-    global _cache_ejemplos, _cache_ejemplos_ts
+    global _cache_ejemplos
+    idioma = "en" if idioma == "en" else "es"
     ahora = time.time()
     with _lock_ejemplos:
-        if _cache_ejemplos is not None and (ahora - _cache_ejemplos_ts) < _EJEMPLOS_CACHE_TTL:
-            return _cache_ejemplos
+        cached = _cache_ejemplos.get(idioma) if isinstance(_cache_ejemplos, dict) else None
+        if cached and (ahora - cached[1]) < _EJEMPLOS_CACHE_TTL:
+            return cached[0]
 
     db_id = _obtener_db_ejemplos()
     if not db_id:
@@ -1991,7 +2035,7 @@ def obtener_ejemplos_guia() -> dict:
     def _rt(prop):
         return "".join(t.get("plain_text", "") for t in (prop or {}).get("rich_text", [])).strip()
 
-    resultado: dict = {}
+    es_map, en_map = {}, {}
     try:
         cursor = None
         while True:
@@ -2011,7 +2055,7 @@ def obtener_ejemplos_guia() -> dict:
                         break
                 if not tipo:
                     continue
-                # Primera columna rich_text como texto del ejemplo
+                # Primera columna rich_text (que no sea el título) como texto del ejemplo
                 ejemplo = ""
                 for key, val in props.items():
                     if key != tipo_key and (val or {}).get("type") == "rich_text":
@@ -2019,7 +2063,10 @@ def obtener_ejemplos_guia() -> dict:
                         if texto:
                             ejemplo = texto
                             break
-                resultado[tipo] = ejemplo
+                if _normalizar_idioma(_texto_propiedad(props, "Idioma")) == "en":
+                    en_map[tipo] = ejemplo
+                else:
+                    es_map[tipo] = ejemplo
             if not resp.get("has_more"):
                 break
             cursor = resp.get("next_cursor")
@@ -2027,9 +2074,15 @@ def obtener_ejemplos_guia() -> dict:
         logging.exception("[ejemplos] Error leyendo BD de ejemplos de guía")
         return {}
 
+    if idioma == "en":
+        resultado = {tp: (en_map.get(tp) or es_map.get(tp)) for tp in (set(es_map) | set(en_map))}
+    else:
+        resultado = es_map
+
     with _lock_ejemplos:
-        _cache_ejemplos = resultado
-        _cache_ejemplos_ts = time.time()
+        if not isinstance(_cache_ejemplos, dict):
+            _cache_ejemplos = {}
+        _cache_ejemplos[idioma] = (resultado, time.time())
     return resultado
 
 
@@ -3688,14 +3741,17 @@ def _poblar_bbdd_preguntas_personal(db_id: str) -> None:
             logging.exception("Error poblando pregunta personal '%s'", clave)
 
 
-def obtener_preguntas_personales() -> dict:
+def obtener_preguntas_personales(idioma: str = "es") -> dict:
+    """Devuelve {clave: texto} de la evaluación personal en el idioma dado (cacheado 5 min).
+
+    Filtra por la columna 'Idioma' (ES/EN) con fallback EN->ES por clave."""
     import time as _time
+    idioma = "en" if idioma == "en" else "es"
     ahora = _time.time()
     with lock:
-        cached = _cache_personal_preguntas.get("data")
-        ts = _cache_personal_preguntas.get("ts", 0.0)
-    if cached and (ahora - ts) < _PERSONAL_PREGUNTAS_TTL:
-        return cached
+        entry = _cache_personal_preguntas.get(idioma)
+    if entry and (ahora - entry["ts"]) < _PERSONAL_PREGUNTAS_TTL:
+        return entry["data"]
 
     db_id = _buscar_o_crear_bbdd_en_personales(
         "Preguntas", _PROPS_PERSONAL_PREGUNTAS, _cache_personal_preguntas_db,
@@ -3707,7 +3763,7 @@ def obtener_preguntas_personales() -> dict:
     _migrar_mensaje_inicial(db_id)
 
     try:
-        resultado = {}
+        es_map, en_map = {}, {}
         cursor = None
         while True:
             kwargs: dict = {"page_size": 100}
@@ -3718,17 +3774,22 @@ def obtener_preguntas_personales() -> dict:
                 props = fila.get("properties", {})
                 clave = " ".join(p.get("plain_text", "") for p in props.get("Clave", {}).get("title", [])).strip()
                 texto = " ".join(p.get("plain_text", "") for p in props.get("Texto", {}).get("rich_text", [])).strip()
-                if clave and texto:
-                    resultado[clave] = texto
+                if not (clave and texto):
+                    continue
+                if _normalizar_idioma(_texto_propiedad(props, "Idioma")) == "en":
+                    en_map[clave] = texto
+                else:
+                    es_map[clave] = texto
             if not resp.get("has_more"):
                 break
             cursor = resp.get("next_cursor")
-        # Lo que hay en Notion manda: NO se re-siembran las claves por defecto en la lectura,
-        # para que añadir/quitar preguntas desde Notion surta efecto. La semilla solo se aplica
-        # al crear la BD por primera vez.
+        # Lo que hay en Notion manda: NO se re-siembran las claves por defecto (añadir/quitar surte efecto).
+        if idioma == "en":
+            resultado = {c: (en_map.get(c) or es_map.get(c)) for c in (set(es_map) | set(en_map))}
+        else:
+            resultado = es_map
         with lock:
-            _cache_personal_preguntas["data"] = resultado
-            _cache_personal_preguntas["ts"] = _time.time()
+            _cache_personal_preguntas[idioma] = {"data": resultado, "ts": _time.time()}
         return resultado
     except Exception:
         logging.exception("Error leyendo preguntas personales desde Notion")
@@ -3803,21 +3864,24 @@ def _obtener_o_crear_bbdd_preguntas_ca() -> str | None:
         return None
 
 
-def obtener_preguntas_seguimiento_ca() -> dict:
+def obtener_preguntas_seguimiento_ca(idioma: str = "es") -> dict:
+    """Devuelve {clave: texto} de seguimiento CA en el idioma dado (cacheado 5 min).
+
+    Filtra por la columna 'Idioma' (ES/EN) con fallback EN->ES por clave."""
     import time as _time
+    idioma = "en" if idioma == "en" else "es"
     ahora = _time.time()
     with lock:
-        cached = _cache_ca_preguntas.get("data")
-        ts = _cache_ca_preguntas.get("ts", 0.0)
-    if cached and (ahora - ts) < _CA_PREGUNTAS_TTL:
-        return cached
+        entry = _cache_ca_preguntas.get(idioma)
+    if entry and (ahora - entry["ts"]) < _CA_PREGUNTAS_TTL:
+        return entry["data"]
 
     db_id = _obtener_o_crear_bbdd_preguntas_ca()
     if not db_id:
         return dict(PREGUNTAS_CA_DEFAULT)
 
     try:
-        resultado = {}
+        es_map, en_map = {}, {}
         cursor = None
         while True:
             kwargs: dict = {"page_size": 100}
@@ -3828,16 +3892,24 @@ def obtener_preguntas_seguimiento_ca() -> dict:
                 props = fila.get("properties", {})
                 clave = " ".join(p.get("plain_text", "") for p in props.get("Clave", {}).get("title", [])).strip()
                 texto = " ".join(p.get("plain_text", "") for p in props.get("Texto", {}).get("rich_text", [])).strip()
-                if clave and texto:
-                    resultado[clave] = texto
+                if not (clave and texto):
+                    continue
+                if _normalizar_idioma(_texto_propiedad(props, "Idioma")) == "en":
+                    en_map[clave] = texto
+                else:
+                    es_map[clave] = texto
             if not resp.get("has_more"):
                 break
             cursor = resp.get("next_cursor")
+        if idioma == "en":
+            resultado = {c: (en_map.get(c) or es_map.get(c)) for c in (set(es_map) | set(en_map))}
+        else:
+            resultado = dict(es_map)
+        # Garantiza que las 3 claves de flujo existan siempre (por seguridad).
         for k, v in PREGUNTAS_CA_DEFAULT.items():
             resultado.setdefault(k, v)
         with lock:
-            _cache_ca_preguntas["data"] = resultado
-            _cache_ca_preguntas["ts"] = _time.time()
+            _cache_ca_preguntas[idioma] = {"data": resultado, "ts": _time.time()}
         return resultado
     except Exception:
         logging.exception("Error leyendo preguntas CA desde Notion")

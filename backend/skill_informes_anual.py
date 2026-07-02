@@ -306,13 +306,13 @@ def _grupo_por_cargo(cargo: str) -> str:
     return "Negocio"
 
 
-def _criterios_para_prompt(cargo: str) -> str:
+def _criterios_para_prompt(cargo: str, idioma: str = "es") -> str:
     nivel = _nivel_cargo(cargo)
     grupo = _grupo_por_cargo(cargo)
 
     # Intentar leer desde Notion
     try:
-        criterios_notion = obtener_criterios_evaluacion(grupo)
+        criterios_notion = obtener_criterios_evaluacion(grupo, idioma)
     except Exception:
         criterios_notion = {}
 
@@ -736,7 +736,7 @@ def interpretar_evaluaciones_anual(emp_data: dict, cargo: str = "", criterios: s
         dims += list(_DIMS_LIDERAZGO)
     dims_lista = ", ".join(f'"{c}"' for c, _ in dims)
 
-    criterios_bloque = _criterios_para_prompt(cargo) if criterios is None else criterios
+    criterios_bloque = _criterios_para_prompt(cargo, idioma) if criterios is None else criterios
     criterios_section = (
         f"\n\nCRITERIOS DTI DE EVALUACIÓN (úsalos para calibrar el feedback según el cargo):\n{criterios_bloque}"
         if criterios_bloque else ""

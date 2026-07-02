@@ -13,6 +13,7 @@ from .notion_service import (
     guardar_evaluacion_personal,
     idioma_por_slack_id,
     toggle_idioma_slack,
+    invalidar_cache_empleados,
     obtener_ca_de_empleado,
     obtener_config_calendario,
     obtener_criterios_evaluacion,
@@ -40,15 +41,15 @@ conversaciones_personal: dict = {}
 _RECORDATORIO_SEGUNDOS = 7 * 24 * 60 * 60  # 1 semana
 
 
-def _obtener_bloques_oportunidad() -> list:
-    preguntas = obtener_preguntas_personales()
+def _obtener_bloques_oportunidad(idioma: str = "es") -> list:
+    preguntas = obtener_preguntas_personales(idioma)
     items = [
         ("item_1", None),
-        ("item_2", {"type": "button", "text": {"type": "plain_text", "text": "📋 Ver mis objetivos"}, "action_id": "personal_ver_objetivos"}),
+        ("item_2", {"type": "button", "text": {"type": "plain_text", "text": t("bp.btn_view_goals", idioma), "emoji": True}, "action_id": "personal_ver_objetivos"}),
         ("item_4", None),
-        ("item_3", {"type": "button", "text": {"type": "plain_text", "text": "📊 Ver criterios"}, "action_id": "personal_ver_criterios"}),
+        ("item_3", {"type": "button", "text": {"type": "plain_text", "text": t("bp.btn_view_criteria", idioma), "emoji": True}, "action_id": "personal_ver_criterios"}),
     ]
-    bloques = [{"type": "section", "text": {"type": "mrkdwn", "text": "*Esta es tu oportunidad para:*"}}]
+    bloques = [{"type": "section", "text": {"type": "mrkdwn", "text": t("bp.opp_header", idioma)}}]
     for clave, accessory in items:
         texto = preguntas.get(clave, clave)
         bloque: dict = {"type": "section", "text": {"type": "mrkdwn", "text": f"➜ {texto}"}}
@@ -87,6 +88,7 @@ def _bloques_dm_personal(idioma):
 
 def enviar_pregunta_inicial_personal() -> None:
     try:
+        invalidar_cache_empleados()  # leer el idioma actual de Notion, no una copia cacheada
         if config.APP_MODE != "produccion" and config.SLACK_TEST_USER_ID:
             slack_ids = [config.SLACK_TEST_USER_ID]
         else:
@@ -326,7 +328,7 @@ def manejar_mensaje_personal(event, logger) -> None:
     if accion == "mostrar_bloque_inicio":
         # Primer mensaje del hilo: barra de carga mientras leemos las preguntas de Notion.
         with AnimacionCargando(dm_channel, thread_ts, _idi):
-            bloques = _obtener_bloques_oportunidad()
+            bloques = _obtener_bloques_oportunidad(_idi)
         slack_app.client.chat_postMessage(
             channel=dm_channel,
             thread_ts=thread_ts,
@@ -494,6 +496,7 @@ def _handle_personal_ver_objetivos(ack, body, logger):
                 nombre = user_id
 
         objetivos = obtener_objetivos_persona(nombre) if nombre else []
+        _idi = idioma_por_slack_id(user_id)
         if objetivos:
             lineas = []
             for obj in objetivos:
@@ -503,9 +506,9 @@ def _handle_personal_ver_objetivos(ack, body, logger):
                 if obj.get("descripcion"):
                     linea += f"\n  {obj['descripcion']}"
                 lineas.append(linea)
-            msg_obj = "📌 *Tus objetivos actuales:*\n\n" + "\n\n".join(lineas)
+            msg_obj = t("bp.current_goals_header", _idi) + "\n\n" + "\n\n".join(lineas)
         else:
-            msg_obj = "📌 No tienes objetivos registrados actualmente."
+            msg_obj = t("bp.no_current_goals", _idi)
 
         slack_app.client.chat_postMessage(
             channel=channel,
@@ -631,7 +634,7 @@ def _handle_criterios_elegir_grupo(ack, body, logger):
     grupo = selected.get("value", "negocio")
     try:
         notion_grupo = _GRUPOS_CRITERIOS.get(grupo, grupo)
-        criterios = obtener_criterios_evaluacion(notion_grupo)
+        criterios = obtener_criterios_evaluacion(notion_grupo, idioma_por_slack_id(body.get("user", {}).get("id", "")))
         slack_app.client.views_update(
             view_id=view_id,
             view=_build_criterios_view(grupo, criterios, set()),
@@ -658,7 +661,7 @@ def _handle_criterios_toggle(ack, body, logger):
         expanded.add(subarea)
     try:
         notion_grupo = _GRUPOS_CRITERIOS.get(grupo, grupo)
-        criterios = obtener_criterios_evaluacion(notion_grupo)
+        criterios = obtener_criterios_evaluacion(notion_grupo, idioma_por_slack_id(body.get("user", {}).get("id", "")))
         slack_app.client.views_update(
             view_id=view["id"],
             view=_build_criterios_view(grupo, criterios, expanded),
@@ -745,20 +748,37 @@ def _handle_lang_toggle_personal(ack, body, logger):
         logger.exception("Error cambiando idioma (personal)")
 
 
+def _vista_modal_cargando() -> dict:
+    """Modal ligero de carga: se abre al instante para no agotar el trigger_id de Slack."""
+    return {
+        "type": "modal",
+        "title": {"type": "plain_text", "text": "Ejemplo"},
+        "close": {"type": "plain_text", "text": "Cerrar"},
+        "blocks": [{"type": "section", "text": {"type": "mrkdwn", "text": "⏳ Cargando… / Loading…"}}],
+    }
+
+
 @slack_app.action("personal_ver_ejemplo")
 def _handle_personal_ver_ejemplo(ack, body, logger):
     ack()
     trigger_id = body.get("trigger_id")
     if not trigger_id:
         return
+    # Abrir un modal de carga YA (sin lecturas de Notion) para no agotar el trigger_id (~3s),
+    # y luego rellenarlo con views_update una vez leídos idioma + ejemplos.
     try:
-        ejemplos = obtener_ejemplos_guia()
-        slack_app.client.views_open(
-            trigger_id=trigger_id,
+        resp = slack_app.client.views_open(trigger_id=trigger_id, view=_vista_modal_cargando())
+    except Exception:
+        logger.exception("Error abriendo modal de ejemplos personal")
+        return
+    try:
+        ejemplos = obtener_ejemplos_guia(idioma_por_slack_id(body.get("user", {}).get("id", "")))
+        slack_app.client.views_update(
+            view_id=resp["view"]["id"],
             view=_build_ejemplos_personal_view(ejemplos, set()),
         )
     except Exception:
-        logger.exception("Error abriendo modal de ejemplos personal")
+        logger.exception("Error actualizando modal de ejemplos personal")
 
 
 @slack_app.action("ejemplo_personal_toggle")
@@ -777,7 +797,7 @@ def _handle_ejemplo_personal_toggle(ack, body, logger):
     else:
         expanded.add(tipo)
     try:
-        ejemplos = obtener_ejemplos_guia()
+        ejemplos = obtener_ejemplos_guia(idioma_por_slack_id(body.get("user", {}).get("id", "")))
         slack_app.client.views_update(
             view_id=view["id"],
             view=_build_ejemplos_personal_view(ejemplos, expanded),

@@ -283,7 +283,7 @@ class ApiHandler(BaseHTTPRequestHandler):
                 grupo = query_params.get("grupo", ["negocio"])[0]
                 _GRUPO_NOTION = {"negocio": "Negocio", "palantir": "Palantir", "middleoffice": "MiddleOffice"}
                 notion_grupo = _GRUPO_NOTION.get(grupo, grupo)
-                criterios = obtener_criterios_evaluacion(notion_grupo)
+                criterios = obtener_criterios_evaluacion(notion_grupo, idioma_por_sesion(sesion))
                 self.responder_json({"criterios": criterios})
                 return
             if ruta == "/api/objetivos":
@@ -413,7 +413,7 @@ class ApiHandler(BaseHTTPRequestHandler):
                 if tipo not in LABELS_TIPOS:
                     self.responder_json({"error": "Tipo no válido."}, 400)
                     return
-                preguntas = obtener_preguntas_tipo(tipo)
+                preguntas = obtener_preguntas_tipo(tipo, idioma_por_sesion(sesion))
                 self.responder_json({"preguntas": preguntas})
                 return
             if ruta == "/api/equipo-proyecto":
@@ -525,7 +525,7 @@ class ApiHandler(BaseHTTPRequestHandler):
                     mo_evaluables = obtener_evaluados_middleoffice(persona)
                     self.responder_json({
                         "moEvaluables": mo_evaluables,
-                        "preguntas": obtener_preguntas_mo(),
+                        "preguntas": obtener_preguntas_mo(idioma_por_sesion(sesion)),
                     })
                     return
                 if not nombre_busqueda:
@@ -546,12 +546,13 @@ class ApiHandler(BaseHTTPRequestHandler):
                 cargo_evaluador = evaluador_perfil.get("cargo", "")
                 relacion = comparar_jerarquia(cargo_evaluador, cargo_evaluado or "")
                 tipo = tipo_relacion(relacion)
+                _idi = idioma_por_sesion(sesion)
                 if area == "middleoffice":
-                    preguntas = obtener_preguntas_mo()
+                    preguntas = obtener_preguntas_mo(_idi)
                 elif area == "palantir":
-                    preguntas = obtener_preguntas_palantir(tipo)
+                    preguntas = obtener_preguntas_palantir(tipo, _idi)
                 else:
-                    pn = obtener_preguntas_desde_notion(tipo)
+                    pn = obtener_preguntas_desde_notion(tipo, _idi)
                     nocion_q1 = pn.get("q1", "")
                     def _es_default(t):
                         return not t or t.startswith("Este mes") or "Puedes considerar claridad" in t
@@ -933,7 +934,7 @@ class ApiHandler(BaseHTTPRequestHandler):
                 if tipo not in LABELS_TIPOS:
                     self.responder_json({"error": "Tipo de evaluación no válido."}, 400)
                     return
-                preguntas = obtener_preguntas_tipo(tipo)
+                preguntas = obtener_preguntas_tipo(tipo, idioma_por_sesion(sesion))
                 ok = guardar_evaluacion_proyecto(evaluador, evaluado, proyecto, tipo, respuestas, preguntas)
                 if ok:
                     self.responder_json({"ok": True})

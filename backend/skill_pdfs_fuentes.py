@@ -48,6 +48,7 @@ _BLACK = colors.HexColor('#000000') if _REPORTLAB_OK else None
 _L = {
     "es": {"t_proyecto": "Evaluaciones de proyecto", "t_seguimiento": "Seguimiento personal",
            "t_mensuales": "Evaluaciones mensuales", "t_completo": "Información completa recibida",
+           "t_evals_extra": "Evaluaciones extra (fuera de proyecto)",
            "s_opiniones": "Opiniones del CA", "valoracion": "Valoración", "ejemplo": "Ejemplo",
            "nota_ca": "Nota del CA", "resumen": "Resumen", "opinion_ca": "Opinión CA",
            "sin_datos_fuente": "Sin datos para esta fuente.", "sin_datos": "Sin datos.",
@@ -55,6 +56,7 @@ _L = {
            "lider": "líder", "igual": "igual", "subordinado": "subordinado", "sin_nivel": "sin nivel"},
     "en": {"t_proyecto": "Project evaluations", "t_seguimiento": "Personal tracking",
            "t_mensuales": "Monthly evaluations", "t_completo": "Full information received",
+           "t_evals_extra": "Extra evaluations (outside project)",
            "s_opiniones": "CA opinions", "valoracion": "Rating", "ejemplo": "Example",
            "nota_ca": "CA note", "resumen": "Summary", "opinion_ca": "CA opinion",
            "sin_datos_fuente": "No data for this source.", "sin_datos": "No data.",
@@ -62,6 +64,7 @@ _L = {
            "lider": "lead", "igual": "same level", "subordinado": "subordinate", "sin_nivel": "no level"},
     "pt": {"t_proyecto": "Avaliações de projeto", "t_seguimiento": "Acompanhamento pessoal",
            "t_mensuales": "Avaliações mensais", "t_completo": "Informação completa recebida",
+           "t_evals_extra": "Avaliações extra (fora do projeto)",
            "s_opiniones": "Opiniões do CA", "valoracion": "Avaliação", "ejemplo": "Exemplo",
            "nota_ca": "Nota do CA", "resumen": "Resumo", "opinion_ca": "Opinião CA",
            "sin_datos_fuente": "Sem dados para esta fonte.", "sin_datos": "Sem dados.",
@@ -236,7 +239,7 @@ def generar_pdf_evals_extra(advisee: str, anonimo: bool = True, idioma: str = "e
         "cuerpo": d.get("justificacion", ""),
     } for d in datos]
     slug = slug_archivo(advisee)
-    _construir_pdf("Evaluaciones extra (fuera de proyecto)", advisee, _ca_de(advisee), entradas, f"evals_extra_{slug}.pdf", idioma)
+    _construir_pdf(_t(idioma, "t_evals_extra"), advisee, _ca_de(advisee), entradas, f"evals_extra_{slug}.pdf", idioma)
     return slug
 
 
@@ -367,7 +370,7 @@ def generar_pdf_completo(advisee: str, anonimo: bool = True, idioma: str = "es")
         (_t(idioma, "t_mensuales"), _entradas_evals_mensuales(advisee, anonimo, idioma)),
         (_t(idioma, "t_proyecto"), _entradas_evals_proyecto(advisee, anonimo=False, idioma=idioma)),
         (_t(idioma, "t_seguimiento"), _entradas_seguimiento(advisee, anonimo, idioma)),
-        ("Evaluaciones extra (fuera de proyecto)", _entradas_evals_extra(advisee, anonimo=False, idioma=idioma)),
+        (_t(idioma, "t_evals_extra"), _entradas_evals_extra(advisee, anonimo=False, idioma=idioma)),
     ]
     slug = slug_archivo(advisee)
     _construir_pdf_secciones(_t(idioma, "t_completo"), advisee, ca, secciones, f"info_completa_{slug}.pdf", idioma)

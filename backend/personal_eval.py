@@ -19,6 +19,7 @@ from .notion_service import (
     obtener_nombre_por_id_usuario,
     obtener_objetivos_persona,
     obtener_preguntas_personales,
+    PREGUNTAS_PERSONALES_DEFAULT,
     obtener_slack_id_por_nombre,
     obtener_slack_ids_empleados,
     siguiente_envio_calendario,
@@ -37,25 +38,66 @@ conversaciones_personal: dict = {}
 _RECORDATORIO_SEGUNDOS = 7 * 24 * 60 * 60  # 1 semana
 
 
-def _obtener_bloques_oportunidad(urgencia: bool = True) -> list:
-    preguntas = obtener_preguntas_personales()
-    items = [
-        ("item_1", None),
-        ("item_2", {"type": "button", "text": {"type": "plain_text", "text": "📋 Ver mis objetivos"}, "action_id": "personal_ver_objetivos"}),
-        ("item_3", {"type": "button", "text": {"type": "plain_text", "text": "📊 Ver criterios"}, "action_id": "personal_ver_criterios"}),
-    ]
-    if urgencia:
-        items.append(("item_4", {"type": "button", "text": {"type": "plain_text", "text": "🚨 Urgencia"}, "style": "danger", "action_id": "personal_urgencia"}))
-    bloques = [{"type": "section", "text": {"type": "mrkdwn", "text": "*Esta es tu oportunidad para:*"}}]
-    for i, (clave, accessory) in enumerate(items, 1):
-        texto = preguntas.get(clave, f"Punto {i}")
-        if clave == "item_4":
+# Botón que se cuelga a cada punto según su Clave en Notion. Las claves no listadas
+# (p. ej. una pregunta nueva que añadas en Notion) se muestran como punto sin botón.
+_ACCESSORIES_OPORTUNIDAD = {
+    "item_2": {"type": "button", "text": {"type": "plain_text", "text": "📋 Ver mis objetivos"}, "action_id": "personal_ver_objetivos"},
+    "item_3": {"type": "button", "text": {"type": "plain_text", "text": "📊 Ver criterios"}, "action_id": "personal_ver_criterios"},
+    "item_4": {"type": "button", "text": {"type": "plain_text", "text": "🚨 Urgencia"}, "style": "danger", "action_id": "personal_urgencia"},
+}
+# Claves de Notion que NO son puntos de la lista de oportunidad.
+_CLAVES_NO_OPORTUNIDAD = {"mensaje_inicial"}
+# Clave cuyo punto solo se muestra cuando el bloque incluye urgencia.
+_CLAVE_URGENCIA = "item_4"
+
+
+def _orden_clave_oportunidad(clave: str):
+    """Ordena item_1, item_2, ... item_10 correctamente; claves sin sufijo numérico van al final."""
+    prefijo = clave.rstrip("0123456789")
+    sufijo = clave[len(prefijo):]
+    return (prefijo, int(sufijo) if sufijo.isdigit() else float("inf"), clave)
+
+
+def _construir_puntos_oportunidad(preguntas: dict, urgencia: bool) -> list:
+    """Convierte {clave: texto} en la lista de puntos (sin la cabecera)."""
+    claves = sorted(
+        (c for c in preguntas if c not in _CLAVES_NO_OPORTUNIDAD),
+        key=_orden_clave_oportunidad,
+    )
+    puntos = []
+    i = 0
+    for clave in claves:
+        if clave == _CLAVE_URGENCIA and not urgencia:
+            continue
+        texto = (preguntas.get(clave) or "").strip()
+        if not texto:
+            continue
+        i += 1
+        if clave == _CLAVE_URGENCIA:
             texto += "\n_El botón de urgencia notifica a tu CA por Slack. Si no lo pulsas, el problema no se notifica automáticamente y solo quedará registrado._"
         bloque: dict = {"type": "section", "text": {"type": "mrkdwn", "text": f"*{i}.* {texto}"}}
+        accessory = _ACCESSORIES_OPORTUNIDAD.get(clave)
         if accessory:
             bloque["accessory"] = accessory
-        bloques.append(bloque)
-    return bloques
+        puntos.append(bloque)
+    return puntos
+
+
+def _obtener_bloques_oportunidad(urgencia: bool = True) -> list:
+    """Lista '*Esta es tu oportunidad para:*' a partir de las preguntas de Notion.
+
+    Recorre TODAS las filas de la BD 'Preguntas evaluación personal' (menos las de servicio,
+    como mensaje_inicial), en orden de Clave. A cada punto le cuelga su botón si la Clave es
+    conocida (_ACCESSORIES_OPORTUNIDAD); las claves nuevas salen como punto sin botón, así
+    añadir/quitar filas en Notion se refleja directamente en el bot.
+
+    Red de seguridad: si Notion no devuelve ningún punto (BD vacía o caída), usa los valores
+    por defecto para no mandar nunca un mensaje sin contenido.
+    """
+    puntos = _construir_puntos_oportunidad(obtener_preguntas_personales(), urgencia)
+    if not puntos:
+        puntos = _construir_puntos_oportunidad(PREGUNTAS_PERSONALES_DEFAULT, urgencia)
+    return [{"type": "section", "text": {"type": "mrkdwn", "text": "*Esta es tu oportunidad para:*"}}, *puntos]
 
 
 def _bloques_dm_personal(idioma):

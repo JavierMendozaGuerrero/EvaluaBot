@@ -3617,8 +3617,9 @@ def obtener_preguntas_personales() -> dict:
             if not resp.get("has_more"):
                 break
             cursor = resp.get("next_cursor")
-        for k, v in PREGUNTAS_PERSONALES_DEFAULT.items():
-            resultado.setdefault(k, v)
+        # Lo que hay en Notion manda: NO se re-siembran las claves por defecto en la lectura,
+        # para que añadir/quitar preguntas desde Notion surta efecto. La semilla solo se aplica
+        # al crear la BD por primera vez.
         with lock:
             _cache_personal_preguntas["data"] = resultado
             _cache_personal_preguntas["ts"] = _time.time()

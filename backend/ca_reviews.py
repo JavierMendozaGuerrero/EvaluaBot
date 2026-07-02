@@ -376,7 +376,7 @@ def _texto_pregunta_ca_por_clave(clave: str, idioma="es") -> str:
     if clave == "advisee":
         return t("bc.ask_advisee_name", idioma)
     if clave == "opinion":
-        return obtener_preguntas_seguimiento_ca().get("opinion", "¿Qué opinas de las evaluaciones?")
+        return obtener_preguntas_seguimiento_ca().get("opinion", "")
     return t("bc.enter_new_answer", idioma)
 
 
@@ -879,18 +879,18 @@ def manejar_mensaje_ca(event, logger) -> None:
             with _lock:
                 if conv_key in conversaciones_ca:
                     conversaciones_ca[conv_key]["resumen_actual"] = resumen_claude
-            _preg = obtener_preguntas_seguimiento_ca().get("opinion_con_claude", "¿Qué opinas de esto?")
+            _preg = obtener_preguntas_seguimiento_ca().get("opinion_con_claude", "")
             reply(f"📊 *Resumen generado por Claude:*\n\n{resumen_claude}\n\n{_preg}")
         except Exception:
             logging.exception("Error generando resumen Claude para '%s'", advisee)
             with _lock:
                 if conv_key in conversaciones_ca:
                     conversaciones_ca[conv_key]["resumen_actual"] = resumen_bruto
-            _preg = obtener_preguntas_seguimiento_ca().get("opinion_con_claude", "¿Qué opinas de esto?")
+            _preg = obtener_preguntas_seguimiento_ca().get("opinion_con_claude", "")
             reply(f"⚠️ No se pudo generar el resumen con Claude.\n\n{_preg}")
 
     elif accion == "pedir_opinion_sin_claude":
-        reply(obtener_preguntas_seguimiento_ca().get("opinion_sin_claude", "¿Qué comentario deseas registrar sobre las evaluaciones de tu advisee?"))
+        reply(obtener_preguntas_seguimiento_ca().get("opinion_sin_claude", ""))
 
     elif accion == "aclarar_permiso_claude":
         reply(t("bc.clarify_claude", _idi))

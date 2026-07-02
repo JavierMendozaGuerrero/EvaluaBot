@@ -5,7 +5,11 @@
 // Para anadir un idioma nuevo: sumar su codigo aqui y su traduccion en cada clave.
 // ---------------------------------------------------------------------------
 
+import { PT } from "./pt";
+
 const LANG_KEY = "evaluabot_lang";
+export const IDIOMAS = ["es", "en", "pt"];
+function _norm(l) { return IDIOMAS.includes(l) ? l : "es"; }
 
 let _lang = "es";
 const _langListeners = new Set();
@@ -13,7 +17,7 @@ const _langListeners = new Set();
 // Al cargar: si hay elección manual guardada, tiene prioridad sobre el idioma de Notion.
 try {
   const guardado = localStorage.getItem(LANG_KEY);
-  if (guardado === "en" || guardado === "es") _lang = guardado;
+  if (IDIOMAS.includes(guardado)) _lang = guardado;
 } catch {}
 
 function _notifyLang() {
@@ -30,7 +34,7 @@ export function hasManualLang() {
 
 // Fija el idioma SIN persistir (usado por /api/me con el idioma de Notion).
 export function setLang(l) {
-  const nl = l === "en" ? "en" : "es";
+  const nl = _norm(l);
   if (nl === _lang) return;
   _lang = nl;
   _notifyLang();
@@ -38,7 +42,7 @@ export function setLang(l) {
 
 // Elección manual del selector: fija, persiste y notifica.
 export function setLangManual(l) {
-  const nl = l === "en" ? "en" : "es";
+  const nl = _norm(l);
   try { localStorage.setItem(LANG_KEY, nl); } catch {}
   if (nl !== _lang) { _lang = nl; }
   _notifyLang();
@@ -49,6 +53,7 @@ export function getLang() { return _lang; }
 const MESES = {
   es: ["Enero", "Febrero", "Marzo", "Abril", "Mayo", "Junio", "Julio", "Agosto", "Septiembre", "Octubre", "Noviembre", "Diciembre"],
   en: ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"],
+  pt: ["Janeiro", "Fevereiro", "Março", "Abril", "Maio", "Junho", "Julho", "Agosto", "Setembro", "Outubro", "Novembro", "Dezembro"],
 };
 export function nombreMes(idx) {
   const arr = MESES[_lang] || MESES.es;
@@ -453,3 +458,9 @@ export const STRINGS = {
   "eaw.draft_desc": { es: "Ábrelo, rellena los huecos (notas/retribución) y súbelo como informe final.", en: "Open it, fill in the gaps (notes/compensation) and upload it as the final report." },
   "eaw.view_draft": { es: "Ver borrador", en: "View draft" },
 };
+
+// Overlay PT: fusiona las traducciones portuguesas generadas (frontend/src/pt.js).
+// Si una clave no tiene PT, t() cae a ES. El generador rellena pt.js.
+for (const k in PT) {
+  if (STRINGS[k] && PT[k]) STRINGS[k].pt = PT[k];
+}

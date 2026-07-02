@@ -522,7 +522,7 @@ def obtener_preguntas_tipo(tipo_clave: str, idioma: str = "es") -> list:
 
     Filtra por la columna 'Idioma' (ES/EN); para 'en' usa la fila EN de cada pregunta
     (por 'Orden') y cae a la ES cuando no hay versión EN."""
-    idioma = "en" if idioma == "en" else "es"
+    idioma = idioma if idioma in ("es", "en", "pt") else "es"
     cache_key = f"preguntas_{tipo_clave}_{idioma}"
     ahora = time.time()
     lock = _lock_preguntas_proyecto.setdefault(cache_key, threading.Lock())
@@ -536,7 +536,7 @@ def obtener_preguntas_tipo(tipo_clave: str, idioma: str = "es") -> list:
         return []
     try:
         resp = _query_bbdd(db_id, sorts=[{"property": "Orden", "direction": "ascending"}])
-        es_list, en_list = [], []
+        por_idioma: dict = {}  # idioma -> {orden: pregunta}
         for pagina in resp.get("results", []):
             props = pagina.get("properties", {})
             texto = "".join(t.get("plain_text", "") for t in (props.get("Texto") or {}).get("title", []))
@@ -546,7 +546,8 @@ def obtener_preguntas_tipo(tipo_clave: str, idioma: str = "es") -> list:
             tipo = ((props.get("Tipo") or {}).get("select") or {}).get("name", "abierta")
             opciones = "".join(t.get("plain_text", "") for t in (props.get("Opciones") or {}).get("rich_text", []))
             orden = (props.get("Orden") or {}).get("number") or 0
-            idi_fila = ((props.get("Idioma") or {}).get("select") or {}).get("name", "")
+            idi_raw = ((props.get("Idioma") or {}).get("select") or {}).get("name", "").strip().lower()[:2]
+            _lang = idi_raw if idi_raw in ("es", "en", "pt") else "es"
             pregunta = {
                 "id": pagina["id"],
                 "texto": texto,
@@ -555,18 +556,12 @@ def obtener_preguntas_tipo(tipo_clave: str, idioma: str = "es") -> list:
                 "opciones": opciones.split("|") if opciones else [],
                 "orden": orden,
             }
-            if idi_fila.strip().lower().startswith("en"):
-                en_list.append(pregunta)
-            else:
-                es_list.append(pregunta)
+            por_idioma.setdefault(_lang, {})[orden] = pregunta
 
-        if idioma == "en" and en_list:
-            es_by = {q["orden"]: q for q in es_list}
-            en_by = {q["orden"]: q for q in en_list}
-            ordenes = sorted(set(es_by) | set(en_by))
-            preguntas = [en_by.get(o) or es_by.get(o) for o in ordenes]
-        else:
-            preguntas = es_list
+        es_by = por_idioma.get("es", {})
+        base_by = por_idioma.get(idioma, {})
+        ordenes = sorted(set(es_by) | set(base_by))
+        preguntas = [base_by.get(o) or es_by.get(o) for o in ordenes]
         with lock:
             _cache_preguntas_proyecto[cache_key] = {"data": preguntas, "t": ahora}
         return preguntas

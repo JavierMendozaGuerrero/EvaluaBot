@@ -212,6 +212,16 @@ _SYSTEM_PROMPT = (
     "- Sé conciso: 2-4 frases por apartado"
 )
 
+# Instrucción de idioma de salida (el contenido de origen puede venir en español).
+_INSTR_IDIOMA = {
+    "en": "\n\nLANGUAGE: Write the ENTIRE summary in English (both section names and content), "
+          "translating the meaning; the source text may be in Spanish. Use 'Not enough information' "
+          "when a section has no data.",
+    "pt": "\n\nIDIOMA: Escreve TODO o resumo em português europeu (nomes das secções e conteúdo), "
+          "traduzindo o significado; o texto de origem pode estar em espanhol. Usa 'Informação "
+          "insuficiente' quando uma secção não tiver dados.",
+}
+
 
 # ── Conversión de evaluaciones estructuradas a texto ─────────────────────────
 
@@ -236,7 +246,7 @@ def evaluaciones_a_texto(evaluaciones: list[dict]) -> str:
 
 # ── Función principal ─────────────────────────────────────────────────────────
 
-def generar_resumen_evaluacion(nombre: str, cargo: str, evaluaciones_texto: str) -> str:
+def generar_resumen_evaluacion(nombre: str, cargo: str, evaluaciones_texto: str, idioma: str = "es") -> str:
     """
     Genera un resumen estructurado por apartados de competencias a partir de texto libre.
     Los criterios no se envían a Claude — solo los nombres de los apartados.
@@ -280,7 +290,7 @@ def generar_resumen_evaluacion(nombre: str, cargo: str, evaluaciones_texto: str)
         respuesta = anthropic_client.messages.create(
             model="claude-sonnet-4-6",
             max_tokens=1200,
-            system=_SYSTEM_PROMPT,
+            system=_SYSTEM_PROMPT + _INSTR_IDIOMA.get(idioma, ""),
             messages=[{"role": "user", "content": user_prompt}],
         )
         return "".join(b.text for b in respuesta.content if b.type == "text").strip()
@@ -290,7 +300,7 @@ def generar_resumen_evaluacion(nombre: str, cargo: str, evaluaciones_texto: str)
 
 
 def generar_resumen_desde_evaluaciones(
-    nombre: str, cargo: str, evaluaciones: list[dict]
+    nombre: str, cargo: str, evaluaciones: list[dict], idioma: str = "es"
 ) -> str:
     """
     Versión conveniente: convierte evaluaciones estructuradas de Notion a texto
@@ -307,4 +317,4 @@ def generar_resumen_desde_evaluaciones(
     texto = evaluaciones_a_texto(evaluaciones)
     if not texto:
         raise ValueError(f"No hay evaluaciones disponibles para '{nombre}'.")
-    return generar_resumen_evaluacion(nombre, cargo, texto)
+    return generar_resumen_evaluacion(nombre, cargo, texto, idioma)

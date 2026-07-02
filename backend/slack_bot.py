@@ -239,20 +239,22 @@ def texto_pregunta_por_clave(clave, preguntas=None):
 
 def respuesta_es_confirmacion(texto):
     return normalizar_nombre(texto) in {"si", "sí", "s", "ok", "okay", "confirmar", "guardar", "correcto",
-                                        "yes", "y", "save", "confirm", "correct"}
+                                        "yes", "y", "save", "confirm", "correct",
+                                        "sim", "gravar", "correto"}
 
 
 def respuesta_es_modificacion(texto):
     return normalizar_nombre(texto) in {"modificar", "cambiar", "editar", "repetir",
-                                        "modify", "change", "edit", "repeat"}
+                                        "modify", "change", "edit", "repeat",
+                                        "alterar", "mudar"}
 
 
 def _es_si(texto):
-    return normalizar_nombre(texto) in {"si", "sí", "s", "yes", "y", "ok", "okay", "claro", "vale"}
+    return normalizar_nombre(texto) in {"si", "sí", "s", "yes", "y", "ok", "okay", "claro", "vale", "sim"}
 
 
 def _es_no(texto):
-    return normalizar_nombre(texto) in {"no", "n", "nope", "nel"}
+    return normalizar_nombre(texto) in {"no", "n", "nope", "nel", "nao", "não"}
 
 
 _Q5_EJEMPLO = "Indica un ejemplo concreto que justifique tu valoración"
@@ -1413,9 +1415,9 @@ def handle_message_events(event, logger):
                 pregunta = t("bm.ask_barbecho", estado["idioma"])
 
         elif modo == "confirmacion_barbecho":
-            if _es_si(texto) or normalizar_nombre(texto) in {"entregar", "guardar", "confirmar"}:
+            if _es_si(texto) or normalizar_nombre(texto) in {"entregar", "guardar", "confirmar", "gravar", "entregar"}:
                 accion = "guardar_barbecho"
-            elif normalizar_nombre(texto) in {"modificar", "cambiar", "editar"}:
+            elif normalizar_nombre(texto) in {"modificar", "cambiar", "editar", "alterar", "mudar"}:
                 push_historial(estado)
                 estado["modo"] = "esperando_labores_barbecho"
                 estado.pop("labores_barbecho", None)
@@ -1701,7 +1703,7 @@ def handle_message_events(event, logger):
         elif modo == "terminado":
             _ahora_fin = time.time()
             _evs_fin = [e for e in (estado.get("evaluaciones_guardadas") or []) if _ahora_fin - e["ts"] <= 2 * 24 * 3600]
-            if normalizar_nombre(texto) in {"modificar", "modificar respuestas", "editar"} and _evs_fin:
+            if normalizar_nombre(texto) in {"modificar", "modificar respuestas", "editar", "alterar", "mudar"} and _evs_fin:
                 accion = "mostrar_seleccion_modificar"
             else:
                 accion = "ya_terminado"

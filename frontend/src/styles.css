@@ -727,4 +727,63 @@ button.role-card.secondary:hover { color: #fff; }
    No afecta al login (.auth-page tiene reglas propias).
 ───────────────────────────────────────────────────── */
 input, select, textarea { padding: 12px 14px; font-size: 15.5px; }
+
+/* ─────────────────────────────────────────────────────
+   Micro-interacciones (mismo lenguaje que la ruleta de idioma):
+   trazo negro, easing con rebote, sutiles. Todo se desactiva con
+   prefers-reduced-motion más abajo.
+───────────────────────────────────────────────────── */
+
+/* Check que se dibuja al guardar (DrawCheck en main.jsx). */
+.draw-check { flex-shrink: 0; }
+.draw-check-circle {
+  stroke-dasharray: 151; stroke-dashoffset: 151;
+  animation: draw-stroke .5s ease forwards;
+}
+.draw-check-mark {
+  stroke-dasharray: 48; stroke-dashoffset: 48;
+  animation: draw-stroke .35s cubic-bezier(.2, .75, .2, 1) .42s forwards;
+}
+@keyframes draw-stroke { to { stroke-dashoffset: 0; } }
+
+/* Subrayado que crece de izquierda a derecha en enlaces y links de texto. */
+.site-footer-links a, .link-button { position: relative; }
+.site-footer-links a::after, .link-button::after {
+  content: ""; position: absolute; left: 0; right: 0; bottom: -2px; height: 1px;
+  background: currentColor; transform: scaleX(0); transform-origin: left;
+  transition: transform .22s cubic-bezier(.2, .75, .2, 1);
+}
+.site-footer-links a:hover::after, .link-button:hover::after { transform: scaleX(1); }
+
+/* Barra de acento que crece bajo el ítem de menú (activo o en hover). */
+.menu-item { position: relative; }
+.menu-item::after {
+  content: ""; position: absolute; left: 0; bottom: -1px; height: 1px; width: 100%;
+  background: var(--accent); transform: scaleX(0); transform-origin: left;
+  transition: transform .22s cubic-bezier(.2, .75, .2, 1);
+}
+.menu-item:hover::after, .menu-item.active::after { transform: scaleX(1); }
+
+/* Entrada escalonada de listas de cards: aparecen subiendo un poco, una tras otra.
+   La animación corre una sola vez al montarse el elemento (no en cada re-render). */
+@keyframes card-in {
+  from { opacity: 0; transform: translateY(8px); }
+  to   { opacity: 1; transform: none; }
+}
+.stagger > *, .stagger-item { animation: card-in .45s cubic-bezier(.2, .75, .2, 1) both; }
+.stagger > *:nth-child(1)  { animation-delay: .03s; }
+.stagger > *:nth-child(2)  { animation-delay: .08s; }
+.stagger > *:nth-child(3)  { animation-delay: .13s; }
+.stagger > *:nth-child(4)  { animation-delay: .18s; }
+.stagger > *:nth-child(5)  { animation-delay: .23s; }
+.stagger > *:nth-child(6)  { animation-delay: .28s; }
+.stagger > *:nth-child(7)  { animation-delay: .33s; }
+.stagger > *:nth-child(8)  { animation-delay: .38s; }
+.stagger > *:nth-child(n+9){ animation-delay: .42s; }
+
+@media (prefers-reduced-motion: reduce) {
+  .draw-check-circle, .draw-check-mark { animation: none; stroke-dashoffset: 0; }
+  .site-footer-links a::after, .link-button::after, .menu-item::after { transition: none; }
+  .stagger > *, .stagger-item { animation: none; }
+}
 button, .button { min-height: 42px; padding: 0 22px; font-size: 15px; }

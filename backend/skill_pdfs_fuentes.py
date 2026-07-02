@@ -42,19 +42,60 @@ _ORANGE = colors.HexColor('#F23C14') if _REPORTLAB_OK else None
 _BLACK = colors.HexColor('#000000') if _REPORTLAB_OK else None
 
 
-def _fecha_es(fecha: str) -> str:
-    """'2025-03-15' -> '15 mar 2025'."""
+# Etiquetas fijas de la plantilla (el contenido —evaluaciones— va en su idioma original).
+_L = {
+    "es": {"t_proyecto": "Evaluaciones de proyecto", "t_seguimiento": "Seguimiento personal",
+           "t_mensuales": "Evaluaciones mensuales", "t_completo": "Información completa recibida",
+           "s_opiniones": "Opiniones del CA", "valoracion": "Valoración", "ejemplo": "Ejemplo",
+           "nota_ca": "Nota del CA", "resumen": "Resumen", "opinion_ca": "Opinión CA",
+           "sin_datos_fuente": "Sin datos para esta fuente.", "sin_datos": "Sin datos.",
+           "generado_el": "Generado el", "sin_proyecto": "Sin proyecto", "sin_fecha": "Sin fecha",
+           "lider": "líder", "igual": "igual", "subordinado": "subordinado", "sin_nivel": "sin nivel"},
+    "en": {"t_proyecto": "Project evaluations", "t_seguimiento": "Personal tracking",
+           "t_mensuales": "Monthly evaluations", "t_completo": "Full information received",
+           "s_opiniones": "CA opinions", "valoracion": "Rating", "ejemplo": "Example",
+           "nota_ca": "CA note", "resumen": "Summary", "opinion_ca": "CA opinion",
+           "sin_datos_fuente": "No data for this source.", "sin_datos": "No data.",
+           "generado_el": "Generated on", "sin_proyecto": "No project", "sin_fecha": "No date",
+           "lider": "lead", "igual": "same level", "subordinado": "subordinate", "sin_nivel": "no level"},
+    "pt": {"t_proyecto": "Avaliações de projeto", "t_seguimiento": "Acompanhamento pessoal",
+           "t_mensuales": "Avaliações mensais", "t_completo": "Informação completa recebida",
+           "s_opiniones": "Opiniões do CA", "valoracion": "Avaliação", "ejemplo": "Exemplo",
+           "nota_ca": "Nota do CA", "resumen": "Resumo", "opinion_ca": "Opinião CA",
+           "sin_datos_fuente": "Sem dados para esta fonte.", "sin_datos": "Sem dados.",
+           "generado_el": "Gerado a", "sin_proyecto": "Sem projeto", "sin_fecha": "Sem data",
+           "lider": "líder", "igual": "mesmo nível", "subordinado": "subordinado", "sin_nivel": "sem nível"},
+}
+_MESES_ABBR = {
+    "es": _MESES,
+    "en": ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"],
+    "pt": ["jan", "fev", "mar", "abr", "mai", "jun", "jul", "ago", "set", "out", "nov", "dez"],
+}
+
+
+def _t(idioma: str, clave: str) -> str:
+    return _L.get(idioma, _L["es"]).get(clave, _L["es"].get(clave, clave))
+
+
+def _rel_label(rel: str, idioma: str) -> str:
+    return {"superior": _t(idioma, "lider"), "igual": _t(idioma, "igual"),
+            "inferior": _t(idioma, "subordinado"), "": _t(idioma, "sin_nivel")}.get(rel, rel)
+
+
+def _fecha_es(fecha: str, idioma: str = "es") -> str:
+    """'2025-03-15' -> '15 mar 2025' (abreviatura de mes según idioma)."""
     try:
-        return f"{int(fecha[8:10])} {_MESES[int(fecha[5:7]) - 1]} {fecha[:4]}"
+        meses = _MESES_ABBR.get(idioma, _MESES)
+        return f"{int(fecha[8:10])} {meses[int(fecha[5:7]) - 1]} {fecha[:4]}"
     except Exception:
-        return fecha or "Sin fecha"
+        return fecha or _t(idioma, "sin_fecha")
 
 
 def _esc(t) -> str:
     return html_lib.escape(str(t or "")).replace("\n", "<br/>")
 
 
-def _construir_pdf(titulo: str, advisee: str, ca: str, entradas: list[dict], nombre_archivo: str) -> str:
+def _construir_pdf(titulo: str, advisee: str, ca: str, entradas: list[dict], nombre_archivo: str, idioma: str = "es") -> str:
     """Construye un PDF de marca con una lista de entradas {header, meta, cuerpo}.
 
     Devuelve la ruta del PDF. Lanza RuntimeError si falta reportlab.
@@ -100,11 +141,11 @@ def _construir_pdf(titulo: str, advisee: str, ca: str, entradas: list[dict], nom
         story.append(Paragraph(_esc(advisee), s_adv))
 
     story.append(Paragraph(_esc(titulo), s_titulo))
-    story.append(Paragraph(f"CA: {_esc(ca) or '—'} · Generado el {fecha_gen}", s_meta))
+    story.append(Paragraph(f"CA: {_esc(ca) or '—'} · {_t(idioma, 'generado_el')} {fecha_gen}", s_meta))
     story.append(HRFlowable(width="100%", thickness=1, color=_BLACK, spaceBefore=2, spaceAfter=12))
 
     if not entradas:
-        story.append(Paragraph("Sin datos para esta fuente.", s_cuerpo))
+        story.append(Paragraph(_t(idioma, "sin_datos_fuente"), s_cuerpo))
     for e in entradas:
         bloque = [Paragraph(_esc(e.get("header", "")), s_header)]
         if e.get("meta"):
@@ -127,105 +168,103 @@ def _ca_de(advisee: str) -> str:
         return ""
 
 
-def generar_pdf_evals_proyecto(advisee: str, anonimo: bool = True) -> str:
+def generar_pdf_evals_proyecto(advisee: str, anonimo: bool = True, idioma: str = "es") -> str:
     datos = obtener_evaluaciones_proyecto_por_evaluado(advisee)
     datos = sorted(datos, key=lambda x: x.get("fecha", ""))
     entradas = [{
-        "header": d.get("proyecto") or "Sin proyecto",
+        "header": d.get("proyecto") or _t(idioma, "sin_proyecto"),
         "meta": " · ".join(p for p in [
             None if anonimo else d.get("evaluador"),
             d.get("tipo"),
-            _fecha_es(d.get("fecha", "")),
+            _fecha_es(d.get("fecha", ""), idioma),
         ] if p),
         "cuerpo": d.get("respuestas", ""),
     } for d in datos]
     slug = slug_archivo(advisee)
-    _construir_pdf("Evaluaciones de proyecto", advisee, _ca_de(advisee), entradas, f"evals_proyecto_{slug}.pdf")
+    _construir_pdf(_t(idioma, "t_proyecto"), advisee, _ca_de(advisee), entradas, f"evals_proyecto_{slug}.pdf", idioma)
     return slug
 
 
-def generar_pdf_seguimiento_personal(advisee: str, anonimo: bool = True) -> str:
+def generar_pdf_seguimiento_personal(advisee: str, anonimo: bool = True, idioma: str = "es") -> str:
     datos = obtener_comentarios_personales(advisee)
     datos = sorted(datos, key=lambda x: x.get("fecha", ""))
     entradas = [{
-        "header": _fecha_es(d.get("fecha", "")),
+        "header": _fecha_es(d.get("fecha", ""), idioma),
         "meta": "" if anonimo else d.get("autor", ""),
         "cuerpo": d.get("comentario", ""),
     } for d in datos]
     slug = slug_archivo(advisee)
-    _construir_pdf("Seguimiento personal", advisee, _ca_de(advisee), entradas, f"seguimiento_personal_{slug}.pdf")
+    _construir_pdf(_t(idioma, "t_seguimiento"), advisee, _ca_de(advisee), entradas, f"seguimiento_personal_{slug}.pdf", idioma)
     return slug
 
 
-def generar_pdf_evals_mensuales(advisee: str, anonimo: bool = True) -> str:
+def generar_pdf_evals_mensuales(advisee: str, anonimo: bool = True, idioma: str = "es") -> str:
     datos = obtener_evaluaciones_por_evaluado(advisee)
     datos = sorted(datos, key=lambda x: x.get("fecha", ""))
-    _REL = {"superior": "líder", "igual": "igual", "inferior": "subordinado", "": "sin nivel"}
     entradas = []
     for d in datos:
         cuerpo = []
         if d.get("q1"):
-            cuerpo.append(f"Valoración: {d['q1']}")
+            cuerpo.append(f"{_t(idioma, 'valoracion')}: {d['q1']}")
         if d.get("q2"):
-            cuerpo.append(f"Ejemplo: {d['q2']}")
+            cuerpo.append(f"{_t(idioma, 'ejemplo')}: {d['q2']}")
         entradas.append({
-            "header": d.get("proyecto") or "Sin proyecto",
+            "header": d.get("proyecto") or _t(idioma, "sin_proyecto"),
             "meta": " · ".join(p for p in [
                 None if anonimo else (d.get("persona_que_evalua") or d.get("nombre")),
-                _REL.get(d.get("relacion", ""), d.get("relacion", "")),
-                _fecha_es(d.get("fecha", "")),
+                _rel_label(d.get("relacion", ""), idioma),
+                _fecha_es(d.get("fecha", ""), idioma),
             ] if p),
             "cuerpo": "\n".join(cuerpo),
         })
     slug = slug_archivo(advisee)
-    _construir_pdf("Evaluaciones mensuales", advisee, _ca_de(advisee), entradas, f"evals_mensuales_{slug}.pdf")
+    _construir_pdf(_t(idioma, "t_mensuales"), advisee, _ca_de(advisee), entradas, f"evals_mensuales_{slug}.pdf", idioma)
     return slug
 
 
 # ── PDF combinado: toda la información recibida ────────────────────────────────
 
-def _entradas_evals_proyecto(advisee, anonimo):
+def _entradas_evals_proyecto(advisee, anonimo, idioma="es"):
     datos = sorted(obtener_evaluaciones_proyecto_por_evaluado(advisee), key=lambda x: x.get("fecha", ""))
     return [{
-        "header": d.get("proyecto") or "Sin proyecto",
+        "header": d.get("proyecto") or _t(idioma, "sin_proyecto"),
         "meta": " · ".join(p for p in [
             None if anonimo else d.get("evaluador"),
             d.get("tipo"),
-            _fecha_es(d.get("fecha", "")),
+            _fecha_es(d.get("fecha", ""), idioma),
         ] if p),
         "cuerpo": d.get("respuestas", ""),
     } for d in datos]
 
 
-def _entradas_seguimiento(advisee, anonimo):
+def _entradas_seguimiento(advisee, anonimo, idioma="es"):
     datos = sorted(obtener_comentarios_personales(advisee), key=lambda x: x.get("fecha", ""))
-    return [{"header": _fecha_es(d.get("fecha", "")), "meta": "" if anonimo else d.get("autor", ""),
+    return [{"header": _fecha_es(d.get("fecha", ""), idioma), "meta": "" if anonimo else d.get("autor", ""),
              "cuerpo": d.get("comentario", "")} for d in datos]
 
 
-def _entradas_evals_mensuales(advisee, anonimo):
-    _REL = {"superior": "líder", "igual": "igual", "inferior": "subordinado", "": "sin nivel"}
+def _entradas_evals_mensuales(advisee, anonimo, idioma="es"):
     datos = sorted(obtener_evaluaciones_por_evaluado(advisee), key=lambda x: x.get("fecha", ""))
     out = []
     for d in datos:
         cuerpo = []
         if d.get("q1"):
-            cuerpo.append(f"Valoración: {d['q1']}")
+            cuerpo.append(f"{_t(idioma, 'valoracion')}: {d['q1']}")
         if d.get("q2"):
-            cuerpo.append(f"Ejemplo: {d['q2']}")
+            cuerpo.append(f"{_t(idioma, 'ejemplo')}: {d['q2']}")
         out.append({
-            "header": d.get("proyecto") or "Sin proyecto",
+            "header": d.get("proyecto") or _t(idioma, "sin_proyecto"),
             "meta": " · ".join(p for p in [
                 None if anonimo else (d.get("persona_que_evalua") or d.get("nombre")),
-                _REL.get(d.get("relacion", ""), d.get("relacion", "")),
-                _fecha_es(d.get("fecha", "")),
+                _rel_label(d.get("relacion", ""), idioma),
+                _fecha_es(d.get("fecha", ""), idioma),
             ] if p),
             "cuerpo": "\n".join(cuerpo),
         })
     return out
 
 
-def _entradas_opiniones(advisee, ca, anonimo=True):
+def _entradas_opiniones(advisee, ca, anonimo=True, idioma="es"):
     try:
         datos = obtener_opiniones_ca_por_advisee(ca, advisee)
     except Exception:
@@ -235,14 +274,14 @@ def _entradas_opiniones(advisee, ca, anonimo=True):
     for d in datos:
         cuerpo = []
         if d.get("opinion"):
-            cuerpo.append(f"Nota del CA: {d['opinion']}")
+            cuerpo.append(f"{_t(idioma, 'nota_ca')}: {d['opinion']}")
         if not anonimo and d.get("resumen_advisee"):
-            cuerpo.append(f"Resumen: {d['resumen_advisee']}")
-        out.append({"header": _fecha_es(d.get("fecha", "")), "meta": "Opinión CA", "cuerpo": "\n".join(cuerpo)})
+            cuerpo.append(f"{_t(idioma, 'resumen')}: {d['resumen_advisee']}")
+        out.append({"header": _fecha_es(d.get("fecha", ""), idioma), "meta": _t(idioma, "opinion_ca"), "cuerpo": "\n".join(cuerpo)})
     return out
 
 
-def _construir_pdf_secciones(titulo, advisee, ca, secciones, nombre_archivo):
+def _construir_pdf_secciones(titulo, advisee, ca, secciones, nombre_archivo, idioma="es"):
     """Como _construir_pdf pero con varias secciones (cada una con su encabezado)."""
     if not _REPORTLAB_OK:
         raise RuntimeError("Instala reportlab: pip install reportlab")
@@ -268,13 +307,13 @@ def _construir_pdf_secciones(titulo, advisee, ca, secciones, nombre_archivo):
         Spacer(1, 1.2 * cm),
         Paragraph(_esc(advisee), s_adv),
         Paragraph(_esc(titulo), s_titulo),
-        Paragraph(f"CA: {_esc(ca) or '—'} · Generado el {fecha_gen}", s_meta),
+        Paragraph(f"CA: {_esc(ca) or '—'} · {_t(idioma, 'generado_el')} {fecha_gen}", s_meta),
         HRFlowable(width="100%", thickness=1, color=_BLACK, spaceBefore=2, spaceAfter=6),
     ]
     for sec_tit, entradas in secciones:
         story.append(Paragraph(f"{_esc(sec_tit)}  ({len(entradas)})", s_sec))
         if not entradas:
-            story.append(Paragraph("Sin datos.", s_cuerpo))
+            story.append(Paragraph(_t(idioma, "sin_datos"), s_cuerpo))
         for e in entradas:
             bloque = [Paragraph(_esc(e.get("header", "")), s_header)]
             if e.get("meta"):
@@ -289,15 +328,15 @@ def _construir_pdf_secciones(titulo, advisee, ca, secciones, nombre_archivo):
     return ruta
 
 
-def generar_pdf_completo(advisee: str, anonimo: bool = True) -> str:
+def generar_pdf_completo(advisee: str, anonimo: bool = True, idioma: str = "es") -> str:
     """Un solo PDF con TODA la información recibida por la persona (las 4 fuentes)."""
     ca = _ca_de(advisee)
     secciones = [
-        ("Opiniones del CA", _entradas_opiniones(advisee, ca, anonimo=anonimo)),
-        ("Evaluaciones mensuales", _entradas_evals_mensuales(advisee, anonimo)),
-        ("Evaluaciones de proyecto", _entradas_evals_proyecto(advisee, anonimo=False)),
-        ("Seguimiento personal", _entradas_seguimiento(advisee, anonimo)),
+        (_t(idioma, "s_opiniones"), _entradas_opiniones(advisee, ca, anonimo=anonimo, idioma=idioma)),
+        (_t(idioma, "t_mensuales"), _entradas_evals_mensuales(advisee, anonimo, idioma)),
+        (_t(idioma, "t_proyecto"), _entradas_evals_proyecto(advisee, anonimo=False, idioma=idioma)),
+        (_t(idioma, "t_seguimiento"), _entradas_seguimiento(advisee, anonimo, idioma)),
     ]
     slug = slug_archivo(advisee)
-    _construir_pdf_secciones("Información completa recibida", advisee, ca, secciones, f"info_completa_{slug}.pdf")
+    _construir_pdf_secciones(_t(idioma, "t_completo"), advisee, ca, secciones, f"info_completa_{slug}.pdf", idioma)
     return slug

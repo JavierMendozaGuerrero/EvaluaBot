@@ -36,6 +36,8 @@ from .utils import slug_archivo
 # Se traducen por clave; si no hay traduccion, cae a la etiqueta espanola original.
 _MESES_EN = ["January", "February", "March", "April", "May", "June",
              "July", "August", "September", "October", "November", "December"]
+_MESES_PT = ["Janeiro", "Fevereiro", "Março", "Abril", "Maio", "Junho",
+             "Julho", "Agosto", "Setembro", "Outubro", "Novembro", "Dezembro"]
 _DIMS_EN = {
     "gestion_proyecto": "Project management",
     "calidad_tecnica": "Technical quality",
@@ -46,26 +48,43 @@ _DIMS_EN = {
     "liderazgo_motivacion": "Motivation",
     "liderazgo_referente": "Role model",
 }
-
-
-def _mes_label(idx: int, idioma: str) -> str:
-    return (_MESES_EN if idioma == "en" else _MESES_ES)[idx]
-
-
+_DIMS_PT = {
+    "gestion_proyecto": "Gestão de projeto",
+    "calidad_tecnica": "Qualidade técnica",
+    "trabajo_en_equipo": "Trabalho em equipa",
+    "comunicacion": "Comunicação",
+    "relacion_cliente": "Relação com o cliente",
+    "liderazgo_desarrollo_talento": "Desenvolvimento de talento",
+    "liderazgo_motivacion": "Motivação",
+    "liderazgo_referente": "Modelo a seguir",
+}
 _NIVEL_EN = {
     "lider": "Lead",
     "equipo": "Your team members",
     "sin_nivel": "No level specified",
 }
+_NIVEL_PT = {
+    "lider": "Líder",
+    "equipo": "Os teus membros da equipa",
+    "sin_nivel": "Sem nível especificado",
+}
+
+_MESES_POR_IDIOMA = {"en": _MESES_EN, "pt": _MESES_PT}
+_DIMS_POR_IDIOMA = {"en": _DIMS_EN, "pt": _DIMS_PT}
+_NIVEL_POR_IDIOMA = {"en": _NIVEL_EN, "pt": _NIVEL_PT}
+
+
+def _mes_label(idx: int, idioma: str) -> str:
+    return _MESES_POR_IDIOMA.get(idioma, _MESES_ES)[idx]
 
 
 def _dim_label(clave: str, etiqueta: str, idioma: str) -> str:
-    """Etiqueta de dimension en el idioma dado; conserva el espanol exacto si idioma!=en."""
-    return _DIMS_EN.get(clave, etiqueta) if idioma == "en" else etiqueta
+    """Etiqueta de dimension en el idioma dado; conserva el espanol si no hay traduccion."""
+    return _DIMS_POR_IDIOMA.get(idioma, {}).get(clave, etiqueta)
 
 
 def _nivel_label(clave: str, etiqueta: str, idioma: str) -> str:
-    return _NIVEL_EN.get(clave, etiqueta) if idioma == "en" else etiqueta
+    return _NIVEL_POR_IDIOMA.get(idioma, {}).get(clave, etiqueta)
 
 
 # ── Constantes ────────────────────────────────────────────────────────────────
@@ -794,6 +813,15 @@ def interpretar_evaluaciones_anual(emp_data: dict, cargo: str = "", criterios: s
             "Spanish; translate the meaning, do not copy Spanish text. Keep the JSON keys and the "
             "citation tags like [E3] exactly as specified. When there is no evidence for a "
             "dimension, write exactly 'Not enough information' (without a citation)."
+        )
+    elif idioma == "pt":
+        system += (
+            "\n\nIDIOMA: Escreve TODO o texto dos comentários em português europeu (os campos "
+            "'lider', 'equipo', 'sin_nivel', 'contribution_to_firm' e 'resultado'). Os dados de "
+            "origem podem estar em espanhol; traduz o significado, não copies texto em espanhol. "
+            "Mantém as chaves do JSON e as etiquetas de citação como [E3] exatamente como se indica. "
+            "Quando não houver evidência para uma dimensão, escreve exatamente 'Informação "
+            "insuficiente' (sem citação)."
         )
 
     respuesta = anthropic_client.messages.create(

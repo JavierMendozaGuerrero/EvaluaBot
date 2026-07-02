@@ -13,7 +13,18 @@ Idiomas soportados: 'es' (por defecto) y 'en'.
 import logging
 
 IDIOMA_POR_DEFECTO = "es"
-IDIOMAS_SOPORTADOS = ("es", "en")
+IDIOMAS_SOPORTADOS = ("es", "en", "pt")
+_ETIQUETA_IDIOMA = {"es": "ES", "en": "EN", "pt": "PT"}
+
+
+def siguiente_idioma(idioma: str) -> str:
+    """Siguiente idioma en la rueda cíclica ES -> EN -> PT -> ES."""
+    orden = IDIOMAS_SOPORTADOS
+    try:
+        i = orden.index(idioma)
+    except ValueError:
+        i = 0
+    return orden[(i + 1) % len(orden)]
 
 # Catalogo de textos: clave -> {"es": ..., "en": ...}
 # Los textos admiten placeholders de str.format, p.ej. "Hola {nombre}".
@@ -130,8 +141,19 @@ TEXTOS: dict[str, dict[str, str]] = {
     "bm.reminder": {"es": "*⏰ Recuerda realizar tu evaluación mensual.* Abre el hilo del mensaje de evaluación y responde.", "en": "*⏰ Remember to complete your monthly evaluation.* Open the evaluation message thread and reply."},
     "bm.guide_example_title": {"es": "Ejemplo de guía", "en": "Guide example"},
     "bm.guide_example_header": {"es": "💡 *Ejemplo de guía — Evaluación Mensual*", "en": "💡 *Guide example — Monthly evaluation*"},
-    "bm.close": {"es": "Cerrar", "en": "Close"},
-    "bm.no_example": {"es": "_No hay ejemplo disponible_", "en": "_No example available_"},
+    "bm.close": {"es": "Cerrar", "en": "Close", "pt": "Fechar"},
+    "bm.no_example": {"es": "_No hay ejemplo disponible_", "en": "_No example available_", "pt": "_Sem exemplo disponível_"},
+    "bm.btn_show_item": {"es": "▶ Ver", "en": "▶ View", "pt": "▶ Ver"},
+    "bm.btn_hide_item": {"es": "▼ Ocultar", "en": "▼ Hide", "pt": "▼ Ocultar"},
+    "bp.examples_title": {"es": "Ejemplos de guía", "en": "Guide examples", "pt": "Exemplos de guia"},
+    "bp.examples_intro": {"es": "💡 *Ejemplos de guía — Seguimiento personal*\nPulsa *Ver* en cada apartado para expandirlo:", "en": "💡 *Guide examples — Personal tracking*\nClick *View* on each item to expand it:", "pt": "💡 *Exemplos de guia — Acompanhamento pessoal*\nClica em *Ver* em cada secção para a expandir:"},
+    "bp.no_personal_examples": {"es": "_No hay ejemplos personales disponibles_", "en": "_No personal examples available_", "pt": "_Sem exemplos pessoais disponíveis_"},
+    "bp.criteria_title": {"es": "Criterios de evaluación", "en": "Evaluation criteria", "pt": "Critérios de avaliação"},
+    "bp.criteria_title_short": {"es": "Criterios", "en": "Criteria", "pt": "Critérios"},
+    "bp.criteria_intro": {"es": "📊 *Criterios de evaluación — {display}*\nPulsa *Ver* en cada subárea para expandirla:", "en": "📊 *Evaluation criteria — {display}*\nClick *View* on each sub-area to expand it:", "pt": "📊 *Critérios de avaliação — {display}*\nClica em *Ver* em cada subárea para a expandir:"},
+    "bp.criteria_which_area": {"es": "¿Para qué área quieres ver los criterios?", "en": "Which area do you want to see the criteria for?", "pt": "Para que área queres ver os critérios?"},
+    "bp.criteria_select_area": {"es": "Selecciona un área...", "en": "Select an area...", "pt": "Seleciona uma área..."},
+    "bp.criteria_leadership_note": {"es": " _(solo Asociado Sr y Manager)_", "en": " _(Senior Associate and Manager only)_", "pt": " _(apenas Associado Sr e Manager)_"},
     "bm.no_reply_outside": {"es": "Por favor, no contestes a las evaluaciones fuera de los hilos 😊", "en": "Please don't reply to evaluations outside the threads 😊"},
     "bm.err_temp_data": {"es": "⚠️ Error temporal consultando datos. Vuelve a intentarlo.", "en": "⚠️ Temporary error fetching data. Please try again."},
     "bm.submitted": {"es": "✅ Entregado", "en": "✅ Submitted"},
@@ -326,6 +348,15 @@ TEXTOS: dict[str, dict[str, str]] = {
             "If there are personal evaluation comments, integrate them into the analysis. "
             "The source data may be in Spanish; write your report in English regardless."
         ),
+        "pt": (
+            "És um consultor sénior de People Analytics. Gera um relatório profissional em português europeu "
+            "sobre as avaliações recebidas. Usa este formato exato com títulos claros:\n"
+            "1. Resumo executivo\n2. Métricas principais\n3. Pontos fortes detetados\n"
+            "4. Riscos ou áreas de melhoria\n5. Recomendações acionáveis\n6. Conclusão\n\n"
+            "Sê concreto, não inventes dados e menciona padrões repetidos, se os houver. "
+            "Se houver comentários de avaliações pessoais, integra-os na análise. "
+            "Os dados de origem podem estar em espanhol; escreve o teu relatório em português na mesma."
+        ),
     },
 }
 
@@ -338,8 +369,10 @@ def normalizar_idioma(idioma: str | None) -> str:
 
 
 def boton_idioma_slack(idioma: str, action_id: str) -> dict:
-    """Botón de Slack para cambiar el idioma del bot. Muestra el idioma AL QUE se cambia (ES<->EN)."""
-    label = "🌐 EN" if idioma == "es" else "🌐 ES"
+    """Botón de Slack tipo 'rueda': muestra el idioma AL QUE se cambiará al pulsarlo
+    (ES -> EN -> PT -> ES)."""
+    nxt = siguiente_idioma(normalizar_idioma(idioma))
+    label = f"🌐 {_ETIQUETA_IDIOMA.get(nxt, nxt.upper())}"
     return {"type": "button", "text": {"type": "plain_text", "text": label, "emoji": True}, "action_id": action_id}
 
 
@@ -362,3 +395,14 @@ def t(clave: str, idioma: str = IDIOMA_POR_DEFECTO, **kwargs) -> str:
         except (KeyError, IndexError):
             return texto
     return texto
+
+
+# --- Overlay de traducciones PT (generado por backend/generar_i18n_pt.py) ---
+# Se fusiona sobre TEXTOS si existe backend/i18n_pt.py. Si falta, 'pt' cae a 'es'.
+try:
+    from .i18n_pt import TEXTOS_PT as _TEXTOS_PT
+    for _clave_pt, _texto_pt in _TEXTOS_PT.items():
+        if _clave_pt in TEXTOS and _texto_pt and "pt" not in TEXTOS[_clave_pt]:
+            TEXTOS[_clave_pt]["pt"] = _texto_pt
+except Exception:
+    pass

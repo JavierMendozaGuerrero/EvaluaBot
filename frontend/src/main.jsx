@@ -23,6 +23,66 @@ function apiUrl(path) {
   return `${API_BASE}${path}`;
 }
 
+// ── Micro-interacciones ──
+// Todo respeta prefers-reduced-motion: si el usuario lo pide, no hay animación.
+function _prefiereMenosMovimiento() {
+  try { return window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches; }
+  catch { return false; }
+}
+
+// Cuenta un número de forma ascendente (easeOutCubic) desde el valor anterior al nuevo.
+// Usa el timestamp de requestAnimationFrame, no relojes externos.
+function useCountUp(target, duration = 700) {
+  const objetivo = Math.round(target || 0);
+  const [val, setVal] = useState(objetivo);
+  const prev = React.useRef(objetivo);
+  useEffect(() => {
+    const desde = prev.current;
+    prev.current = objetivo;
+    if (desde === objetivo || _prefiereMenosMovimiento()) { setVal(objetivo); return; }
+    let raf, inicio = null;
+    const paso = (ts) => {
+      if (inicio == null) inicio = ts;
+      const p = Math.min((ts - inicio) / duration, 1);
+      const e = 1 - Math.pow(1 - p, 3);
+      setVal(Math.round(desde + (objetivo - desde) * e));
+      if (p < 1) raf = requestAnimationFrame(paso);
+    };
+    raf = requestAnimationFrame(paso);
+    return () => cancelAnimationFrame(raf);
+  }, [objetivo, duration]);
+  return val;
+}
+
+// Barra de progreso: el ancho y el % suben contando al aparecer o al cambiar el valor.
+function ProgressBar({ pct, barWidth = "100%", height = 6, showPct = true, gap = 10 }) {
+  const shown = useCountUp(pct);
+  const track = (
+    <div style={{ width: barWidth, height, background: "var(--border)", borderRadius: 3, overflow: "hidden", flex: barWidth === "100%" ? 1 : undefined }}>
+      <div style={{ height: "100%", width: `${shown}%`, background: "#000", borderRadius: 3, transition: "width .1s linear" }} />
+    </div>
+  );
+  if (!showPct) return track;
+  return (
+    <div style={{ display: "flex", alignItems: "center", gap }}>
+      {track}
+      <span style={{ fontSize: 11, fontWeight: 400, color: "rgba(0,0,0,.45)", whiteSpace: "nowrap" }}>{shown}%</span>
+    </div>
+  );
+}
+
+// Checkmark SVG que se traza a sí mismo (círculo + palomita) al montarse. La animación
+// vive en styles.css (.draw-check-*), así que aquí sólo se dibuja el trazo.
+function DrawCheck({ size = 26, color = "#166534" }) {
+  return (
+    <svg className="draw-check" viewBox="0 0 52 52" width={size} height={size} aria-hidden="true">
+      <circle className="draw-check-circle" cx="26" cy="26" r="24" fill="none" stroke={color} strokeWidth="2.5" />
+      <path className="draw-check-mark" fill="none" stroke={color} strokeWidth="3.5"
+            strokeLinecap="round" strokeLinejoin="round" d="M14 27 l8 8 l16 -18" />
+    </svg>
+  );
+}
+
 // ── Barra de carga global (top loading bar) ──
 // count = peticiones en curso; total/done = peticiones de la "tanda" actual,
 // para que el progreso sea proporcional a las que ya han terminado (done/total).
@@ -172,34 +232,72 @@ function cambiarIdiomaGlobal(code) {
   }
 }
 
+// Rueda de idioma: aro dividido en 3 segmentos (ES arriba, EN abajo-dcha, PT abajo-izda).
+// El activo se resalta en naranja; click en un segmento = elegir ese idioma.
+const _LANG_SEGS = [
+  { code: "es", label: "ES", title: "Español" },
+  { code: "en", label: "EN", title: "English" },
+  { code: "pt", label: "PT", title: "Português" },
+];
 function LangToggle() {
   const [, force] = useState(0);
+  const [hover, setHover] = useState(-1);
+  const [spin, setSpin] = useState(0);
   useEffect(() => subscribeLang(() => force((n) => n + 1)), []);
   const lang = getLang();
-  const boton = (code, label) => (
-    <button
-      type="button"
-      onClick={() => cambiarIdiomaGlobal(code)}
-      aria-pressed={lang === code}
-      title={code === "en" ? "English" : "Español"}
-      style={{
-        border: "none", cursor: "pointer", padding: "4px 11px", fontSize: 12, fontWeight: 700,
-        letterSpacing: ".05em", borderRadius: 999, minHeight: "auto", lineHeight: 1.4,
-        background: lang === code ? "var(--accent, #ff4d2e)" : "transparent",
-        color: lang === code ? "#fff" : "rgba(0,0,0,.5)",
-        transition: "background .15s, color .15s",
-      }}
-    >{label}</button>
-  );
+
+  // Gira la rueda 360° cada vez que cambia el idioma (efecto ruleta).
+  const prevLang = React.useRef(lang);
+  useEffect(() => {
+    if (prevLang.current !== lang) {
+      prevLang.current = lang;
+      setSpin((s) => s + 360);
+    }
+  }, [lang]);
+
+  const size = 92, cx = size / 2, cy = size / 2, R = size / 2 - 3, START = -150;
+  const pol = (ang, rad) => {
+    const a = (ang * Math.PI) / 180;
+    return [cx + rad * Math.cos(a), cy + rad * Math.sin(a)];
+  };
+  // Porción de tarta (círculo completo, sin agujero): del centro al arco exterior.
+  const sector = (a1, a2) => {
+    const [ox1, oy1] = pol(a1, R), [ox2, oy2] = pol(a2, R);
+    return `M ${cx} ${cy} L ${ox1} ${oy1} A ${R} ${R} 0 0 1 ${ox2} ${oy2} Z`;
+  };
+
   return (
     <div style={{
-      position: "fixed", top: 88, right: 14, zIndex: 300,
-      display: "flex", gap: 2, padding: 3, borderRadius: 999,
-      background: "rgba(255,255,255,.92)", border: "1px solid var(--border, #e6e6e6)",
-      boxShadow: "0 1px 4px rgba(0,0,0,.08)",
+      position: "fixed", top: 74, right: 14, zIndex: 300,
+      opacity: hover >= 0 ? 1 : 0.5, transition: "opacity .18s",
+      filter: "drop-shadow(0 1px 5px rgba(0,0,0,.15))",
     }}>
-      {boton("es", "ES")}
-      {boton("en", "EN")}
+      <svg viewBox={`0 0 ${size} ${size}`} width={size} height={size} role="group" aria-label="Idioma">
+        <g style={{
+          transform: `rotate(${spin}deg)`, transformBox: "fill-box", transformOrigin: "center",
+          transition: "transform .6s cubic-bezier(.2,.75,.2,1)",
+        }}>
+          {_LANG_SEGS.map((s, i) => {
+            const a1 = START + i * 120, a2 = START + (i + 1) * 120;
+            const activo = lang === s.code;
+            const [lx, ly] = pol(a1 + 60, R * 0.6);
+            const fill = activo ? "var(--accent, #ff4d2e)" : (hover === i ? "#ffe7e0" : "#fff");
+            return (
+              <g key={s.code} onClick={() => cambiarIdiomaGlobal(s.code)}
+                 onMouseEnter={() => setHover(i)} onMouseLeave={() => setHover(-1)}
+                 style={{ cursor: "pointer" }}>
+                <title>{s.title}</title>
+                <path d={sector(a1, a2)} fill={fill} stroke="#111" strokeWidth="1.6"
+                      style={{ transition: "fill .25s" }} />
+                <text x={lx} y={ly} textAnchor="middle" dominantBaseline="central"
+                      fontSize="14" fontWeight="800" letterSpacing=".04em"
+                      fill={activo ? "#fff" : "rgba(0,0,0,.6)"}
+                      style={{ pointerEvents: "none", userSelect: "none" }}>{s.label}</text>
+              </g>
+            );
+          })}
+        </g>
+      </svg>
     </div>
   );
 }
@@ -298,7 +396,7 @@ function AdminRoleSelect({ user, onChoose, onLogout }) {
       <div className="role-select-body">
         <p className="kicker">{t("role.welcome")}</p>
         <h2>{t("role.how_enter")}</h2>
-        <div className="role-select-grid">
+        <div className="role-select-grid stagger">
           <button className="role-card" onClick={() => onChoose("admin")}>
             <span className="role-card-title">{t("role.admin_title")}</span>
             <span className="role-card-desc">{t("role.admin_desc")}</span>
@@ -543,7 +641,7 @@ function AdminPanel({ token, onBack }) {
             onChange={(e) => setSearch(e.target.value)}
           />
         </div>
-        <div className="advisees-page-grid">
+        <div className="advisees-page-grid stagger">
           {filtrados.map((e) => (
             <button
               key={e.value}
@@ -2803,7 +2901,7 @@ function AdviseesList({ token, advisees, onBack, onNavigate }) {
       <div className="advisees-page-wrap">
         <p className="kicker">Career Advisor</p>
         <h2>{t("dash.nav_my_advisees")}</h2>
-        <div className="advisees-page-grid">
+        <div className="advisees-page-grid stagger">
           {advisees.map((a) => (
             <button
               key={a.nombre}
@@ -3233,19 +3331,14 @@ function MisProyectosActivosPage({ token, user, onBack }) {
             const pct = total ? Math.round((done / total) * 100) : 0;
             const msgEsError = msg.includes("Error") || msg.includes("error");
             return (
-              <div key={nombre} className="card" style={{ marginBottom: 16 }}>
+              <div key={nombre} className="card stagger-item" style={{ marginBottom: 16, animationDelay: `${Math.min(idx, 8) * 0.05}s` }}>
                 {/* Header */}
                 <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 16, flexWrap: "wrap", marginBottom: 16 }}>
                   <div>
                     <p style={{ fontSize: 14, fontWeight: 500, color: "#000", marginBottom: 2 }}>{nombre}</p>
                     <p style={{ fontSize: 12, fontWeight: 200, color: "rgba(0,0,0,.45)" }}>{t("mpa.progress", { done, total })}</p>
                   </div>
-                  <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-                    <div style={{ width: 72, height: 5, background: "var(--border)", borderRadius: 3, overflow: "hidden" }}>
-                      <div style={{ height: "100%", width: `${pct}%`, background: "#000", borderRadius: 3 }} />
-                    </div>
-                    <span style={{ fontSize: 11, fontWeight: 400, color: "rgba(0,0,0,.45)", whiteSpace: "nowrap" }}>{pct}%</span>
-                  </div>
+                  <ProgressBar pct={pct} barWidth={72} height={5} />
                 </div>
 
                 {/* Members table */}
@@ -3589,6 +3682,8 @@ function EvaluacionesProyectoPage({ token, user, proyectos, onBack, onNavigate, 
   const totalEvals = items.length;
   const doneEvals = items.filter((i) => i.completado).length;
   const pct = totalEvals ? Math.round((doneEvals / totalEvals) * 100) : 0;
+  const shownPct = useCountUp(pct);
+  const shownDone = useCountUp(doneEvals);
   const grupoAuto = items.filter((i) => i.tipo === "autoevaluacion");
   const grupoManager = items.filter((i) => i.tipo === "miembros_a_manager");
   const grupoMiembros = items.filter((i) => i.tipo === "mismos_miembros" || i.tipo === "manager_a_miembros");
@@ -3653,10 +3748,10 @@ function EvaluacionesProyectoPage({ token, user, proyectos, onBack, onNavigate, 
               <div style={{ marginBottom: 36 }}>
                 <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", marginBottom: 8 }}>
                   <span style={{ fontSize: 13, fontWeight: 200, color: "rgba(0,0,0,.55)" }}>{t("ep.progress")}</span>
-                  <span style={{ fontSize: 13, fontWeight: 400, color: "#000" }}>{t("ep.progress_stat", { done: doneEvals, total: totalEvals, pct })}</span>
+                  <span style={{ fontSize: 13, fontWeight: 400, color: "#000" }}>{t("ep.progress_stat", { done: shownDone, total: totalEvals, pct: shownPct })}</span>
                 </div>
                 <div style={{ height: 6, background: "var(--border)", borderRadius: 3, overflow: "hidden" }}>
-                  <div style={{ height: "100%", width: `${pct}%`, background: "#000", borderRadius: 3, transition: "width .6s" }} />
+                  <div style={{ height: "100%", width: `${shownPct}%`, background: "#000", borderRadius: 3, transition: "width .1s linear" }} />
                 </div>
               </div>
 
@@ -3787,7 +3882,10 @@ function FormularioEvaluacionProyecto({ token, user, proyecto, tipo, manager, ev
 
       {enviado ? (
         <section className="panel" style={{ marginTop: "32px" }}>
-          <p className="fine" style={{ color: "#166534" }}>{t("fep.saved_ok")}</p>
+          <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+            <DrawCheck color="#166534" />
+            <p className="fine" style={{ color: "#166534", margin: 0 }}>{t("fep.saved_ok")}</p>
+          </div>
           <div className="actions">
             <button onClick={() => { setEnviado(false); setRespuestas({}); setEvaluado(""); setStatus(""); }}>
               {t("fep.new_eval")}

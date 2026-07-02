@@ -42,17 +42,22 @@ log = logging.getLogger("migracion_idioma")
 
 _RUTA_TRADUCCIONES = os.path.join(os.path.dirname(os.path.dirname(__file__)), "traducciones_idioma.json")
 
-_SYSTEM_TRAD = (
-    "Eres un traductor profesional de RRHH. Traduce del español al inglés natural y "
-    "profesional el texto de evaluación que se te da. Conserva el formato de Slack "
-    "(*negrita*, _cursiva_), los saltos de línea, los emojis y cualquier placeholder "
-    "entre llaves {asi}. Responde ÚNICAMENTE con la traducción, sin comillas ni "
-    "explicaciones."
-)
+# Idiomas de destino a crear (además del ES existente). ES es siempre el origen.
+IDIOMAS_DESTINO = ("en", "pt")
+_NOMBRE_IDIOMA = {"en": "inglés", "pt": "portugués europeo"}
+
+
+def _system_trad(idioma: str) -> str:
+    return (
+        f"Eres un traductor profesional de RRHH. Traduce del español al {_NOMBRE_IDIOMA[idioma]} "
+        "natural y profesional el texto de evaluación que se te da. Conserva el formato de Slack "
+        "(*negrita*, _cursiva_), los saltos de línea, los emojis y cualquier placeholder "
+        "entre llaves {asi}. Responde ÚNICAMENTE con la traducción, sin comillas ni explicaciones."
+    )
 
 
 # ---------------------------------------------------------------------------
-# Traducciones (cacheadas en JSON, editable por el usuario)
+# Traducciones (cacheadas en JSON, editable por el usuario). Formato: {es: {en:.., pt:..}}
 # ---------------------------------------------------------------------------
 
 def _cargar_traducciones() -> dict:
@@ -70,7 +75,7 @@ def _guardar_traducciones(mapa: dict) -> None:
         json.dump(mapa, f, ensure_ascii=False, indent=2, sort_keys=True)
 
 
-def _traducir_con_claude(texto_es: str) -> str:
+def _traducir_con_claude(texto_es: str, idioma: str) -> str:
     if not anthropic_client:
         log.warning("  [!] Sin cliente de Claude; se deja el texto en español.")
         return texto_es
@@ -78,7 +83,7 @@ def _traducir_con_claude(texto_es: str) -> str:
         resp = anthropic_client.messages.create(
             model="claude-sonnet-4-6",
             max_tokens=1500,
-            system=_SYSTEM_TRAD,
+            system=_system_trad(idioma),
             messages=[{"role": "user", "content": texto_es}],
         )
         out = "".join(b.text for b in resp.content if b.type == "text").strip()
@@ -90,19 +95,24 @@ def _traducir_con_claude(texto_es: str) -> str:
 
 class Traductor:
     def __init__(self):
-        self.mapa = _cargar_traducciones()
+        raw = _cargar_traducciones()
+        # Compatibilidad: formato antiguo {es: "en"} -> {es: {"en": "..."}}
+        self.mapa = {}
+        for es, val in raw.items():
+            self.mapa[es] = {"en": val} if isinstance(val, str) else dict(val)
         self.nuevas = 0
 
-    def traducir(self, texto_es: str) -> str:
+    def traducir(self, texto_es: str, idioma: str) -> str:
         texto_es = (texto_es or "").strip()
         if not texto_es:
             return ""
-        if texto_es in self.mapa and self.mapa[texto_es].strip():
-            return self.mapa[texto_es]
-        en = _traducir_con_claude(texto_es)
-        self.mapa[texto_es] = en
+        entrada = self.mapa.setdefault(texto_es, {})
+        if entrada.get(idioma, "").strip():
+            return entrada[idioma]
+        dst = _traducir_con_claude(texto_es, idioma)
+        entrada[idioma] = dst
         self.nuevas += 1
-        return en
+        return dst
 
     def guardar(self):
         _guardar_traducciones(self.mapa)
@@ -181,7 +191,7 @@ def _leer_filas(db_id: str) -> list:
 
 def _asegurar_columna_idioma(db_id: str, aplicar: bool) -> bool:
     """Añade la columna Idioma (select ES/EN) si falta. Devuelve True si (ya) existe/creada."""
-    schema = {"Idioma": {"select": {"options": [{"name": "ES"}, {"name": "EN"}]}}}
+    schema = {"Idioma": {"select": {"options": [{"name": "ES"}, {"name": "EN"}, {"name": "PT"}]}}}
     try:
         if ns._usa_data_sources():
             bbdd = notion.data_sources.retrieve(data_source_id=db_id)
@@ -220,12 +230,13 @@ def _migrar_bbdd(nombre: str, db_id: str, campos_traducir: list, campos_clave: l
         log.exception("  [!] Error leyendo filas")
         return
 
-    es_rows, sin_marcar, en_keys = [], [], set()
+    es_rows, sin_marcar = [], []
+    keys_por_idioma: dict = {}  # idioma -> set(claves ya existentes)
     for fila in filas:
         props = fila.get("properties", {})
         idi = _idioma_de_fila(props)
-        if idi == "en":
-            en_keys.add(_valor_clave(props, campos_clave))
+        if idi in IDIOMAS_DESTINO:
+            keys_por_idioma.setdefault(idi, set()).add(_valor_clave(props, campos_clave))
         else:
             es_rows.append(fila)
             if idi == "":
@@ -240,45 +251,46 @@ def _migrar_bbdd(nombre: str, db_id: str, campos_traducir: list, campos_clave: l
                 log.exception("  [!] Error marcando ES una fila")
     log.info("  Filas marcadas como ES: %d %s", len(sin_marcar), "" if aplicar else "(se marcarían)")
 
-    # 2) Crear filas EN
-    creadas, ya_existen, traducidas = 0, 0, 0
+    # 2) Crear filas para cada idioma destino (idempotente por clave+idioma)
     nombres_traducir = {p for p, _ in campos_traducir}
-    for fila in es_rows:
-        props = fila.get("properties", {})
-        clave = _valor_clave(props, campos_clave)
-        if clave in en_keys:
-            ya_existen += 1
-            continue
-
-        payload = {}
-        # Copiar columnas NO traducibles (incluye la clave/título si no se traduce)
-        for pname, pobj in props.items():
-            if pname in nombres_traducir or pname == "Idioma":
+    for idioma_dst in IDIOMAS_DESTINO:
+        existentes = keys_por_idioma.get(idioma_dst, set())
+        creadas, ya_existen, traducidas = 0, 0, 0
+        for fila in es_rows:
+            props = fila.get("properties", {})
+            clave = _valor_clave(props, campos_clave)
+            if clave in existentes:
+                ya_existen += 1
                 continue
-            pl = _prop_a_payload(pobj)
-            if pl is not None:
-                payload[pname] = pl
-        # Traducir columnas de texto
-        for pname, kind in campos_traducir:
-            es_txt = _plain(props.get(pname), kind)
-            if not es_txt:
-                continue
-            en_txt = traductor.traducir(es_txt)
-            traducidas += 1
-            payload[pname] = {kind: [{"type": "text", "text": {"content": en_txt}}]}
-        payload["Idioma"] = {"select": {"name": "EN"}}
 
-        if aplicar:
-            try:
-                ns._crear_pagina_en_bbdd(db_id, payload)
+            payload = {}
+            # Copiar columnas NO traducibles (incluye la clave/título si no se traduce)
+            for pname, pobj in props.items():
+                if pname in nombres_traducir or pname == "Idioma":
+                    continue
+                pl = _prop_a_payload(pobj)
+                if pl is not None:
+                    payload[pname] = pl
+            # Traducir columnas de texto
+            for pname, kind in campos_traducir:
+                es_txt = _plain(props.get(pname), kind)
+                if not es_txt:
+                    continue
+                payload[pname] = {kind: [{"type": "text", "text": {"content": traductor.traducir(es_txt, idioma_dst)}}]}
+                traducidas += 1
+            payload["Idioma"] = {"select": {"name": idioma_dst.upper()}}
+
+            if aplicar:
+                try:
+                    ns._crear_pagina_en_bbdd(db_id, payload)
+                    creadas += 1
+                except Exception:
+                    log.exception("  [!] Error creando fila %s (clave=%s)", idioma_dst.upper(), clave)
+            else:
                 creadas += 1
-            except Exception:
-                log.exception("  [!] Error creando fila EN (clave=%s)", clave)
-        else:
-            creadas += 1  # contaría como "se crearía"
 
-    log.info("  Filas EN %s: %d | ya existían: %d | textos traducidos: %d",
-             "creadas" if aplicar else "que se crearían", creadas, ya_existen, traducidas)
+        log.info("  Filas %s %s: %d | ya existían: %d | textos traducidos: %d",
+                 idioma_dst.upper(), "creadas" if aplicar else "que se crearían", creadas, ya_existen, traducidas)
 
 
 # ---------------------------------------------------------------------------

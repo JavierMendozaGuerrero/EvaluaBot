@@ -29,6 +29,7 @@ from .notion_service import (
     _tipo_objeto_busqueda_bbdd,
     _usa_data_sources,
     idioma_por_slack_id,
+    idioma_de_persona,
     toggle_idioma_slack,
     invalidar_cache_empleados,
     buscar_empleado_en_lista,
@@ -513,21 +514,23 @@ def _bloques_resumen_expandido(tipo: str, advisee: str, resumen: str, idioma: st
 # ---------------------------------------------------------------------------
 
 def _es_si(texto: str) -> bool:
-    return normalizar_nombre(texto) in {"si", "sí", "s", "yes", "y", "claro", "sip", "vale"}
+    return normalizar_nombre(texto) in {"si", "sí", "s", "yes", "y", "claro", "sip", "vale", "sim"}
 
 
 def _es_no(texto: str) -> bool:
-    return normalizar_nombre(texto) in {"no", "n", "nope", "nel"}
+    return normalizar_nombre(texto) in {"no", "n", "nope", "nel", "nao", "não"}
 
 
 def _es_confirmar(texto: str) -> bool:
     return normalizar_nombre(texto) in {"si", "sí", "s", "ok", "okay", "confirmar", "guardar", "correcto",
-                                        "yes", "y", "save", "confirm", "correct"}
+                                        "yes", "y", "save", "confirm", "correct",
+                                        "sim", "gravar", "correto"}
 
 
 def _es_modificar(texto: str) -> bool:
     return normalizar_nombre(texto) in {"modificar", "cambiar", "editar", "repetir",
-                                        "modify", "change", "edit", "repeat"}
+                                        "modify", "change", "edit", "repeat",
+                                        "alterar", "mudar"}
 
 
 _OPCIONES_MODIFICACION_CA = {
@@ -1163,7 +1166,7 @@ def manejar_mensaje_ca(event, logger) -> None:
         # Mientras Claude "piensa", mostramos una barra de carga animada en el hilo.
         with AnimacionCargando(channel, thread_ts, _idi):
             try:
-                resumen_claude = generar_resumen_evaluacion(advisee, cargo or "", resumen_bruto)
+                resumen_claude = generar_resumen_evaluacion(advisee, cargo or "", resumen_bruto, idioma_de_persona(advisee))
             except Exception:
                 logging.exception("Error generando resumen Claude para '%s'", advisee)
         with _lock:

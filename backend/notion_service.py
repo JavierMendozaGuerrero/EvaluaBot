@@ -9,7 +9,7 @@ from difflib import SequenceMatcher
 
 from . import config
 from .clients import notion
-from .i18n import IDIOMAS_SOPORTADOS
+from .i18n import IDIOMAS_SOPORTADOS, siguiente_idioma
 from .state import bbdd_por_evaluado, lock
 from .utils import normalizar_nombre
 
@@ -846,7 +846,7 @@ def obtener_preguntas_desde_notion(tipo: str, idioma: str = "es") -> dict:
     y una clave no tiene fila en ingles, cae a la version espanola. Si la columna
     'Idioma' aun no existe, todas las filas se tratan como ES (compatibilidad). Cache 5 min.
     """
-    idioma = "en" if idioma == "en" else "es"
+    idioma = idioma if idioma in IDIOMAS_SOPORTADOS else "es"
     cache_key = f"{tipo}|{idioma}"
     ahora = time.time()
     with _lock_preguntas:
@@ -857,22 +857,18 @@ def obtener_preguntas_desde_notion(tipo: str, idioma: str = "es") -> dict:
         if not bbdd_id:
             return {}
         resp = _query_bbdd(bbdd_id, filter={"property": "Tipo", "select": {"equals": tipo}})
-        es_map: dict = {}
-        en_map: dict = {}
+        mapas: dict = {}  # idioma -> {clave: titulo}
         for pagina in resp.get("results", []):
             props = pagina.get("properties", {})
             clave = ((props.get("Clave") or {}).get("select") or {}).get("name", "")
             titulo = "".join(t.get("plain_text", "") for t in (props.get("Texto") or {}).get("title", []))
             if not (clave and titulo):
                 continue
-            if _normalizar_idioma(_texto_propiedad(props, "Idioma")) == "en":
-                en_map[clave] = titulo
-            else:
-                es_map[clave] = titulo
-        if idioma == "en":
-            preguntas = {c: en_map.get(c, es_map.get(c, "")) for c in (set(es_map) | set(en_map))}
-        else:
-            preguntas = es_map
+            _lang = _normalizar_idioma(_texto_propiedad(props, "Idioma"))
+            mapas.setdefault(_lang, {})[clave] = titulo
+        es_map = mapas.get("es", {})
+        base = mapas.get(idioma, {})
+        preguntas = {c: (base.get(c) or es_map.get(c)) for c in (set(es_map) | set(base))}
         with _lock_preguntas:
             _preguntas_cache[cache_key] = preguntas
             _preguntas_cache_time[cache_key] = ahora
@@ -998,7 +994,7 @@ def obtener_preguntas_mo(idioma: str = "es") -> list[dict]:
 
     Filtra por la columna 'Idioma' (ES/EN). Si se pide 'en' y una clave no tiene fila EN,
     cae a la versión ES. Sin columna Idioma, todo se trata como ES."""
-    idioma = "en" if idioma == "en" else "es"
+    idioma = idioma if idioma in IDIOMAS_SOPORTADOS else "es"
     ahora = time.time()
     with _lock_preguntas_mo:
         entry = _cache_preguntas_mo_data.get(idioma)
@@ -1008,7 +1004,7 @@ def obtener_preguntas_mo(idioma: str = "es") -> list[dict]:
     if not db_id:
         return [{"clave": c, "texto": t} for c, t in _PREGUNTAS_MO_DEFAULT]
     try:
-        es_map, en_map = {}, {}
+        mapas: dict = {}  # idioma -> {clave: texto}
         cursor = None
         while True:
             kwargs: dict = {"page_size": 100}
@@ -1021,17 +1017,16 @@ def obtener_preguntas_mo(idioma: str = "es") -> list[dict]:
                 texto = "".join(p.get("plain_text", "") for p in props.get("Texto", {}).get("rich_text", [])).strip()
                 if not (clave and texto):
                     continue
-                if _normalizar_idioma(_texto_propiedad(props, "Idioma")) == "en":
-                    en_map[clave] = texto
-                else:
-                    es_map[clave] = texto
+                _lang = _normalizar_idioma(_texto_propiedad(props, "Idioma"))
+                mapas.setdefault(_lang, {})[clave] = texto
             if not resp.get("has_more"):
                 break
             cursor = resp.get("next_cursor")
-        base = en_map if idioma == "en" else es_map
+        es_map = mapas.get("es", {})
+        base = mapas.get(idioma, {})
         resultado = []
         for c in _CLAVES_MO_ORDEN:
-            texto = base.get(c) or es_map.get(c)  # fallback EN->ES
+            texto = base.get(c) or es_map.get(c)  # fallback -> ES
             if texto:
                 resultado.append({"clave": c, "texto": texto})
         if not resultado:
@@ -1172,7 +1167,7 @@ def obtener_preguntas_palantir(tipo: str, idioma: str = "es") -> list[dict]:
     """Devuelve [{clave, texto}] para el tipo de jerarquía dado en Palantir (cacheado 5 min).
 
     Filtra por la columna 'Idioma' (ES/EN) con fallback EN->ES por clave."""
-    idioma = "en" if idioma == "en" else "es"
+    idioma = idioma if idioma in IDIOMAS_SOPORTADOS else "es"
     ahora = time.time()
     cache_key = f"{tipo}|{idioma}"
     with _lock_preguntas_palantir:
@@ -1184,7 +1179,7 @@ def obtener_preguntas_palantir(tipo: str, idioma: str = "es") -> list[dict]:
     if not db_id:
         return [{"clave": c, "texto": t} for tp, c, t in _PREGUNTAS_PALANTIR_DEFAULT if tp == tipo]
     try:
-        es_map, en_map = {}, {}
+        mapas: dict = {}  # idioma -> {clave: texto}
         cursor = None
         while True:
             kwargs: dict = {"page_size": 100}
@@ -1200,15 +1195,14 @@ def obtener_preguntas_palantir(tipo: str, idioma: str = "es") -> list[dict]:
                 texto = "".join(p.get("plain_text", "") for p in props.get("Texto", {}).get("rich_text", [])).strip()
                 if not (clave and texto):
                     continue
-                if _normalizar_idioma(_texto_propiedad(props, "Idioma")) == "en":
-                    en_map[clave] = texto
-                else:
-                    es_map[clave] = texto
+                _lang = _normalizar_idioma(_texto_propiedad(props, "Idioma"))
+                mapas.setdefault(_lang, {})[clave] = texto
             if not resp.get("has_more"):
                 break
             cursor = resp.get("next_cursor")
-        base = en_map if idioma == "en" else es_map
-        claves = sorted(set(es_map) | set(en_map))
+        es_map = mapas.get("es", {})
+        base = mapas.get(idioma, {})
+        claves = sorted(set(es_map) | set(base))
         resultado = [{"clave": c, "texto": base.get(c) or es_map.get(c)} for c in claves if (base.get(c) or es_map.get(c))]
         if not resultado:
             resultado = sorted(
@@ -1881,7 +1875,7 @@ def obtener_criterios_evaluacion(grupo: str, idioma: str = "es") -> dict:
     Filtra por la columna 'Idioma' (ES/EN); el nombre del Criterio es la clave estable
     (no se traduce) y se cae a ES cuando un criterio no tiene fila EN.
     """
-    idioma = "en" if idioma == "en" else "es"
+    idioma = idioma if idioma in IDIOMAS_SOPORTADOS else "es"
     ahora = time.time()
     cache_key = f"{grupo}|{idioma}"
     with _lock_criterios:
@@ -1898,8 +1892,7 @@ def obtener_criterios_evaluacion(grupo: str, idioma: str = "es") -> dict:
     def _rt(prop):
         return "".join(t.get("plain_text", "") for t in (prop or {}).get("rich_text", [])).strip()
 
-    es_res: dict = {}
-    en_res: dict = {}
+    mapas: dict = {}  # idioma -> {criterio: niveles}
     try:
         cursor = None
         while True:
@@ -1920,10 +1913,8 @@ def obtener_criterios_evaluacion(grupo: str, idioma: str = "es") -> dict:
                         niveles[nivel] = [texto]
                 if not niveles:
                     continue
-                if _normalizar_idioma(_texto_propiedad(props, "Idioma")) == "en":
-                    en_res[criterio] = niveles
-                else:
-                    es_res[criterio] = niveles
+                _lang = _normalizar_idioma(_texto_propiedad(props, "Idioma"))
+                mapas.setdefault(_lang, {})[criterio] = niveles
             if not resp.get("has_more"):
                 break
             cursor = resp.get("next_cursor")
@@ -1931,10 +1922,9 @@ def obtener_criterios_evaluacion(grupo: str, idioma: str = "es") -> dict:
         logging.exception("Error leyendo criterios para grupo '%s'", grupo)
         return {}
 
-    if idioma == "en":
-        resultado = {c: (en_res.get(c) or es_res.get(c)) for c in (list(es_res) + [k for k in en_res if k not in es_res])}
-    else:
-        resultado = es_res
+    es_res = mapas.get("es", {})
+    base = mapas.get(idioma, {})
+    resultado = {c: (base.get(c) or es_res.get(c)) for c in (list(es_res) + [k for k in base if k not in es_res])}
 
     with _lock_criterios:
         _cache_criterios[cache_key] = (resultado, time.time())
@@ -2021,7 +2011,7 @@ def obtener_ejemplos_guia(idioma: str = "es") -> dict:
     Filtra por la columna 'Idioma' (ES/EN) con fallback EN->ES por tipo. Cachea 5 min.
     """
     global _cache_ejemplos
-    idioma = "en" if idioma == "en" else "es"
+    idioma = idioma if idioma in IDIOMAS_SOPORTADOS else "es"
     ahora = time.time()
     with _lock_ejemplos:
         cached = _cache_ejemplos.get(idioma) if isinstance(_cache_ejemplos, dict) else None
@@ -2035,7 +2025,7 @@ def obtener_ejemplos_guia(idioma: str = "es") -> dict:
     def _rt(prop):
         return "".join(t.get("plain_text", "") for t in (prop or {}).get("rich_text", [])).strip()
 
-    es_map, en_map = {}, {}
+    mapas: dict = {}  # idioma -> {tipo: ejemplo}
     try:
         cursor = None
         while True:
@@ -2063,10 +2053,8 @@ def obtener_ejemplos_guia(idioma: str = "es") -> dict:
                         if texto:
                             ejemplo = texto
                             break
-                if _normalizar_idioma(_texto_propiedad(props, "Idioma")) == "en":
-                    en_map[tipo] = ejemplo
-                else:
-                    es_map[tipo] = ejemplo
+                _lang = _normalizar_idioma(_texto_propiedad(props, "Idioma"))
+                mapas.setdefault(_lang, {})[tipo] = ejemplo
             if not resp.get("has_more"):
                 break
             cursor = resp.get("next_cursor")
@@ -2074,10 +2062,9 @@ def obtener_ejemplos_guia(idioma: str = "es") -> dict:
         logging.exception("[ejemplos] Error leyendo BD de ejemplos de guía")
         return {}
 
-    if idioma == "en":
-        resultado = {tp: (en_map.get(tp) or es_map.get(tp)) for tp in (set(es_map) | set(en_map))}
-    else:
-        resultado = es_map
+    es_map = mapas.get("es", {})
+    base = mapas.get(idioma, {})
+    resultado = {tp: (base.get(tp) or es_map.get(tp)) for tp in (set(es_map) | set(base))}
 
     with _lock_ejemplos:
         if not isinstance(_cache_ejemplos, dict):
@@ -2191,7 +2178,8 @@ def idioma_por_slack_id(user_id: str) -> str:
 
 def _valor_idioma_notion(idioma: str, tipo: str) -> dict:
     """Payload de la propiedad 'Idioma' de Notion segun el tipo de columna (select/status/title/text)."""
-    texto = "EN" if idioma == "en" else "ES"
+    idioma = idioma if idioma in IDIOMAS_SOPORTADOS else "es"
+    texto = idioma.upper()  # es->ES, en->EN, pt->PT
     if tipo == "select":
         return {"select": {"name": texto}}
     if tipo == "status":
@@ -2203,7 +2191,7 @@ def _valor_idioma_notion(idioma: str, tipo: str) -> dict:
 
 def _guardar_idioma_en_registro(registro: dict, idioma: str) -> str:
     """Escribe el idioma en la columna Idioma de Notion para ese empleado y actualiza la cache. Devuelve el idioma."""
-    idioma = "en" if idioma == "en" else "es"
+    idioma = idioma if idioma in IDIOMAS_SOPORTADOS else "es"
     page_id = registro.get("page_id")
     prop = registro.get("idioma_prop")
     tipo = registro.get("idioma_prop_tipo") or "select"
@@ -2231,8 +2219,8 @@ def guardar_idioma_por_slack_id(user_id: str, idioma: str) -> str:
 
 
 def toggle_idioma_slack(user_id: str) -> str:
-    """Alterna ES<->EN del empleado con ese Slack ID y lo escribe en Notion. Devuelve el nuevo idioma."""
-    nuevo = "es" if idioma_por_slack_id(user_id) == "en" else "en"
+    """Rota el idioma del empleado (ES->EN->PT->ES) y lo escribe en Notion. Devuelve el nuevo idioma."""
+    nuevo = siguiente_idioma(idioma_por_slack_id(user_id))
     return guardar_idioma_por_slack_id(user_id, nuevo)
 
 
@@ -3746,7 +3734,7 @@ def obtener_preguntas_personales(idioma: str = "es") -> dict:
 
     Filtra por la columna 'Idioma' (ES/EN) con fallback EN->ES por clave."""
     import time as _time
-    idioma = "en" if idioma == "en" else "es"
+    idioma = idioma if idioma in IDIOMAS_SOPORTADOS else "es"
     ahora = _time.time()
     with lock:
         entry = _cache_personal_preguntas.get(idioma)
@@ -3763,7 +3751,7 @@ def obtener_preguntas_personales(idioma: str = "es") -> dict:
     _migrar_mensaje_inicial(db_id)
 
     try:
-        es_map, en_map = {}, {}
+        mapas: dict = {}  # idioma -> {clave: texto}
         cursor = None
         while True:
             kwargs: dict = {"page_size": 100}
@@ -3776,18 +3764,15 @@ def obtener_preguntas_personales(idioma: str = "es") -> dict:
                 texto = " ".join(p.get("plain_text", "") for p in props.get("Texto", {}).get("rich_text", [])).strip()
                 if not (clave and texto):
                     continue
-                if _normalizar_idioma(_texto_propiedad(props, "Idioma")) == "en":
-                    en_map[clave] = texto
-                else:
-                    es_map[clave] = texto
+                _lang = _normalizar_idioma(_texto_propiedad(props, "Idioma"))
+                mapas.setdefault(_lang, {})[clave] = texto
             if not resp.get("has_more"):
                 break
             cursor = resp.get("next_cursor")
         # Lo que hay en Notion manda: NO se re-siembran las claves por defecto (añadir/quitar surte efecto).
-        if idioma == "en":
-            resultado = {c: (en_map.get(c) or es_map.get(c)) for c in (set(es_map) | set(en_map))}
-        else:
-            resultado = es_map
+        es_map = mapas.get("es", {})
+        base = mapas.get(idioma, {})
+        resultado = {c: (base.get(c) or es_map.get(c)) for c in (set(es_map) | set(base))}
         with lock:
             _cache_personal_preguntas[idioma] = {"data": resultado, "ts": _time.time()}
         return resultado
@@ -3869,7 +3854,7 @@ def obtener_preguntas_seguimiento_ca(idioma: str = "es") -> dict:
 
     Filtra por la columna 'Idioma' (ES/EN) con fallback EN->ES por clave."""
     import time as _time
-    idioma = "en" if idioma == "en" else "es"
+    idioma = idioma if idioma in IDIOMAS_SOPORTADOS else "es"
     ahora = _time.time()
     with lock:
         entry = _cache_ca_preguntas.get(idioma)
@@ -3881,7 +3866,7 @@ def obtener_preguntas_seguimiento_ca(idioma: str = "es") -> dict:
         return dict(PREGUNTAS_CA_DEFAULT)
 
     try:
-        es_map, en_map = {}, {}
+        mapas: dict = {}  # idioma -> {clave: texto}
         cursor = None
         while True:
             kwargs: dict = {"page_size": 100}
@@ -3894,17 +3879,14 @@ def obtener_preguntas_seguimiento_ca(idioma: str = "es") -> dict:
                 texto = " ".join(p.get("plain_text", "") for p in props.get("Texto", {}).get("rich_text", [])).strip()
                 if not (clave and texto):
                     continue
-                if _normalizar_idioma(_texto_propiedad(props, "Idioma")) == "en":
-                    en_map[clave] = texto
-                else:
-                    es_map[clave] = texto
+                _lang = _normalizar_idioma(_texto_propiedad(props, "Idioma"))
+                mapas.setdefault(_lang, {})[clave] = texto
             if not resp.get("has_more"):
                 break
             cursor = resp.get("next_cursor")
-        if idioma == "en":
-            resultado = {c: (en_map.get(c) or es_map.get(c)) for c in (set(es_map) | set(en_map))}
-        else:
-            resultado = dict(es_map)
+        es_map = mapas.get("es", {})
+        base = mapas.get(idioma, {})
+        resultado = {c: (base.get(c) or es_map.get(c)) for c in (set(es_map) | set(base))}
         # Garantiza que las 3 claves de flujo existan siempre (por seguridad).
         for k, v in PREGUNTAS_CA_DEFAULT.items():
             resultado.setdefault(k, v)

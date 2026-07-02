@@ -184,6 +184,25 @@ def _canvas_maker(advisee_name: str, ca_name: str, font: str = "Helvetica"):
     return IGCanvas
 
 
+# Etiquetas fijas de la plantilla (el contenido —opiniones— va en su idioma original).
+_LBL_OPI = {
+    "es": {"opinion_ca": "OPINIÓN CA", "sobre_que": "SOBRE QUÉ HA OPINADO",
+           "extra": "Comentarios y notas extra", "sin_opiniones": "Sin opiniones registradas todavía.",
+           "sin_resumen": "Sin opiniones con resumen todavía.", "titulo": "Opiniones CA", "cerrar": "Cerrar"},
+    "en": {"opinion_ca": "CA OPINION", "sobre_que": "WHAT THEY COMMENTED ON",
+           "extra": "Extra comments and notes", "sin_opiniones": "No opinions recorded yet.",
+           "sin_resumen": "No opinions with a summary yet.", "titulo": "CA opinions", "cerrar": "Close"},
+    "pt": {"opinion_ca": "OPINIÃO CA", "sobre_que": "SOBRE O QUE OPINOU",
+           "extra": "Comentários e notas extra", "sin_opiniones": "Ainda sem opiniões registadas.",
+           "sin_resumen": "Ainda sem opiniões com resumo.", "titulo": "Opiniões CA", "cerrar": "Fechar"},
+}
+
+
+def _lbl(datos: dict, clave: str) -> str:
+    idi = datos.get("idioma", "es")
+    return _LBL_OPI.get(idi, _LBL_OPI["es"]).get(clave, _LBL_OPI["es"].get(clave, clave))
+
+
 def generar_pdf_opiniones_ca(datos: dict) -> str:
     """Genera el PDF con reportlab y devuelve la ruta. Lanza RuntimeError si falta reportlab."""
     if not _REPORTLAB_OK:
@@ -222,7 +241,7 @@ def generar_pdf_opiniones_ca(datos: dict) -> str:
         output_path, pagesize=A4,
         rightMargin=2 * cm, leftMargin=2 * cm,
         topMargin=2 * cm, bottomMargin=2 * cm,
-        title=f"Opiniones CA — {advisee_name}",
+        title=f"{_lbl(datos, 'titulo')} — {advisee_name}",
     )
     story = []
     pw, ph = A4
@@ -271,8 +290,8 @@ def generar_pdf_opiniones_ca(datos: dict) -> str:
         block = [Paragraph(entry['fecha'].upper(), s_fecha)]
 
         labels_row = Table(
-            [[Paragraph("OPINIÓN CA", s_label),
-              Paragraph("SOBRE QUÉ HA OPINADO", s_label)]],
+            [[Paragraph(_lbl(datos, "opinion_ca"), s_label),
+              Paragraph(_lbl(datos, "sobre_que"), s_label)]],
             colWidths=[8 * cm, 7.7 * cm],
         )
         labels_row.setStyle(TableStyle([
@@ -313,7 +332,7 @@ def generar_pdf_opiniones_ca(datos: dict) -> str:
         if entries:
             story.append(PageBreak())
         story.append(Spacer(1, 0.5 * cm))
-        story.append(Paragraph("Comentarios y notas extra", s_section_h))
+        story.append(Paragraph(_lbl(datos, "extra"), s_section_h))
         story.append(Spacer(1, 0.1 * cm))
         story.append(HRFlowable(width=1.5 * cm, thickness=3, color=ORANGE, spaceAfter=14))
         for comentario in comentarios_sueltos:
@@ -321,7 +340,7 @@ def generar_pdf_opiniones_ca(datos: dict) -> str:
             story.append(Spacer(1, 0.4 * cm))
 
     if not entries and not comentarios_sueltos:
-        story.append(Paragraph("Sin opiniones registradas todavía.", s_text))
+        story.append(Paragraph(_lbl(datos, "sin_opiniones"), s_text))
 
     doc.build(story, canvasmaker=_canvas_maker(advisee_name, ca_name, F_REG))
     logging.info("PDF de opiniones CA guardado: %s", output_path)
@@ -349,33 +368,33 @@ def generar_html_opiniones_ca(datos: dict) -> str:
           <p class="fecha">{esc(entry['fecha']).upper()}</p>
           <div class="cols">
             <div class="col-op">
-              <p class="lbl">OPINIÓN CA</p>
+              <p class="lbl">{_lbl(datos, 'opinion_ca')}</p>
               <p class="op">{esc(entry['opinion_ca'])}</p>
             </div>
             <div class="col-res">
-              <p class="lbl">SOBRE QUÉ HA OPINADO</p>
+              <p class="lbl">{_lbl(datos, 'sobre_que')}</p>
               <p class="res">{esc(entry['resumen'])}</p>
             </div>
           </div>
         </article>""")
-    entries_html = "\n".join(bloques) if bloques else "<p class='fine'>Sin opiniones con resumen todavía.</p>"
+    entries_html = "\n".join(bloques) if bloques else f"<p class='fine'>{_lbl(datos, 'sin_resumen')}</p>"
 
     comentarios_html = ""
     if comentarios_sueltos:
         items = "\n".join(f"<li>{esc(c)}</li>" for c in comentarios_sueltos)
         comentarios_html = f"""
         <section class="extra">
-          <h2>Comentarios y notas extra</h2>
+          <h2>{_lbl(datos, 'extra')}</h2>
           <div class="rule"></div>
           <ul>{items}</ul>
         </section>"""
 
     contenido = f"""<!DOCTYPE html>
-<html lang="es">
+<html lang="{datos.get('idioma', 'es')}">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Opiniones CA — {esc(advisee)}</title>
+<title>{_lbl(datos, 'titulo')} — {esc(advisee)}</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Outfit:wght@200;400;500&display=swap">
@@ -410,7 +429,7 @@ h1, h2, h3, .brand {{ font-family: 'TT Firs Neue', 'Outfit', system-ui, sans-ser
 <main class="page shell">
 <nav class="nav">
   <a class="brand" href="javascript:void(0)" onclick="window.close()">igeneris</a>
-  <div class="nav-links"><button class="secondary" onclick="window.close()">Cerrar</button></div>
+  <div class="nav-links"><button class="secondary" onclick="window.close()">{_lbl(datos, 'cerrar')}</button></div>
 </nav>
 <div class="top">
   <h1>{esc(advisee)}</h1>
@@ -468,7 +487,7 @@ def _escribir_cache(slug: str, huella: str) -> None:
 
 # ── Punto de entrada ──────────────────────────────────────────────────────────
 
-def generar_resumen_opiniones_ca(advisee: str, ca_nombre: str = "", anonimo: bool = False) -> str:
+def generar_resumen_opiniones_ca(advisee: str, ca_nombre: str = "", anonimo: bool = False, idioma: str = "es") -> str:
     """
     Lee las opiniones del CA en Notion → genera PDF + HTML en CARPETA_WEB.
     Reutiliza caché si los datos no han cambiado.
@@ -484,8 +503,9 @@ def generar_resumen_opiniones_ca(advisee: str, ca_nombre: str = "", anonimo: boo
     if not datos["entries"] and not datos["comentarios_sueltos"]:
         raise ValueError(f"No hay opiniones del CA registradas para '{advisee}'.")
 
+    datos["idioma"] = idioma if idioma in ("es", "en", "pt") else "es"
     slug = slug_archivo(advisee)
-    huella = _huella_datos(datos)
+    huella = _huella_datos(datos) + "|" + datos["idioma"]
     ruta_pdf = os.path.join(config.CARPETA_WEB, f"opiniones_ca_{slug}.pdf")
     ruta_html = os.path.join(config.CARPETA_WEB, f"opiniones_ca_{slug}.html")
     cache = _leer_cache(slug)

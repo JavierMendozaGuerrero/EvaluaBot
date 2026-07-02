@@ -712,7 +712,7 @@ class ApiHandler(BaseHTTPRequestHandler):
                 validar_acceso_sesion(sesion, evaluado, extra_permitidos=advisees_ca)
                 _cfg_anon_op = cargar_anonimato()
                 _anonimo_op = not (sesion.get("is_admin") or evaluadores_visibles_para_advisee(evaluado, _cfg_anon_op))
-                slug = generar_resumen_opiniones_ca(evaluado, anonimo=_anonimo_op)
+                slug = generar_resumen_opiniones_ca(evaluado, anonimo=_anonimo_op, idioma=idioma_de_persona(evaluado))
                 self.responder_json({
                     "pdfUrl": self.url_archivo(f"opiniones_ca_{slug}.pdf", evaluado),
                     "htmlUrl": self.url_archivo(f"opiniones_ca_{slug}.html", evaluado),
@@ -734,7 +734,7 @@ class ApiHandler(BaseHTTPRequestHandler):
                 }
                 generador, prefijo = _GEN[ruta]
                 anonimo_ruta = False if ruta == "/api/generar-pdf-evals-proyecto" else _anonimo
-                slug = generador(evaluado, anonimo=anonimo_ruta)
+                slug = generador(evaluado, anonimo=anonimo_ruta, idioma=idioma_de_persona(evaluado))
                 self.responder_json({"pdfUrl": self.url_archivo(f"{prefijo}_{slug}.pdf", evaluado)})
                 return
             if ruta == "/api/trayectoria":

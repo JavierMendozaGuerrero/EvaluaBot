@@ -291,11 +291,11 @@ def manejar_mensaje_personal(event, logger) -> None:
                 pregunta = t("bp.can_reply", _idi)
 
         elif modo == "confirmacion":
-            if texto_norm in {"si", "sí", "s", "ok", "okay", "confirmar", "guardar", "correcto", "yes", "y", "save", "confirm", "correct"}:
+            if texto_norm in {"si", "sí", "s", "ok", "okay", "confirmar", "guardar", "correcto", "yes", "y", "save", "confirm", "correct", "sim", "gravar", "correto"}:
                 estado["modo"] = "guardar"
                 accion = "guardar"
                 respuestas_snap = dict(estado["respuestas"])
-            elif texto_norm in {"modificar", "cambiar", "editar", "modify", "change", "edit"}:
+            elif texto_norm in {"modificar", "cambiar", "editar", "modify", "change", "edit", "alterar", "mudar"}:
                 push_historial(estado)
                 estado["modo"] = "esperando_comentario"
                 estado["respuestas"].pop("comentario", None)
@@ -310,12 +310,12 @@ def manejar_mensaje_personal(event, logger) -> None:
             respuestas_snap = dict(estado["respuestas"])
 
         elif modo == "preguntando_otro":
-            if texto_norm in {"si", "sí", "s", "ok", "okay", "yes", "y"}:
+            if texto_norm in {"si", "sí", "s", "ok", "okay", "yes", "y", "sim"}:
                 estado["respuestas"] = {}
                 estado["modo"] = "esperando_comentario"
                 accion = "preguntar"
                 pregunta = t("bp.what_else", _idi)
-            elif texto_norm in {"no", "n", "cancelar", "cancel"}:
+            elif texto_norm in {"no", "n", "cancelar", "cancel", "nao", "não", "cancelar"}:
                 estado["modo"] = "terminado"
                 personal_dm_activas.discard(user_id)
                 accion = "ya_terminado"
@@ -536,16 +536,16 @@ def _es_subarea_liderazgo(nombre: str) -> bool:
     return any(kw in nombre.lower() for kw in _LIDERAZGO_KEYWORDS)
 
 
-def _build_grupo_selector_view() -> dict:
+def _build_grupo_selector_view(idioma: str = "es") -> dict:
     return {
         "type": "modal",
         "callback_id": "criterios_selector",
-        "title": {"type": "plain_text", "text": "Criterios de evaluación"},
-        "close": {"type": "plain_text", "text": "Cerrar"},
+        "title": {"type": "plain_text", "text": t("bp.criteria_title", idioma)},
+        "close": {"type": "plain_text", "text": t("bm.close", idioma)},
         "blocks": [
             {
                 "type": "section",
-                "text": {"type": "mrkdwn", "text": "¿Para qué área quieres ver los criterios?"},
+                "text": {"type": "mrkdwn", "text": t("bp.criteria_which_area", idioma)},
             },
             {
                 "type": "actions",
@@ -553,7 +553,7 @@ def _build_grupo_selector_view() -> dict:
                     {
                         "type": "static_select",
                         "action_id": "criterios_elegir_grupo",
-                        "placeholder": {"type": "plain_text", "text": "Selecciona un área..."},
+                        "placeholder": {"type": "plain_text", "text": t("bp.criteria_select_area", idioma)},
                         "options": [
                             {"text": {"type": "plain_text", "text": "Negocio"}, "value": "negocio"},
                             {"text": {"type": "plain_text", "text": "Palantir"}, "value": "palantir"},
@@ -566,28 +566,25 @@ def _build_grupo_selector_view() -> dict:
     }
 
 
-def _build_criterios_view(grupo: str, criterios: dict, expanded: set) -> dict:
+def _build_criterios_view(grupo: str, criterios: dict, expanded: set, idioma: str = "es") -> dict:
     display = {"negocio": "Negocio", "palantir": "Palantir", "middleoffice": "Middle Office"}.get(grupo, grupo)
     blocks: list = [
         {
             "type": "section",
-            "text": {
-                "type": "mrkdwn",
-                "text": f"📊 *Criterios de evaluación — {display}*\nPulsa *Ver* en cada subárea para expandirla:",
-            },
+            "text": {"type": "mrkdwn", "text": t("bp.criteria_intro", idioma, display=display)},
         },
         {"type": "divider"},
     ]
     for subarea, niveles in criterios.items():
         es_liderazgo = _es_subarea_liderazgo(subarea)
-        titulo = f"*{subarea}*" + (" _(solo Asociado Sr y Manager)_" if es_liderazgo else "")
+        titulo = f"*{subarea}*" + (t("bp.criteria_leadership_note", idioma) if es_liderazgo else "")
         is_expanded = subarea in expanded
         blocks.append({
             "type": "section",
             "text": {"type": "mrkdwn", "text": titulo},
             "accessory": {
                 "type": "button",
-                "text": {"type": "plain_text", "text": "▼ Ocultar" if is_expanded else "▶ Ver"},
+                "text": {"type": "plain_text", "text": t("bm.btn_hide_item", idioma) if is_expanded else t("bm.btn_show_item", idioma)},
                 "action_id": "criterios_toggle",
                 "value": subarea,
             },
@@ -604,8 +601,8 @@ def _build_criterios_view(grupo: str, criterios: dict, expanded: set) -> dict:
         "type": "modal",
         "callback_id": "criterios_ver",
         "private_metadata": json.dumps({"grupo": grupo, "expanded": list(expanded)}),
-        "title": {"type": "plain_text", "text": "Criterios"},
-        "close": {"type": "plain_text", "text": "Cerrar"},
+        "title": {"type": "plain_text", "text": t("bp.criteria_title_short", idioma)},
+        "close": {"type": "plain_text", "text": t("bm.close", idioma)},
         "blocks": blocks[:100],
     }
 
@@ -617,7 +614,8 @@ def _handle_personal_ver_criterios(ack, body, logger):
     if not trigger_id:
         return
     try:
-        slack_app.client.views_open(trigger_id=trigger_id, view=_build_grupo_selector_view())
+        _idi = idioma_por_slack_id(body.get("user", {}).get("id", ""))
+        slack_app.client.views_open(trigger_id=trigger_id, view=_build_grupo_selector_view(_idi))
     except Exception:
         logger.exception("Error abriendo modal de criterios")
 
@@ -634,10 +632,11 @@ def _handle_criterios_elegir_grupo(ack, body, logger):
     grupo = selected.get("value", "negocio")
     try:
         notion_grupo = _GRUPOS_CRITERIOS.get(grupo, grupo)
-        criterios = obtener_criterios_evaluacion(notion_grupo, idioma_por_slack_id(body.get("user", {}).get("id", "")))
+        _idi = idioma_por_slack_id(body.get("user", {}).get("id", ""))
+        criterios = obtener_criterios_evaluacion(notion_grupo, _idi)
         slack_app.client.views_update(
             view_id=view_id,
-            view=_build_criterios_view(grupo, criterios, set()),
+            view=_build_criterios_view(grupo, criterios, set(), _idi),
         )
     except Exception:
         logger.exception("Error mostrando criterios del grupo '%s'", grupo)
@@ -661,10 +660,11 @@ def _handle_criterios_toggle(ack, body, logger):
         expanded.add(subarea)
     try:
         notion_grupo = _GRUPOS_CRITERIOS.get(grupo, grupo)
-        criterios = obtener_criterios_evaluacion(notion_grupo, idioma_por_slack_id(body.get("user", {}).get("id", "")))
+        _idi = idioma_por_slack_id(body.get("user", {}).get("id", ""))
+        criterios = obtener_criterios_evaluacion(notion_grupo, _idi)
         slack_app.client.views_update(
             view_id=view["id"],
-            view=_build_criterios_view(grupo, criterios, expanded),
+            view=_build_criterios_view(grupo, criterios, expanded, _idi),
         )
     except Exception:
         logger.exception("Error actualizando criterios para subárea '%s'", subarea)
@@ -674,17 +674,14 @@ def _handle_criterios_toggle(ack, body, logger):
 # Ejemplos de guía — modal interactivo (Personal)
 # ---------------------------------------------------------------------------
 
-def _build_ejemplos_personal_view(ejemplos: dict, expanded: set) -> dict:
+def _build_ejemplos_personal_view(ejemplos: dict, expanded: set, idioma: str = "es") -> dict:
     # Filtrar entradas de Notion cuyo tipo contenga "personal" (case-insensitive)
     personales = {k: v for k, v in ejemplos.items() if "personal" in k.lower()}
 
     blocks: list = [
         {
             "type": "section",
-            "text": {
-                "type": "mrkdwn",
-                "text": "💡 *Ejemplos de guía — Seguimiento personal*\nPulsa *Ver* en cada apartado para expandirlo:",
-            },
+            "text": {"type": "mrkdwn", "text": t("bp.examples_intro", idioma)},
         },
         {"type": "divider"},
     ]
@@ -701,7 +698,7 @@ def _build_ejemplos_personal_view(ejemplos: dict, expanded: set) -> dict:
             "text": {"type": "mrkdwn", "text": f"*{nombre}*"},
             "accessory": {
                 "type": "button",
-                "text": {"type": "plain_text", "text": "▼ Ocultar" if is_expanded else "▶ Ver"},
+                "text": {"type": "plain_text", "text": t("bm.btn_hide_item", idioma) if is_expanded else t("bm.btn_show_item", idioma)},
                 "action_id": "ejemplo_personal_toggle",
                 "value": tipo,  # clave exacta de Notion para el toggle
             },
@@ -709,22 +706,22 @@ def _build_ejemplos_personal_view(ejemplos: dict, expanded: set) -> dict:
         if is_expanded:
             blocks.append({
                 "type": "section",
-                "text": {"type": "mrkdwn", "text": ejemplo[:3000] if ejemplo else "_No hay ejemplo disponible_"},
+                "text": {"type": "mrkdwn", "text": ejemplo[:3000] if ejemplo else t("bm.no_example", idioma)},
             })
             blocks.append({"type": "divider"})
 
     if not personales:
         blocks.append({
             "type": "section",
-            "text": {"type": "mrkdwn", "text": "_No hay ejemplos personales disponibles_"},
+            "text": {"type": "mrkdwn", "text": t("bp.no_personal_examples", idioma)},
         })
 
     return {
         "type": "modal",
         "callback_id": "ejemplo_personal_ver",
         "private_metadata": json.dumps({"expanded": list(expanded)}),
-        "title": {"type": "plain_text", "text": "Ejemplos de guía"},
-        "close": {"type": "plain_text", "text": "Cerrar"},
+        "title": {"type": "plain_text", "text": t("bp.examples_title", idioma)},
+        "close": {"type": "plain_text", "text": t("bm.close", idioma)},
         "blocks": blocks[:100],
     }
 
@@ -772,10 +769,11 @@ def _handle_personal_ver_ejemplo(ack, body, logger):
         logger.exception("Error abriendo modal de ejemplos personal")
         return
     try:
-        ejemplos = obtener_ejemplos_guia(idioma_por_slack_id(body.get("user", {}).get("id", "")))
+        _idi = idioma_por_slack_id(body.get("user", {}).get("id", ""))
+        ejemplos = obtener_ejemplos_guia(_idi)
         slack_app.client.views_update(
             view_id=resp["view"]["id"],
-            view=_build_ejemplos_personal_view(ejemplos, set()),
+            view=_build_ejemplos_personal_view(ejemplos, set(), _idi),
         )
     except Exception:
         logger.exception("Error actualizando modal de ejemplos personal")
@@ -797,10 +795,11 @@ def _handle_ejemplo_personal_toggle(ack, body, logger):
     else:
         expanded.add(tipo)
     try:
-        ejemplos = obtener_ejemplos_guia(idioma_por_slack_id(body.get("user", {}).get("id", "")))
+        _idi = idioma_por_slack_id(body.get("user", {}).get("id", ""))
+        ejemplos = obtener_ejemplos_guia(_idi)
         slack_app.client.views_update(
             view_id=view["id"],
-            view=_build_ejemplos_personal_view(ejemplos, expanded),
+            view=_build_ejemplos_personal_view(ejemplos, expanded, _idi),
         )
     except Exception:
         logger.exception("Error actualizando ejemplos personal para tipo '%s'", tipo)

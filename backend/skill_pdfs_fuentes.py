@@ -49,6 +49,7 @@ _L = {
     "es": {"t_proyecto": "Evaluaciones de proyecto", "t_seguimiento": "Seguimiento personal",
            "t_mensuales": "Evaluaciones mensuales", "t_completo": "Información completa recibida",
            "t_evals_extra": "Evaluaciones extra (fuera de proyecto)",
+           "sin_contexto": "Sin contexto", "nota": "Nota",
            "s_opiniones": "Opiniones del CA", "valoracion": "Valoración", "ejemplo": "Ejemplo",
            "nota_ca": "Nota del CA", "resumen": "Resumen", "opinion_ca": "Opinión CA",
            "sin_datos_fuente": "Sin datos para esta fuente.", "sin_datos": "Sin datos.",
@@ -57,6 +58,7 @@ _L = {
     "en": {"t_proyecto": "Project evaluations", "t_seguimiento": "Personal tracking",
            "t_mensuales": "Monthly evaluations", "t_completo": "Full information received",
            "t_evals_extra": "Extra evaluations (outside project)",
+           "sin_contexto": "No context", "nota": "Score",
            "s_opiniones": "CA opinions", "valoracion": "Rating", "ejemplo": "Example",
            "nota_ca": "CA note", "resumen": "Summary", "opinion_ca": "CA opinion",
            "sin_datos_fuente": "No data for this source.", "sin_datos": "No data.",
@@ -65,6 +67,7 @@ _L = {
     "pt": {"t_proyecto": "Avaliações de projeto", "t_seguimiento": "Acompanhamento pessoal",
            "t_mensuales": "Avaliações mensais", "t_completo": "Informação completa recebida",
            "t_evals_extra": "Avaliações extra (fora do projeto)",
+           "sin_contexto": "Sem contexto", "nota": "Nota",
            "s_opiniones": "Opiniões do CA", "valoracion": "Avaliação", "ejemplo": "Exemplo",
            "nota_ca": "Nota do CA", "resumen": "Resumo", "opinion_ca": "Opinião CA",
            "sin_datos_fuente": "Sem dados para esta fonte.", "sin_datos": "Sem dados.",
@@ -230,10 +233,10 @@ def generar_pdf_evals_mensuales(advisee: str, anonimo: bool = True, idioma: str 
 def generar_pdf_evals_extra(advisee: str, anonimo: bool = True, idioma: str = "es") -> str:
     datos = sorted(obtener_evaluaciones_extra_por_evaluado(advisee), key=lambda x: x.get("fecha", ""))
     entradas = [{
-        "header": d.get("contexto") or "Sin contexto",
+        "header": d.get("contexto") or _t(idioma, "sin_contexto"),
         "meta": " · ".join(p for p in [
             None if anonimo else d.get("evaluador"),
-            f"Nota: {d['nota']}/4" if d.get("nota") is not None else None,
+            f"{_t(idioma, 'nota')}: {d['nota']}/4" if d.get("nota") is not None else None,
             _fecha_es(d.get("fecha", ""), idioma),
         ] if p),
         "cuerpo": d.get("justificacion", ""),
@@ -288,10 +291,10 @@ def _entradas_evals_mensuales(advisee, anonimo, idioma="es"):
 def _entradas_evals_extra(advisee, anonimo, idioma="es"):
     datos = sorted(obtener_evaluaciones_extra_por_evaluado(advisee), key=lambda x: x.get("fecha", ""))
     return [{
-        "header": d.get("contexto") or "Sin contexto",
+        "header": d.get("contexto") or _t(idioma, "sin_contexto"),
         "meta": " · ".join(p for p in [
             None if anonimo else d.get("evaluador"),
-            f"Nota: {d['nota']}/4" if d.get("nota") is not None else None,
+            f"{_t(idioma, 'nota')}: {d['nota']}/4" if d.get("nota") is not None else None,
             _fecha_es(d.get("fecha", ""), idioma),
         ] if p),
         "cuerpo": d.get("justificacion", ""),

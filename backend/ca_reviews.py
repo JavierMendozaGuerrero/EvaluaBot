@@ -7,6 +7,7 @@ las evaluaciones desde la última revisión del CA → pide opinión → guarda 
 Notion → pregunta si hay otro advisee.
 """
 
+import json
 import logging
 import re
 import threading
@@ -42,7 +43,9 @@ from .notion_service import (
     siguiente_envio_calendario,
     sugerir_empleados_parecidos,
 )
+from .project_evals import obtener_evaluaciones_proyecto_por_evaluado
 from .skill_resumen_evaluacion import generar_resumen_evaluacion
+from .slack_carga import AnimacionCargando
 from .utils import normalizar_nombre
 from .anonimato import cargar_config as _cargar_anonimato, evaluadores_visibles_para_advisee as _evaluadores_visibles_para_advisee
 
@@ -252,7 +255,97 @@ def _ca_guardo_desde(ca_nombre: str, desde_ts: float) -> bool:
 # Resumen de evaluaciones
 # ---------------------------------------------------------------------------
 
+# --- Textos por tipo de evaluación (cada uno devuelve "" si no hay nada nuevo) ---
+
+def _texto_evals_proyecto(advisee: str, desde_fecha: str | None, anonimo: bool = True) -> str:
+    """Evaluaciones de proyecto: 'Resultados Evaluaciones al final de proyecto' (campo Evaluado)."""
+    try:
+        evals = obtener_evaluaciones_proyecto_por_evaluado(advisee)
+    except Exception:
+        logging.exception("Error leyendo evaluaciones de proyecto de '%s'", advisee)
+        return ""
+    if desde_fecha:
+        evals = [e for e in evals if (e.get("fecha") or "") > desde_fecha]
+    if not evals:
+        return ""
+    lineas = []
+    for ev in sorted(evals, key=lambda e: e.get("fecha", "")):
+        fecha = (ev.get("fecha") or "?")[:10]
+        quien = "Anónimo" if anonimo else (ev.get("evaluador") or "?")
+        proyecto = ev.get("proyecto") or "?"
+        linea = f"• [{fecha}] *{quien}* en {proyecto}"
+        if ev.get("tipo"):
+            linea += f" ({ev['tipo']})"
+        if ev.get("respuestas"):
+            linea += f" – {ev['respuestas']}"
+        lineas.append(linea)
+    return "\n".join(lineas)
+
+
+def _texto_evals_mensuales(advisee: str, desde_fecha: str | None, anonimo: bool = True) -> str:
+    """Evaluaciones mensuales del bot de Slack: 'Evaluaciones - {nombre}' (Resultados Evaluaciones Mensuales)."""
+    try:
+        evaluaciones = obtener_evaluaciones_por_evaluado(advisee)
+    except Exception:
+        logging.exception("Error leyendo evaluaciones mensuales de '%s'", advisee)
+        return ""
+    if desde_fecha:
+        evaluaciones = [e for e in evaluaciones if (e.get("fecha") or "") > desde_fecha]
+    if not evaluaciones:
+        return ""
+    lineas = []
+    for ev in sorted(evaluaciones, key=lambda e: e.get("fecha", "")):
+        fecha = ev.get("fecha", "")[:10] if ev.get("fecha") else "?"
+        quien = "Anónimo" if anonimo else ev.get("persona_que_evalua", "?")
+        lineas.append(
+            f"• [{fecha}] *{quien}* en {ev.get('proyecto', '?')} – "
+            f"Valoración: {ev.get('q1', '?')} | Ejemplo: {ev.get('q2', '?')}"
+        )
+    return "\n".join(lineas)
+
+
+def _texto_seguimiento_personal(advisee: str, desde_fecha: str | None, anonimo: bool = True) -> str:
+    """Comentarios de evaluaciones de seguimiento personal."""
+    try:
+        comentarios = obtener_comentarios_personales(advisee)
+    except Exception:
+        logging.exception("Error leyendo comentarios personales de '%s'", advisee)
+        return ""
+    if desde_fecha:
+        comentarios = [c for c in comentarios if c.get("fecha", "") > desde_fecha]
+    if not comentarios:
+        return ""
+    lineas = []
+    for c in sorted(comentarios, key=lambda x: x.get("fecha", "")):
+        autor_c = "Anónimo" if anonimo else c["autor"]
+        lineas.append(f"• [{c['fecha']}] *{autor_c}* → _{c['comentario']}_")
+    return "\n".join(lineas)
+
+
+def _texto_objetivos(advisee: str) -> str:
+    """Objetivos (títulos y KPIs) como recordatorio."""
+    try:
+        objetivos = obtener_objetivos_persona(advisee)
+    except Exception:
+        logging.exception("Error leyendo objetivos de '%s'", advisee)
+        return ""
+    if not objetivos:
+        return ""
+    lineas = []
+    for obj in objetivos:
+        linea = f"• *{obj.get('titulo', '')}*"
+        if obj.get("kpis"):
+            linea += f"\n  _KPIs: {obj['kpis']}_"
+        lineas.append(linea)
+    return "\n".join(lineas)
+
+
 def _resumen_advisee(advisee: str, desde_fecha: str | None, anonimo: bool = True) -> str:
+    """Resumen combinado para la WEB (obtener_resumen_advisee_para_ca). Sin cambios de comportamiento.
+
+    En el bot de Slack NO se usa esto: allí cada tipo se muestra en su propio desplegable
+    (ver _texto_evals_proyecto / _texto_evals_mensuales / _texto_seguimiento_personal).
+    """
     try:
         evaluaciones = obtener_evaluaciones_por_evaluado(advisee)
     except RuntimeError:
@@ -290,7 +383,6 @@ def _resumen_advisee(advisee: str, desde_fecha: str | None, anonimo: bool = True
         cabecera += f" desde {desde_fecha[:10]}"
     resumen = cabecera + ":\n" + "\n".join(lineas)
 
-    # Añadir comentarios de evaluaciones personales
     try:
         comentarios = obtener_comentarios_personales(advisee)
         if desde_fecha:
@@ -306,7 +398,6 @@ def _resumen_advisee(advisee: str, desde_fecha: str | None, anonimo: bool = True
     except Exception:
         logging.exception("Error leyendo comentarios personales de '%s'", advisee)
 
-    # Añadir objetivos (solo títulos y KPIs como recordatorio)
     try:
         objetivos = obtener_objetivos_persona(advisee)
         if objetivos:
@@ -323,6 +414,93 @@ def _resumen_advisee(advisee: str, desde_fecha: str | None, anonimo: bool = True
         logging.exception("Error leyendo objetivos de '%s'", advisee)
 
     return resumen
+
+
+# ---------------------------------------------------------------------------
+# Mensaje desplegable con las evaluaciones recibidas del advisee
+# ---------------------------------------------------------------------------
+
+def _chunk_mrkdwn(texto: str, limite: int = 2900) -> list:
+    """Trocea un texto largo en cachos < límite para respetar el máximo de un bloque section (3000)."""
+    texto = texto or ""
+    if len(texto) <= limite:
+        return [texto]
+    trozos, actual = [], ""
+    for linea in texto.split("\n"):
+        if len(actual) + len(linea) + 1 > limite and actual:
+            trozos.append(actual)
+            actual = ""
+        actual += (linea + "\n")
+    if actual.strip():
+        trozos.append(actual)
+    return trozos or [texto[:limite]]
+
+
+# tipo de evaluación -> clave i18n de su cabecera
+_HEADER_KEY_POR_TIPO = {
+    "proyecto": "bc.evals_proyecto_header",
+    "mensual": "bc.evals_mensual_header",
+    "personal": "bc.evals_personal_header",
+}
+
+
+def _header_por_tipo(tipo: str, advisee: str, idioma: str) -> str:
+    return t(_HEADER_KEY_POR_TIPO.get(tipo, "bc.evals_received_header"), idioma, advisee=advisee)
+
+
+def _valor_desplegable(tipo: str, advisee: str) -> str:
+    """Codifica el tipo + advisee en el 'value' del botón (para reconstruir al pulsar)."""
+    return json.dumps({"t": tipo, "a": advisee})
+
+
+def _bloques_resumen_colapsado(tipo: str, advisee: str, idioma: str) -> list:
+    """Vista plegada de un tipo: solo la cabecera + botón para desplegar."""
+    return [
+        {"type": "section", "text": {"type": "mrkdwn", "text": _header_por_tipo(tipo, advisee, idioma)}},
+        {
+            "type": "actions",
+            "elements": [
+                {
+                    "type": "button",
+                    "text": {"type": "plain_text", "text": t("bc.btn_show_evals", idioma), "emoji": True},
+                    "value": _valor_desplegable(tipo, advisee),
+                    "action_id": "ca_ver_evaluaciones",
+                },
+            ],
+        },
+    ]
+
+
+def _bloques_resumen_vacio(tipo: str, advisee: str, idioma: str) -> list:
+    """Cabecera de un tipo sin evaluaciones nuevas (sin botón)."""
+    return [
+        {"type": "section", "text": {"type": "mrkdwn", "text": _header_por_tipo(tipo, advisee, idioma)}},
+        {"type": "context", "elements": [{"type": "mrkdwn", "text": t("bc.sin_evals_tipo", idioma)}]},
+    ]
+
+
+def _bloques_resumen_expandido(tipo: str, advisee: str, resumen: str, idioma: str) -> list:
+    """Vista desplegada de un tipo: cabecera + evaluaciones + botón para volver a plegar."""
+    secciones = [
+        {"type": "section", "text": {"type": "mrkdwn", "text": trozo}}
+        for trozo in _chunk_mrkdwn(resumen)
+    ]
+    return [
+        {"type": "section", "text": {"type": "mrkdwn", "text": _header_por_tipo(tipo, advisee, idioma)}},
+        {"type": "divider"},
+        *secciones,
+        {
+            "type": "actions",
+            "elements": [
+                {
+                    "type": "button",
+                    "text": {"type": "plain_text", "text": t("bc.btn_hide_evals", idioma), "emoji": True},
+                    "value": _valor_desplegable(tipo, advisee),
+                    "action_id": "ca_ocultar_evaluaciones",
+                },
+            ],
+        },
+    ]
 
 
 # ---------------------------------------------------------------------------
@@ -753,7 +931,9 @@ def manejar_mensaje_ca(event, logger) -> None:
             reply(texto_header)
 
     if accion == "pedir_advisee":
-        _reply_lista_advisees()
+        # Primer mensaje del hilo: barra de carga mientras leemos los advisees de Notion.
+        with AnimacionCargando(channel, thread_ts, _idi):
+            _reply_lista_advisees()
 
     elif accion == "validar_y_mostrar":
         advisee = payload["advisee"]
@@ -771,12 +951,31 @@ def manejar_mensaje_ca(event, logger) -> None:
                 if conv_key in conversaciones_ca:
                     conversaciones_ca[conv_key]["advisee_actual"] = advisee
                     conversaciones_ca[conv_key]["ca_nombre"] = ca_nombre
-            desde_fecha = _fecha_ultima_opinion(ca_nombre, advisee)
-            hace_4_semanas = (datetime.now(timezone.utc) - timedelta(weeks=4)).isoformat()
-            desde_fecha = max(desde_fecha, hace_4_semanas) if desde_fecha else hace_4_semanas
-            _cfg_anon = _cargar_anonimato()
-            resumen = _resumen_advisee(advisee, desde_fecha, anonimo=not _evaluadores_visibles_para_advisee(advisee, _cfg_anon))
-            sin_novedades = "no hay evaluaciones nuevas" in resumen or "No hay evaluaciones registradas" in resumen
+            # Buscar datos en Notion (última opinión, evaluaciones, comentarios y objetivos)
+            # puede tardar; mostramos la barra de carga animada mientras tanto.
+            with AnimacionCargando(channel, thread_ts, _idi):
+                desde_fecha = _fecha_ultima_opinion(ca_nombre, advisee)
+                hace_4_semanas = (datetime.now(timezone.utc) - timedelta(weeks=4)).isoformat()
+                desde_fecha = max(desde_fecha, hace_4_semanas) if desde_fecha else hace_4_semanas
+                _anon = not _evaluadores_visibles_para_advisee(advisee, _cargar_anonimato())
+                txt_proyecto = _texto_evals_proyecto(advisee, desde_fecha, _anon)
+                txt_mensual = _texto_evals_mensuales(advisee, desde_fecha, _anon)
+                txt_personal = _texto_seguimiento_personal(advisee, desde_fecha, _anon)
+                txt_objetivos = _texto_objetivos(advisee)
+            # Un desplegable por cada tipo de evaluación que tenga contenido.
+            tipos = [("proyecto", txt_proyecto), ("mensual", txt_mensual), ("personal", txt_personal)]
+            sin_novedades = not any(txt for _, txt in tipos)
+            # Resumen combinado (solo para el resumen que genera Claude, no para la web).
+            _partes = []
+            if txt_proyecto:
+                _partes.append(f"*Evaluaciones de proyecto:*\n{txt_proyecto}")
+            if txt_mensual:
+                _partes.append(f"*Evaluaciones mensuales:*\n{txt_mensual}")
+            if txt_personal:
+                _partes.append(f"*Seguimiento personal:*\n{txt_personal}")
+            if txt_objetivos:
+                _partes.append(f"📌 *Objetivos de {advisee}:*\n{txt_objetivos}")
+            resumen = "\n\n".join(_partes)
             with _lock:
                 if conv_key in conversaciones_ca:
                     if sin_novedades:
@@ -785,10 +984,28 @@ def manejar_mensaje_ca(event, logger) -> None:
                     else:
                         conversaciones_ca[conv_key]["modo"] = "esperando_permiso_claude"
                         conversaciones_ca[conv_key]["resumen_bruto"] = resumen
+                        conversaciones_ca[conv_key].setdefault("resumenes_ver", {})[advisee] = {
+                            "proyecto": txt_proyecto, "mensual": txt_mensual, "personal": txt_personal,
+                        }
             if sin_novedades:
-                _reply_lista_advisees(f"{resumen}\n\n")
+                _reply_lista_advisees(t("bc.no_new_evals", _idi, advisee=advisee) + "\n\n")
             else:
-                reply(resumen)
+                # Siempre los tres tipos separados; los que no tengan nada salen como "sin novedades".
+                for _tipo, _txt in tipos:
+                    _blocks = _bloques_resumen_colapsado(_tipo, advisee, _idi) if _txt else _bloques_resumen_vacio(_tipo, advisee, _idi)
+                    slack_app.client.chat_postMessage(
+                        channel=channel,
+                        thread_ts=thread_ts,
+                        text=_header_por_tipo(_tipo, advisee, _idi),
+                        blocks=_blocks,
+                    )
+                if txt_objetivos:
+                    slack_app.client.chat_postMessage(
+                        channel=channel,
+                        thread_ts=thread_ts,
+                        text=f"📌 Objetivos de {advisee}",
+                        blocks=[{"type": "section", "text": {"type": "mrkdwn", "text": f"📌 *Objetivos de {advisee}:*\n{txt_objetivos}"}}],
+                    )
                 slack_app.client.chat_postMessage(
                     channel=channel,
                     thread_ts=thread_ts,
@@ -874,19 +1091,23 @@ def manejar_mensaje_ca(event, logger) -> None:
         advisee = payload["advisee"]
         resumen_bruto = payload.get("resumen_bruto", "")
         _, cargo = buscar_empleado_y_cargo(advisee)
-        try:
-            resumen_claude = generar_resumen_evaluacion(advisee, cargo or "", resumen_bruto)
+        resumen_claude = None
+        # Mientras Claude "piensa", mostramos una barra de carga animada en el hilo.
+        with AnimacionCargando(channel, thread_ts, _idi):
+            try:
+                resumen_claude = generar_resumen_evaluacion(advisee, cargo or "", resumen_bruto)
+            except Exception:
+                logging.exception("Error generando resumen Claude para '%s'", advisee)
+        _preg = obtener_preguntas_seguimiento_ca().get("opinion_con_claude", "")
+        if resumen_claude:
             with _lock:
                 if conv_key in conversaciones_ca:
                     conversaciones_ca[conv_key]["resumen_actual"] = resumen_claude
-            _preg = obtener_preguntas_seguimiento_ca().get("opinion_con_claude", "")
             reply(f"📊 *Resumen generado por Claude:*\n\n{resumen_claude}\n\n{_preg}")
-        except Exception:
-            logging.exception("Error generando resumen Claude para '%s'", advisee)
+        else:
             with _lock:
                 if conv_key in conversaciones_ca:
                     conversaciones_ca[conv_key]["resumen_actual"] = resumen_bruto
-            _preg = obtener_preguntas_seguimiento_ca().get("opinion_con_claude", "")
             reply(f"⚠️ No se pudo generar el resumen con Claude.\n\n{_preg}")
 
     elif accion == "pedir_opinion_sin_claude":
@@ -980,6 +1201,60 @@ def _handle_ca_advisee_no(ack, body, client, logger):
         manejar_mensaje_ca(evento, logger)
     except Exception:
         logger.exception("Error procesando ca_advisee_no")
+
+
+def _leer_tipo_advisee(body):
+    """Extrae (tipo, advisee) del value JSON del botón; tolera formatos antiguos."""
+    valor = body["actions"][0].get("value", "")
+    try:
+        datos = json.loads(valor)
+        return datos.get("t", ""), datos.get("a", "")
+    except Exception:
+        return "", valor
+
+
+@slack_app.action("ca_ver_evaluaciones")
+def _handle_ca_ver_evaluaciones(ack, body, client, logger):
+    """Despliega en el propio mensaje las evaluaciones de ese tipo recibidas por el advisee."""
+    ack()
+    try:
+        user_id = body["user"]["id"]
+        tipo, advisee = _leer_tipo_advisee(body)
+        msg = body.get("message", {})
+        channel = body["channel"]["id"]
+        _idi = idioma_por_slack_id(user_id)
+        with _lock:
+            estado = conversaciones_ca.get(user_id, {})
+            textos = (estado.get("resumenes_ver", {}) or {}).get(advisee, {})
+        resumen = textos.get(tipo, "") if isinstance(textos, dict) else (textos or "")
+        client.chat_update(
+            channel=channel,
+            ts=msg["ts"],
+            text=_header_por_tipo(tipo, advisee, _idi),
+            blocks=_bloques_resumen_expandido(tipo, advisee, resumen, _idi),
+        )
+    except Exception:
+        logger.exception("Error desplegando evaluaciones del advisee")
+
+
+@slack_app.action("ca_ocultar_evaluaciones")
+def _handle_ca_ocultar_evaluaciones(ack, body, client, logger):
+    """Vuelve a plegar el mensaje de evaluaciones de ese tipo."""
+    ack()
+    try:
+        user_id = body["user"]["id"]
+        tipo, advisee = _leer_tipo_advisee(body)
+        msg = body.get("message", {})
+        channel = body["channel"]["id"]
+        _idi = idioma_por_slack_id(user_id)
+        client.chat_update(
+            channel=channel,
+            ts=msg["ts"],
+            text=_header_por_tipo(tipo, advisee, _idi),
+            blocks=_bloques_resumen_colapsado(tipo, advisee, _idi),
+        )
+    except Exception:
+        logger.exception("Error plegando evaluaciones del advisee")
 
 
 # ---------------------------------------------------------------------------

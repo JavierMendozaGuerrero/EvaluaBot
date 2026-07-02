@@ -193,7 +193,7 @@ function LangToggle() {
   );
   return (
     <div style={{
-      position: "fixed", top: 64, right: 14, zIndex: 300,
+      position: "fixed", top: 88, right: 14, zIndex: 300,
       display: "flex", gap: 2, padding: 3, borderRadius: 999,
       background: "rgba(255,255,255,.92)", border: "1px solid var(--border, #e6e6e6)",
       boxShadow: "0 1px 4px rgba(0,0,0,.08)",

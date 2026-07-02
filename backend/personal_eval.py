@@ -24,6 +24,7 @@ from .notion_service import (
     obtener_slack_ids_empleados,
     siguiente_envio_calendario,
 )
+from .slack_carga import AnimacionCargando
 from .utils import normalizar_nombre
 
 _lock = threading.Lock()
@@ -370,11 +371,14 @@ def manejar_mensaje_personal(event, logger) -> None:
             accion = "ya_terminado"
 
     if accion == "mostrar_bloque_inicio":
+        # Primer mensaje del hilo: barra de carga mientras leemos las preguntas de Notion.
+        with AnimacionCargando(dm_channel, thread_ts, _idi):
+            bloques = _obtener_bloques_oportunidad(urgencia=True)
         slack_app.client.chat_postMessage(
             channel=dm_channel,
             thread_ts=thread_ts,
             text=t("bp.opportunity_share", _idi),
-            blocks=_obtener_bloques_oportunidad(urgencia=True),
+            blocks=bloques,
         )
         return
 
@@ -462,7 +466,8 @@ def manejar_mensaje_personal(event, logger) -> None:
             except Exception:
                 nombre = user_id
 
-        guardado = guardar_evaluacion_personal(nombre, respuestas_snap)
+        with AnimacionCargando(dm_channel, thread_ts, _idi):
+            guardado = guardar_evaluacion_personal(nombre, respuestas_snap)
         if guardado:
             with _lock:
                 if conversaciones_personal.get(user_id, {}).get("modo") == "guardar":

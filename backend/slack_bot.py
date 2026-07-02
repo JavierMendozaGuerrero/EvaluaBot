@@ -16,6 +16,7 @@ from .personal_eval import (
     personal_dm_ts,
 )
 from .clients import slack_app
+from .slack_carga import AnimacionCargando
 from .hierarchy import comparar_jerarquia, tipo_relacion
 from .notion_service import (
     buscar_empleado_y_cargo,
@@ -1168,60 +1169,64 @@ def handle_message_events(event, logger):
         or (_modo_peek == "modificando_respuesta" and _campo_peek == "evaluado" and texto)
     )
     if _necesita_busqueda:
-        try:
-            # Resolver selección numérica de sugerencias previas
-            _sugerencias_actuales = _sugerencias_por_usuario.get(user_id, [])
-            texto_busqueda = texto
-            if texto.strip().isdigit() and _sugerencias_actuales:
-                idx = int(texto.strip()) - 1
-                if 0 <= idx < len(_sugerencias_actuales):
-                    texto_busqueda = _sugerencias_actuales[idx]
+        # Buscar el empleado y sus preguntas en Notion puede tardar: barra de carga animada.
+        with AnimacionCargando(dm_channel, thread_ts, idioma_por_slack_id(user_id)):
+            try:
+                # Resolver selección numérica de sugerencias previas
+                _sugerencias_actuales = _sugerencias_por_usuario.get(user_id, [])
+                texto_busqueda = texto
+                if texto.strip().isdigit() and _sugerencias_actuales:
+                    idx = int(texto.strip()) - 1
+                    if 0 <= idx < len(_sugerencias_actuales):
+                        texto_busqueda = _sugerencias_actuales[idx]
 
-            if _area_peek == "middleoffice":
-                _nombre_ev = obtener_nombre_por_id_usuario(user_id)
-                _mo_evaluados = obtener_evaluados_middleoffice(_nombre_ev or "") if _nombre_ev else []
-            _empleado_pre, _cargo_pre = buscar_empleado_y_cargo(texto_busqueda)
-            if _empleado_pre:
-                _sugerencias_por_usuario.pop(user_id, None)
                 if _area_peek == "middleoffice":
-                    _preguntas_area_pre = obtener_preguntas_mo()
-                    if _mo_evaluados and not any(
-                        normalizar_nombre(_empleado_pre) == normalizar_nombre(e) for e in _mo_evaluados
-                    ):
+                    _nombre_ev = obtener_nombre_por_id_usuario(user_id)
+                    _mo_evaluados = obtener_evaluados_middleoffice(_nombre_ev or "") if _nombre_ev else []
+                _empleado_pre, _cargo_pre = buscar_empleado_y_cargo(texto_busqueda)
+                if _empleado_pre:
+                    _sugerencias_por_usuario.pop(user_id, None)
+                    if _area_peek == "middleoffice":
+                        _preguntas_area_pre = obtener_preguntas_mo()
+                        if _mo_evaluados and not any(
+                            normalizar_nombre(_empleado_pre) == normalizar_nombre(e) for e in _mo_evaluados
+                        ):
+                            _mo_invalido = True
+                            _empleado_pre = None
+                            _cargo_pre = None
+                    elif _area_peek == "palantir":
+                        if _cargo_ev_peek is None:
+                            _cargo_evaluador_pre = obtener_cargo_por_slack_id(user_id)
+                        _relacion_pre = comparar_jerarquia(_cargo_evaluador_pre or "", _cargo_pre or "")
+                        _preguntas_area_pre = obtener_preguntas_palantir(tipo_relacion(_relacion_pre))
+                    else:
+                        if _cargo_ev_peek is None:
+                            _cargo_evaluador_pre = obtener_cargo_por_slack_id(user_id)
+                        _relacion_pre = comparar_jerarquia(_cargo_evaluador_pre or "", _cargo_pre or "")
+                        _preguntas_pre = obtener_preguntas_desde_notion(tipo_relacion(_relacion_pre))
+                else:
+                    if _area_peek == "middleoffice":
                         _mo_invalido = True
-                        _empleado_pre = None
-                        _cargo_pre = None
-                elif _area_peek == "palantir":
-                    if _cargo_ev_peek is None:
-                        _cargo_evaluador_pre = obtener_cargo_por_slack_id(user_id)
-                    _relacion_pre = comparar_jerarquia(_cargo_evaluador_pre or "", _cargo_pre or "")
-                    _preguntas_area_pre = obtener_preguntas_palantir(tipo_relacion(_relacion_pre))
-                else:
-                    if _cargo_ev_peek is None:
-                        _cargo_evaluador_pre = obtener_cargo_por_slack_id(user_id)
-                    _relacion_pre = comparar_jerarquia(_cargo_evaluador_pre or "", _cargo_pre or "")
-                    _preguntas_pre = obtener_preguntas_desde_notion(tipo_relacion(_relacion_pre))
-            else:
-                if _area_peek == "middleoffice":
-                    _mo_invalido = True
-                else:
-                    _invalido_pre, _nuevas_sugerencias = _mensaje_empleado_no_encontrado(texto_busqueda, idioma_por_slack_id(user_id))
-                    _sugerencias_por_usuario[user_id] = _nuevas_sugerencias
-        except Exception:
-            logger.exception("Error en Notion al buscar empleado")
-            reply(t("bm.err_temp_data", idioma_por_slack_id(user_id)))
-            return
+                    else:
+                        _invalido_pre, _nuevas_sugerencias = _mensaje_empleado_no_encontrado(texto_busqueda, idioma_por_slack_id(user_id))
+                        _sugerencias_por_usuario[user_id] = _nuevas_sugerencias
+            except Exception:
+                logger.exception("Error en Notion al buscar empleado")
+                reply(t("bm.err_temp_data", idioma_por_slack_id(user_id)))
+                return
 
     # Comprobar si ya completó la evaluación en este ciclo (solo para conversaciones nuevas)
     _ya_respondio = False
     if _modo_peek == "pre_inicial":
-        try:
-            _nombre_ya = _nombre_real(user_id, logger)
-            _hora_env = evaluacion_hora.get(user_id, 0)
-            if _hora_env:
-                _ya_respondio = evaluacion_proyecto_guardada_desde(_nombre_ya, _hora_env)
-        except Exception:
-            logger.exception("Error comprobando si ya respondió en este ciclo")
+        # Primer mensaje del hilo: barra de carga mientras preparamos la respuesta.
+        with AnimacionCargando(dm_channel, thread_ts, idioma_por_slack_id(user_id)):
+            try:
+                _nombre_ya = _nombre_real(user_id, logger)
+                _hora_env = evaluacion_hora.get(user_id, 0)
+                if _hora_env:
+                    _ya_respondio = evaluacion_proyecto_guardada_desde(_nombre_ya, _hora_env)
+            except Exception:
+                logger.exception("Error comprobando si ya respondió en este ciclo")
 
     # Máquina de estados en un único bloque con lock
     with lock:
@@ -1700,7 +1705,8 @@ def handle_message_events(event, logger):
             area_final = _AREA_DISPLAY.get(estado.get("area", "negocio"), "Negocio")
             editando_page_id = estado.get("editando_page_id")
         if editando_page_id:
-            ok = actualizar_en_notion(editando_page_id, nombre, respuestas_finales, relacion=relacion_final, area=area_final)
+            with AnimacionCargando(dm_channel, thread_ts, estado.get("idioma", "es")):
+                ok = actualizar_en_notion(editando_page_id, nombre, respuestas_finales, relacion=relacion_final, area=area_final)
             if ok:
                 with lock:
                     estado.pop("editando_page_id", None)
@@ -1714,7 +1720,8 @@ def handle_message_events(event, logger):
             else:
                 reply(t("bm.err_update_notion", estado.get("idioma", "es")))
             return
-        page_id = guardar_en_notion(nombre, respuestas_finales, relacion=relacion_final, area=area_final)
+        with AnimacionCargando(dm_channel, thread_ts, estado.get("idioma", "es")):
+            page_id = guardar_en_notion(nombre, respuestas_finales, relacion=relacion_final, area=area_final)
         if page_id:
             with lock:
                 clave_guardada = (
@@ -1803,7 +1810,8 @@ def handle_proyecto_confirmar(ack, body, logger):
         area_final = _AREA_DISPLAY.get(estado.get("area", "negocio"), "Negocio")
         editando_page_id = estado.get("editando_page_id")
     if editando_page_id:
-        ok = actualizar_en_notion(editando_page_id, nombre, respuestas_finales, relacion=relacion_final, area=area_final)
+        with AnimacionCargando(dm_channel, thread_ts, estado.get("idioma", "es")):
+            ok = actualizar_en_notion(editando_page_id, nombre, respuestas_finales, relacion=relacion_final, area=area_final)
         if ok:
             with lock:
                 estado.pop("editando_page_id", None)
@@ -1817,7 +1825,8 @@ def handle_proyecto_confirmar(ack, body, logger):
         else:
             reply(t("bm.err_update_notion", estado.get("idioma", "es")))
         return
-    page_id = guardar_en_notion(nombre, respuestas_finales, relacion=relacion_final, area=area_final)
+    with AnimacionCargando(dm_channel, thread_ts, estado.get("idioma", "es")):
+        page_id = guardar_en_notion(nombre, respuestas_finales, relacion=relacion_final, area=area_final)
     if page_id:
         with lock:
             clave_guardada = (

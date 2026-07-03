@@ -198,6 +198,10 @@ TEXTOS: dict[str, dict[str, str]] = {
     "bp.err_save": {"es": "⚠️ No se pudo guardar en Notion. Revisa los permisos o contacta con soporte.", "en": "⚠️ Could not save to Notion. Check permissions or contact support."},
     "bp.reminder": {"es": "⏰ Recuerda que tienes una evaluación personal pendiente. Responde en este hilo cuando puedas.", "en": "⏰ Remember you have a personal evaluation pending. Reply in this thread when you can."},
 
+    # --- Recordatorios de evaluaciones web pendientes (recordatorios_web.py) ---
+    "web.reminder_proyecto": {"es": "⏰ Recuerda que tienes evaluaciones del proyecto *{proyecto}* pendientes. Complétalas en la web de evaluaciones cuando puedas.", "en": "⏰ Remember you have pending evaluations for project *{proyecto}*. Complete them on the evaluations website when you can."},
+    "web.reminder_extra": {"es": "⏰ Recuerda que tienes una evaluación extra pendiente. Complétala en la web de evaluaciones cuando puedas.", "en": "⏰ Remember you have a pending extra evaluation. Complete it on the evaluations website when you can."},
+
     # --- Bot Slack: revision del CA sobre sus advisees (ca_reviews.py) ---
     "bc.informe_final_disponible": {"es": "🎉 Ya tienes disponible tu informe final. Puedes verlo en la web.", "en": "🎉 Your final report is now available. You can view it on the web."},
     "bc.back_btn": {"es": "⬅️ Atrás", "en": "⬅️ Back"},

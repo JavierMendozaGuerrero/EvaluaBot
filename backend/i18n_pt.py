@@ -214,6 +214,8 @@ TEXTOS_PT = {
     "bp.pending_fallback": "📝 Tens uma opção de acompanhamento pessoal pendente",
     "bp.pending_intro": "📝 *Tens uma opção de acompanhamento pessoal pendente*\n\n_Esta avaliação é totalmente privada, apenas o teu CA a poderá ver._\n_Se em algum momento quiseres cancelar, escreve SOS no fio._",
     "bp.reminder": "⏰ Lembra-te que tens uma avaliação pessoal pendente. Responde neste fio quando puderes.",
+    "web.reminder_proyecto": "⏰ Lembra-te que tens avaliações do projeto *{proyecto}* pendentes. Completa-as no site de avaliações quando puderes.",
+    "web.reminder_extra": "⏰ Lembra-te que tens uma avaliação extra pendente. Completa-a no site de avaliações quando puderes.",
     "bp.rewrite_comment": "Escreve novamente o teu comentário:",
     "bp.saved_more_q": "✅ Avaliação guardada. Queres adicionar outro comentário?",
     "bp.see_example": "Ver exemplo",

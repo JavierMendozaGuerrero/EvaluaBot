@@ -24,6 +24,7 @@ from .notion_service import (
     _buscar_bbdd_en_pagina_id,
     _parent_bbdd_en_pagina,
     _query_bbdd,
+    _usa_data_sources,
     obtener_config_calendario,
     obtener_nombre_por_id_usuario,
     siguiente_envio_calendario,
@@ -48,6 +49,7 @@ _PROPS = {
     "Detalle": {"rich_text": {}},
     "Completada": {"checkbox": {}},
     "Fecha_completada": {"date": {}},
+    "Fecha_recordatorio": {"date": {}},  # último recordatorio enviado (evals web pendientes)
 }
 
 _SEMANAS_CICLO = 4
@@ -81,8 +83,24 @@ def _obtener_o_crear_bbdd() -> str | None:
                 logging.exception("Error creando BD '%s'", _NOMBRE_BBDD)
                 return None
 
+        _asegurar_prop_recordatorio(db_id)
         _cache_bbdd_id["db_id"] = db_id
         return db_id
+
+
+def _asegurar_prop_recordatorio(db_id: str) -> None:
+    """Añade la columna 'Fecha_recordatorio' si la BD ya existía sin ella (BDs antiguas)."""
+    try:
+        if _usa_data_sources():
+            bd = notion.data_sources.retrieve(data_source_id=db_id)
+            if "Fecha_recordatorio" not in bd.get("properties", {}):
+                notion.data_sources.update(data_source_id=db_id, properties={"Fecha_recordatorio": {"date": {}}})
+        else:
+            bd = notion.databases.retrieve(database_id=db_id)
+            if "Fecha_recordatorio" not in bd.get("properties", {}):
+                notion.databases.update(database_id=db_id, properties={"Fecha_recordatorio": {"date": {}}})
+    except Exception:
+        logging.exception("Error asegurando la propiedad 'Fecha_recordatorio' en la BD de tracking")
 
 
 # ---------------------------------------------------------------------------
@@ -127,6 +145,18 @@ def _select(props: dict, prop: str) -> str:
 
 def _checkbox(props: dict, prop: str) -> bool:
     return bool((props.get(prop) or {}).get("checkbox"))
+
+
+def _fecha(props: dict, prop: str):
+    """Devuelve un datetime tz-aware de una propiedad date, o None."""
+    val = ((props.get(prop) or {}).get("date") or {}).get("start")
+    if not val:
+        return None
+    try:
+        d = datetime.fromisoformat(val.replace("Z", "+00:00"))
+        return d if d.tzinfo else d.replace(tzinfo=timezone.utc)
+    except Exception:
+        return None
 
 
 def _iter_filas(db_id: str, filter=None):
@@ -230,6 +260,59 @@ def marcar_completada_por_slack_id(user_id: str, tipo: str) -> None:
         nombre = None
     if nombre:
         marcar_completada(nombre, tipo)
+
+
+# ---------------------------------------------------------------------------
+# Recordatorios de evaluaciones web pendientes (proyecto / extra)
+# ---------------------------------------------------------------------------
+
+def pendientes_para_recordatorio(tipos: tuple, umbral_dias: int) -> list:
+    """Filas pendientes (Completada=False) de los `tipos` dados cuyo envío es anterior a
+    `umbral_dias` y cuyo último recordatorio (si lo hubo) también lo es.
+
+    Devuelve [{page_id, persona, tipo, detalle}] listo para notificar por Slack.
+    """
+    db_id = _obtener_o_crear_bbdd()
+    if not db_id:
+        return []
+    limite = datetime.now(timezone.utc) - timedelta(days=umbral_dias)
+    pendientes = []
+    try:
+        for fila in _iter_filas(db_id, filter={"property": "Completada", "checkbox": {"equals": False}}):
+            props = fila.get("properties", {})
+            tipo = _select(props, "Tipo")
+            if tipo not in tipos:
+                continue
+            fecha_envio = _fecha(props, "Fecha_envio")
+            if not fecha_envio or fecha_envio > limite:
+                continue  # aún no han pasado `umbral_dias` desde el envío
+            fecha_rec = _fecha(props, "Fecha_recordatorio")
+            if fecha_rec and fecha_rec > limite:
+                continue  # ya se recordó hace menos de `umbral_dias`
+            persona = _titulo(props, "Persona")
+            if not persona:
+                continue
+            pendientes.append({
+                "page_id": fila.get("id", ""),
+                "persona": persona,
+                "tipo": tipo,
+                "detalle": _rich(props, "Detalle"),
+            })
+    except Exception:
+        logging.exception("Error obteniendo pendientes para recordatorio")
+    return pendientes
+
+
+def marcar_recordatorio_enviado(page_id: str) -> None:
+    """Sella la fecha del último recordatorio enviado en la fila dada."""
+    if not page_id:
+        return
+    try:
+        notion.pages.update(page_id=page_id, properties={
+            "Fecha_recordatorio": {"date": {"start": datetime.now(timezone.utc).isoformat()}},
+        })
+    except Exception:
+        logging.exception("Error marcando recordatorio enviado en fila '%s'", page_id)
 
 
 def _buscar_fila(db_id: str, persona: str, tipo: str, ciclo: str, solo_pendientes: bool):

@@ -81,6 +81,7 @@ from .evaluaciones_extra import (
     obtener_evaluaciones_extra_por_evaluado,
 )
 from .ca_reviews import guardar_nota_ca_web, notificar_acceso_informe_final_web, obtener_resumen_advisee_para_ca
+from .eval_tracking import resumen_ciclo_actual, detalle_por_persona
 from .personal_eval import notificar_urgencia_personal_web
 from .reports import generar_archivo_trayectoria, generar_archivos_informe
 from .skill_informes_anual import generar_informe_anual, obtener_empleados_evaluacion_anual
@@ -283,6 +284,27 @@ class ApiHandler(BaseHTTPRequestHandler):
                 nombre = query_params.get("nombre", [""])[0]
                 perfil = obtener_perfil_empleado(nombre)
                 self.responder_json(perfil)
+                return
+            if ruta == "/api/cumplimiento-evaluaciones":
+                sesion = self.sesion_actual()
+                if not sesion:
+                    raise PermissionError("Inicia sesión para acceder.")
+                if not sesion.get("is_admin"):
+                    raise PermissionError("Solo administradores pueden consultar el cumplimiento de evaluaciones.")
+                self.responder_json({"cumplimiento": resumen_ciclo_actual()})
+                return
+            if ruta == "/api/cumplimiento-evaluaciones-detalle":
+                sesion = self.sesion_actual()
+                if not sesion:
+                    raise PermissionError("Inicia sesión para acceder.")
+                if not sesion.get("is_admin"):
+                    raise PermissionError("Solo administradores pueden consultar el cumplimiento de evaluaciones.")
+                query_params = urllib.parse.parse_qs(parsed.query)
+                nombre = query_params.get("nombre", [""])[0]
+                if not nombre:
+                    self.responder_json({"error": "Falta el parámetro nombre."}, 400)
+                    return
+                self.responder_json({"detalle": detalle_por_persona(nombre)})
                 return
             if ruta == "/api/feedback-confidencial":
                 sesion = self.sesion_actual()

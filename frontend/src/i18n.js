@@ -98,6 +98,16 @@ export const STRINGS = {
   "admin.confidential_feedback_all_btn": { es: "Ver todas las evaluaciones confidenciales (bottom to top)", en: "View all confidential evaluations (bottom to top)" },
   "admin.confidential_feedback_all_note": { es: "Evaluaciones de equipos hacia sus responsables. Totalmente privado y anónimo: no se comparte con ningún CA ni con nadie más de la empresa.", en: "Feedback from teams about their leads. Totally private and anonymous: never shared with any CA or anyone else in the company." },
   "admin.confidential_feedback_search_ph": { es: "Filtrar por persona o proyecto...", en: "Filter by person or project..." },
+  "admin.eval_count_tooltip": { es: "Evaluaciones realizadas / asignadas este ciclo", en: "Evaluations completed / assigned this cycle" },
+  "admin.eval_compliance_title": { es: "Cumplimiento de evaluaciones", en: "Evaluation compliance" },
+  "admin.eval_compliance_note": { es: "Por ciclo y tipo: evaluaciones realizadas / asignadas a esta persona.", en: "By cycle and type: evaluations completed / assigned to this person." },
+  "admin.eval_compliance_empty": { es: "Aún no hay evaluaciones asignadas registradas.", en: "No assigned evaluations recorded yet." },
+  "admin.eval_cycle": { es: "Ciclo", en: "Cycle" },
+  "admin.eval_type_mensual": { es: "Mensual", en: "Monthly" },
+  "admin.eval_type_personal": { es: "Seguimiento personal", en: "Personal follow-up" },
+  "admin.eval_type_ca": { es: "CA reviews", en: "CA reviews" },
+  "admin.eval_type_proyecto": { es: "Proyecto", en: "Project" },
+  "admin.eval_type_extra": { es: "Extra", en: "Extra" },
 
   // --- Objetivos ---
   "obj.personal_dev": { es: "Desarrollo personal", en: "Personal development" },

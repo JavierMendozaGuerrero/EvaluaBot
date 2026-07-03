@@ -10,6 +10,7 @@ from . import config
 from .i18n import t, boton_idioma_slack
 from .conversation_back import boton_atras, fila_atras, limpiar_historial, pop_historial, push_historial, tiene_historial
 from .slack_lists import añadir_pendiente, enlace_lista_pendientes, quitar_pendiente
+from .eval_tracking import registrar_envio_por_slack_id, marcar_completada_por_slack_id
 from .ca_reviews import ca_dm_activas, ca_dm_ts, manejar_mensaje_ca
 from .personal_eval import (
     enviar_pregunta_inicial_personal,
@@ -117,6 +118,7 @@ def enviar_una_evaluacion():
                     evaluacion_hora[user_id] = time.time()
                     conversaciones.pop(user_id, None)
                 añadir_pendiente("mensual", user_id, t("bm.pendientes_titulo", idioma))
+                registrar_envio_por_slack_id(user_id, "mensual")
                 logging.info(f"Evaluación enviada por DM a {user_id}, ts={resp['ts']}")
             except Exception as exc:
                 if "user_not_found" in str(exc) or "channel_not_found" in str(exc):
@@ -559,6 +561,7 @@ def _handle_barbecho_entregar(ack, body, logger):
             with lock:
                 limpiar_historial(estado)
             quitar_pendiente("mensual", user_id)
+            marcar_completada_por_slack_id(user_id, "mensual")
             slack_app.client.chat_postMessage(channel=dm_channel, thread_ts=thread_ts, text=t("bm.barbecho_saved", _idi))
         else:
             slack_app.client.chat_postMessage(channel=dm_channel, thread_ts=thread_ts, text=t("bm.err_save_notion", _idi))
@@ -1795,6 +1798,7 @@ def handle_message_events(event, logger):
             with lock:
                 limpiar_historial(estado)
             quitar_pendiente("mensual", user_id)
+            marcar_completada_por_slack_id(user_id, "mensual")
             reply(t("bm.barbecho_saved", estado["idioma"]))
         else:
             reply(t("bm.err_save_notion", estado["idioma"]))
@@ -1890,6 +1894,7 @@ def handle_message_events(event, logger):
                     "respuestas": dict(respuestas_finales),
                 })
             quitar_pendiente("mensual", user_id)
+            marcar_completada_por_slack_id(user_id, "mensual")
             _enviar_mas_miembros(dm_channel, thread_ts, estado.get("idioma", "es"), estado=estado)
             return
         reply(t("bm.err_save_notion", estado.get("idioma", "es")))
@@ -1998,6 +2003,7 @@ def handle_proyecto_confirmar(ack, body, logger):
                 "respuestas": dict(respuestas_finales),
             })
         quitar_pendiente("mensual", user_id)
+        marcar_completada_por_slack_id(user_id, "mensual")
         _enviar_mas_miembros(dm_channel, thread_ts, estado.get("idioma", "es"), estado=estado)
         return
     reply(t("bm.err_save_notion", estado.get("idioma", "es")))

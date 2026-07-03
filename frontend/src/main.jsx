@@ -239,23 +239,35 @@ const _LANG_SEGS = [
   { code: "en", label: "EN", title: "English" },
   { code: "pt", label: "PT", title: "Português" },
 ];
+// Banderas como SVG (no emoji): en Windows con Chrome/Edge los emojis de bandera
+// no se renderizan y salen como letras. Con SVG se ven siempre igual.
+const _FLAG_SVG = {
+  es: "<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 3 2'><rect width='3' height='2' fill='#AA151B'/><rect y='.5' width='3' height='1' fill='#F1BF00'/></svg>",
+  pt: "<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 30 20'><rect width='30' height='20' fill='#DA291C'/><rect width='12' height='20' fill='#046A38'/><circle cx='12' cy='10' r='3.4' fill='#FFD100' stroke='#fff' stroke-width='.5'/><circle cx='12' cy='10' r='1.5' fill='#DA291C'/></svg>",
+  en: "<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 60 30'><clipPath id='uk'><rect width='60' height='30'/></clipPath><g clip-path='url(#uk)'><rect width='60' height='30' fill='#012169'/><path d='M0,0 60,30 M60,0 0,30' stroke='#fff' stroke-width='6'/><path d='M0,0 60,30 M60,0 0,30' stroke='#C8102E' stroke-width='4'/><path d='M30,0 V30 M0,15 H60' stroke='#fff' stroke-width='10'/><path d='M30,0 V30 M0,15 H60' stroke='#C8102E' stroke-width='6'/></g></svg>",
+};
+const _flagUri = (code) => `data:image/svg+xml,${encodeURIComponent(_FLAG_SVG[code] || "")}`;
 function LangToggle() {
   const [, force] = useState(0);
   const [hover, setHover] = useState(-1);
-  const [spin, setSpin] = useState(0);
   useEffect(() => subscribeLang(() => force((n) => n + 1)), []);
   const lang = getLang();
+  const idx = Math.max(0, _LANG_SEGS.findIndex((s) => s.code === lang));
 
-  // Gira la rueda 360° cada vez que cambia el idioma (efecto ruleta).
-  const prevLang = React.useRef(lang);
+  // Al elegir un idioma, la rueda gira para dejar ESE segmento arriba (camino mas corto).
+  const [spin, setSpin] = useState(-120 * idx);
+  const _primerRender = React.useRef(true);
   useEffect(() => {
-    if (prevLang.current !== lang) {
-      prevLang.current = lang;
-      setSpin((s) => s + 360);
-    }
-  }, [lang]);
+    setSpin((prev) => {
+      if (_primerRender.current) { _primerRender.current = false; return -120 * idx; }
+      // Da al menos una vuelta completa y deja el idioma activo arriba.
+      let target = -120 * idx;
+      while (target > prev - 360) target -= 360;
+      return target;
+    });
+  }, [idx]);
 
-  const size = 92, cx = size / 2, cy = size / 2, R = size / 2 - 3, START = -150;
+  const size = 72, cx = size / 2, cy = size / 2, R = size / 2 - 3, START = -150;
   const pol = (ang, rad) => {
     const a = (ang * Math.PI) / 180;
     return [cx + rad * Math.cos(a), cy + rad * Math.sin(a)];
@@ -280,7 +292,9 @@ function LangToggle() {
           {_LANG_SEGS.map((s, i) => {
             const a1 = START + i * 120, a2 = START + (i + 1) * 120;
             const activo = lang === s.code;
-            const [lx, ly] = pol(a1 + 60, R * 0.6);
+            const mid = a1 + 60;
+            const [fx, fy] = pol(mid, R * 0.55);   // bandera centrada en el segmento
+            const fw = 20, fh = 13;
             const fill = activo ? "var(--accent, #ff4d2e)" : (hover === i ? "#ffe7e0" : "#fff");
             return (
               <g key={s.code} onClick={() => cambiarIdiomaGlobal(s.code)}
@@ -289,10 +303,13 @@ function LangToggle() {
                 <title>{s.title}</title>
                 <path d={sector(a1, a2)} fill={fill} stroke="#111" strokeWidth="1.6"
                       style={{ transition: "fill .25s" }} />
-                <text x={lx} y={ly} textAnchor="middle" dominantBaseline="central"
-                      fontSize="14" fontWeight="800" letterSpacing=".04em"
-                      fill={activo ? "#fff" : "rgba(0,0,0,.6)"}
-                      style={{ pointerEvents: "none", userSelect: "none" }}>{s.label}</text>
+                <g style={{ transform: `rotate(${-spin}deg)`, transformBox: "fill-box", transformOrigin: "center", transition: "transform .6s cubic-bezier(.2,.75,.2,1)" }}>
+                  <image href={_flagUri(s.code)} x={fx - fw / 2} y={fy - fh / 2} width={fw} height={fh}
+                         preserveAspectRatio="xMidYMid slice"
+                         style={{ pointerEvents: "none" }} />
+                  <rect x={fx - fw / 2} y={fy - fh / 2} width={fw} height={fh} rx="2" fill="none"
+                        stroke="rgba(0,0,0,.4)" strokeWidth="0.7" style={{ pointerEvents: "none" }} />
+                </g>
               </g>
             );
           })}
@@ -426,6 +443,8 @@ function AdminPanel({ token, onBack }) {
   const [vistaGlobalConfidencial, setVistaGlobalConfidencial] = useState(false);
   const [feedbackGlobal, setFeedbackGlobal] = useState(null);
   const [buscarGlobalConfidencial, setBuscarGlobalConfidencial] = useState("");
+  const [cumplimiento, setCumplimiento] = useState({});
+  const [detalleCumplimiento, setDetalleCumplimiento] = useState(null);
 
   useEffect(() => {
     apiRequest("/api/evaluados", { token })
@@ -434,7 +453,18 @@ function AdminPanel({ token, onBack }) {
     apiRequest("/api/anonimato-evaluadores", { token })
       .then((data) => setAnonimato(data))
       .catch(() => {});
+    apiRequest("/api/cumplimiento-evaluaciones", { token })
+      .then((data) => setCumplimiento(data.cumplimiento || {}))
+      .catch(() => {});
   }, [token]);
+
+  useEffect(() => {
+    if (!selected?.nombre) return;
+    setDetalleCumplimiento(null);
+    apiRequest(`/api/cumplimiento-evaluaciones-detalle?nombre=${encodeURIComponent(selected.nombre)}`, { token })
+      .then((data) => setDetalleCumplimiento(data.detalle || []))
+      .catch(() => setDetalleCumplimiento([]));
+  }, [token, selected?.nombre]);
 
   useEffect(() => {
     if (!vistaGlobalConfidencial) return;
@@ -649,6 +679,35 @@ function AdminPanel({ token, onBack }) {
                   </div>
                 )}
               </div>
+              <div style={{ marginTop: 20 }}>
+                <p className="kicker">{t("admin.eval_compliance_title")}</p>
+                <p className="fine">{t("admin.eval_compliance_note")}</p>
+                {detalleCumplimiento === null ? (
+                  <p className="fine">{t("common.loading")}</p>
+                ) : detalleCumplimiento.length === 0 ? (
+                  <p className="fine">{t("admin.eval_compliance_empty")}</p>
+                ) : (
+                  <div className="objetivos-list">
+                    {detalleCumplimiento.map((ciclo, i) => (
+                      <article key={i} className="objetivo-item">
+                        <p className="opinion-fecha fine">{t("admin.eval_cycle")} {ciclo.ciclo}</p>
+                        <div className="eval-compliance-rows">
+                          {["mensual", "personal", "ca", "proyecto", "extra"]
+                            .filter((tp) => ciclo.tipos[tp])
+                            .map((tp) => (
+                              <div key={tp} className="eval-compliance-row">
+                                <span>{t(`admin.eval_type_${tp}`)}</span>
+                                <span className="eval-compliance-ratio">
+                                  {ciclo.tipos[tp].realizadas}/{ciclo.tipos[tp].enviadas}
+                                </span>
+                              </div>
+                            ))}
+                        </div>
+                      </article>
+                    ))}
+                  </div>
+                )}
+              </div>
               {statusMsg && (
                 <p className="fine error">{statusMsg}</p>
               )}
@@ -753,7 +812,17 @@ function AdminPanel({ token, onBack }) {
                 ? <img src={e.foto} alt={e.label} className="advisee-page-foto" />
                 : <div className="advisee-page-foto advisee-foto-placeholder">{e.label.charAt(0)}</div>
               }
-              <span className="advisee-page-nombre">{e.label}</span>
+              <span className="advisee-page-nombre">
+                {e.label}
+                {cumplimiento[e.value] && (
+                  <span
+                    className="eval-count-badge"
+                    title={t("admin.eval_count_tooltip")}
+                  >
+                    {cumplimiento[e.value].realizadas}/{cumplimiento[e.value].enviadas}
+                  </span>
+                )}
+              </span>
             </button>
           ))}
           {filtrados.length === 0 && search && (

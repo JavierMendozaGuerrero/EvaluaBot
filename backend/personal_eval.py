@@ -8,6 +8,7 @@ from . import config
 from .clients import slack_app
 from .conversation_back import boton_atras, fila_atras, limpiar_historial, pop_historial, push_historial, tiene_historial
 from .slack_lists import añadir_pendiente, enlace_lista_pendientes, quitar_pendiente
+from .eval_tracking import registrar_envio_por_slack_id, marcar_completada_por_slack_id
 from .i18n import t, boton_idioma_slack, traducir_dimension
 from .notion_service import (
     evaluacion_personal_guardada_desde,
@@ -123,6 +124,7 @@ def enviar_pregunta_inicial_personal() -> None:
                     personal_hora[user_id] = time.time()
                     conversaciones_personal.pop(user_id, None)
                 añadir_pendiente("personal", user_id, t("bp.pendientes_titulo", idioma))
+                registrar_envio_por_slack_id(user_id, "personal")
                 logging.info("Evaluación personal enviada a %s", user_id)
             except Exception as exc:
                 err_str = str(exc)
@@ -380,6 +382,7 @@ def manejar_mensaje_personal(event, logger) -> None:
                     conversaciones_personal[user_id]["modo"] = "preguntando_otro"
                     limpiar_historial(conversaciones_personal[user_id])
             quitar_pendiente("personal", user_id)
+            marcar_completada_por_slack_id(user_id, "personal")
             _enviar_preguntando_otro(dm_channel, thread_ts, _idi)
         else:
             reply(t("bp.err_save", _idi))

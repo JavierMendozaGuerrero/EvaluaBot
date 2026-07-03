@@ -28,6 +28,7 @@ from .notion_service import (
     obtener_registros_empleados,
 )
 from .project_evals import _crear_bbdd, _crear_pagina_en_bbdd
+from .eval_tracking import registrar_envio, marcar_completada
 from .utils import normalizar_nombre
 
 # ---------------------------------------------------------------------------
@@ -167,6 +168,8 @@ def solicitar_evaluacion_extra(evaluado: str, evaluador: str, contexto: str, idi
         logging.exception("Error creando solicitud de evaluación extra de '%s' a '%s'", evaluado, evaluador)
         return {"ok": False, "error": t("evex.err_request", idioma)}
 
+    registrar_envio(evaluador, "extra", detalle=contexto)
+
     slack_id = _slack_id_de(evaluador)
     if slack_id:
         _notificar_solicitud_evaluacion_extra(evaluado, evaluador, contexto, slack_id)
@@ -243,6 +246,8 @@ def guardar_evaluacion_extra(
     except Exception:
         logging.exception("Error guardando evaluación extra de '%s' sobre '%s'", evaluador, evaluado)
         return False
+
+    marcar_completada(evaluador, "extra")
 
     if solicitud_page_id:
         try:

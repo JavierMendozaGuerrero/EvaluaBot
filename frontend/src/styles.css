@@ -388,6 +388,22 @@ button:disabled, .button:disabled { opacity: .45; cursor: not-allowed; }
 .admin-search-wrap .advisee-page-foto { width: 110px; height: 110px; font-size: 40px; }
 .admin-search-wrap .advisee-page-nombre { font-size: 14px; }
 
+/* Badge de cumplimiento (realizadas/enviadas) junto al nombre en la lista de admin */
+.eval-count-badge {
+  display: inline-block;
+  margin-left: 7px;
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--muted);
+  vertical-align: middle;
+  white-space: nowrap;
+}
+
+/* Desglose de cumplimiento por ciclo × tipo en el perfil de admin */
+.eval-compliance-rows { margin-top: 6px; display: flex; flex-direction: column; gap: 4px; }
+.eval-compliance-row { display: flex; justify-content: space-between; gap: 16px; font-size: 14px; }
+.eval-compliance-ratio { font-variant-numeric: tabular-nums; color: var(--muted); }
+
 .advisee-detail-wrap { padding-top: 40px; }
 .advisee-detail-layout { display: flex; align-items: flex-start; gap: 56px; }
 .advisee-detail-left { display: flex; flex-direction: column; align-items: center; gap: 16px; }

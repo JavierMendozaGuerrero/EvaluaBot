@@ -680,6 +680,8 @@ def activar_evaluaciones_empleados(manager: str, proyecto: str, empleados: list,
                 "Activo": {"checkbox": True},
             })
             activados.append(nombre_empleado)
+            from .eval_tracking import registrar_envio
+            registrar_envio(nombre_empleado, "proyecto", detalle=proyecto)
             slack_id = empleados_notion.get(normalizar_nombre(nombre_empleado))
             if slack_id:
                 _notificar_evaluacion_activada(nombre_empleado, proyecto, slack_id)
@@ -1141,6 +1143,8 @@ def guardar_evaluacion_proyecto(
             "Proyecto": {"rich_text": [{"type": "text", "text": {"content": proyecto}}]},
             "Respuestas": {"rich_text": [{"type": "text", "text": {"content": respuestas_texto[:2000]}}]},
         })
+        from .eval_tracking import marcar_completada
+        marcar_completada(evaluador, "proyecto")
         threading.Thread(target=_verificar_y_cerrar_proyecto, args=(proyecto,), daemon=True).start()
         return True
     except Exception:

@@ -18,6 +18,7 @@ from . import config
 from .clients import notion, slack_app
 from .conversation_back import boton_atras, fila_atras, limpiar_historial, pop_historial, push_historial, tiene_historial
 from .slack_lists import añadir_pendiente, enlace_lista_pendientes, quitar_pendiente
+from .eval_tracking import registrar_envio_por_slack_id, marcar_completada_por_slack_id
 from .i18n import t, boton_idioma_slack
 from .notion_service import (
     _coincide_parent_bbdd,
@@ -751,6 +752,7 @@ def enviar_pregunta_inicial_ca() -> None:
                     ca_hora_dm[user_id] = time.time()
                     conversaciones_ca.pop(user_id, None)
                 añadir_pendiente("ca", user_id, t("bc.pendientes_titulo", _idi))
+                registrar_envio_por_slack_id(user_id, "ca")
                 logging.info(f"Mensaje CA enviado por DM a {user_id}, ts={resp['ts']}")
             except Exception:
                 logging.exception(f"Error enviando DM CA a {user_id}")
@@ -772,6 +774,7 @@ def _enviar_lista_advisees(user_id, channel, thread_ts, estado, idioma, logger, 
             if user_id in conversaciones_ca:
                 conversaciones_ca[user_id]["modo"] = "terminado"
         quitar_pendiente("ca", user_id)
+        marcar_completada_por_slack_id(user_id, "ca")
         slack_app.client.chat_postMessage(
             channel=channel, thread_ts=thread_ts, text=prefijo + t("bc.all_advisees_done", idioma),
         )

@@ -691,6 +691,7 @@ def _bloques_dm_ca(idioma, enlace_pendientes=None):
             "text": {"type": "mrkdwn", "text": t("bc.pending_intro", idioma)},
             "accessory": boton_idioma_slack(idioma, "lang_toggle_ca"),
         },
+        {"type": "context", "elements": [{"type": "mrkdwn", "text": t("bot.no_inteligente", idioma)}]},
         {"type": "section", "text": {"type": "mrkdwn", "text": t("bp.example_label", idioma)}},
         {
             "type": "actions",

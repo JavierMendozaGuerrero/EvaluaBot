@@ -83,6 +83,43 @@ function DrawCheck({ size = 26, color = "#166534" }) {
   );
 }
 
+// Bloque de éxito: check grande que se traza + mensaje. Momento de logro.
+function SavedOk({ text, color = "#166534" }) {
+  return (
+    <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 12, padding: "8px 0", textAlign: "center" }}>
+      <DrawCheck size={56} color={color} />
+      <p className="fine" style={{ color, margin: 0, fontSize: 15 }}>{text}</p>
+    </div>
+  );
+}
+
+// Placeholder con brillo animado (skeleton) mientras carga contenido.
+function Skeleton({ height = 16, width = "100%", radius = 6, style }) {
+  return <div className="skeleton" style={{ height, width, borderRadius: radius, ...style }} />;
+}
+// Esqueleto para un formulario que carga: varias filas (etiqueta + campo).
+function SkeletonForm({ rows = 4 }) {
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 26 }}>
+      {Array.from({ length: rows }).map((_, i) => (
+        <div key={i} style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+          <Skeleton height={13} width={`${45 + (i % 3) * 12}%`} />
+          <Skeleton height={42} width="100%" radius={8} />
+        </div>
+      ))}
+    </div>
+  );
+}
+// Rejilla de cards-placeholder (skeleton) para listas de personas que cargan.
+function SkeletonCards({ n = 8 }) {
+  return Array.from({ length: n }).map((_, i) => (
+    <div key={i} className="advisee-page-card" style={{ cursor: "default", pointerEvents: "none" }} aria-hidden="true">
+      <div className="advisee-page-foto skeleton" />
+      <Skeleton width="65%" height={14} />
+    </div>
+  ));
+}
+
 // ── Barra de carga global (top loading bar) ──
 // count = peticiones en curso; total/done = peticiones de la "tanda" actual,
 // para que el progreso sea proporcional a las que ya han terminado (done/total).
@@ -431,6 +468,7 @@ function AdminRoleSelect({ user, onChoose, onLogout }) {
 
 function AdminPanel({ token, onBack }) {
   const [evaluados, setEvaluados] = useState([]);
+  const [cargandoEvaluados, setCargandoEvaluados] = useState(true);
   const [search, setSearch] = useState("");
   const [selected, setSelected] = useState(null);
   const [informeFinal, setInformeFinal] = useState(null);
@@ -449,7 +487,8 @@ function AdminPanel({ token, onBack }) {
   useEffect(() => {
     apiRequest("/api/evaluados", { token })
       .then((data) => setEvaluados(data.evaluados || []))
-      .catch(() => {});
+      .catch(() => {})
+      .finally(() => setCargandoEvaluados(false));
     apiRequest("/api/anonimato-evaluadores", { token })
       .then((data) => setAnonimato(data))
       .catch(() => {});
@@ -802,7 +841,8 @@ function AdminPanel({ token, onBack }) {
           />
         </div>
         <div className="advisees-page-grid stagger">
-          {filtrados.map((e) => (
+          {cargandoEvaluados && <SkeletonCards n={8} />}
+          {!cargandoEvaluados && filtrados.map((e) => (
             <button
               key={e.value}
               className="advisee-page-card"
@@ -2407,7 +2447,7 @@ function DashCollapsible({ title, open, onToggle, children }) {
   return (
     <div>
       <div onClick={onToggle} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", cursor: "pointer", userSelect: "none" }}>
-        <span className="eyebrow" style={{ marginBottom: 0 }}>{title}</span>
+        <span className="eyebrow" style={{ marginBottom: 0, fontSize: "0.7rem" }}>{title}</span>
         <svg viewBox="0 0 24 24" fill="none" stroke="rgba(0,0,0,.3)" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"
           style={{ width: 11, height: 11, flexShrink: 0, transform: open ? "rotate(180deg)" : "rotate(0deg)", transition: "transform .25s" }}>
           <polyline points="18 15 12 9 6 15" />
@@ -2578,10 +2618,13 @@ function Dashboard({ token, user, onLogout, onNavigate, onBackToRoleSelect = nul
         ])
           .then(([equipoData, completadasData]) => {
             const equipo = equipoData.empleados || [];
-            const completadasKeys = (completadasData.completadas || []).map((c) => `${c.tipo}:${c.evaluado}`);
+            // Normaliza el nombre (minúsculas, sin acentos, sin espacios extra) para que
+            // el emparejamiento no falle por variaciones entre lo guardado y el equipo.
+            const norm = (s) => (s || "").normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase().trim();
+            const completadasKeys = (completadasData.completadas || []).map((c) => `${c.tipo}:${norm(c.evaluado)}`);
             const lista = construirEvaluacionesProyectoAHacer(persona, p.activado_por || "", equipo);
             const total = lista.length;
-            const done = lista.filter((it) => completadasKeys.includes(`${it.tipo}:${it.evaluado}`)).length;
+            const done = lista.filter((it) => completadasKeys.includes(`${it.tipo}:${norm(it.evaluado)}`)).length;
             return [p.nombre_proyecto, { done, total }];
           })
           .catch(() => [p.nombre_proyecto, null])
@@ -2596,6 +2639,13 @@ function Dashboard({ token, user, onLogout, onNavigate, onBackToRoleSelect = nul
   }, [token, isAdmin, proyectosActivos, user?.persona, user?.username]);
 
   const role = isAdmin ? "Admin" : "";
+  // Proyectos a mostrar: se ocultan los que ya tienes TODAS las evaluaciones completadas
+  // (0 pendientes). Mientras el progreso aún carga (prog undefined) se muestran. Si añaden
+  // miembros y vuelve a haber pendientes, reaparecen solos.
+  const proyectosPendientes = proyectosActivos.filter((p) => {
+    const prog = proyectosProgreso[p.nombre_proyecto];
+    return !prog || (prog.total - prog.done) > 0;
+  });
   const ownEvaluado = user?.persona || user?.username || "";
   const targetEvaluado = isAdmin ? evaluado : (evaluado || ownEvaluado);
   const selectedLabel = useMemo(() => evaluados.find((item) => item.value === evaluado)?.label || "", [evaluados, evaluado]);
@@ -2785,7 +2835,7 @@ function Dashboard({ token, user, onLogout, onNavigate, onBackToRoleSelect = nul
                   </div>
                 )}
               </div>
-              {!isAdmin && proyectosActivos.length > 0 && (
+              {!isAdmin && proyectosPendientes.length > 0 && (
                 <div style={{ borderBottom: "1px solid var(--border)" }}>
                   <div
                     role="button"
@@ -2801,7 +2851,7 @@ function Dashboard({ token, user, onLogout, onNavigate, onBackToRoleSelect = nul
                   </div>
                   {projOpen && (
                     <div style={{ display: "flex", flexDirection: "column", gap: 6, paddingBottom: 12 }}>
-                      {proyectosActivos.map((p) => {
+                      {proyectosPendientes.map((p) => {
                         const prog = proyectosProgreso[p.nombre_proyecto];
                         const restantes = prog ? prog.total - prog.done : 0;
                         return (
@@ -2877,17 +2927,17 @@ function Dashboard({ token, user, onLogout, onNavigate, onBackToRoleSelect = nul
             <hr style={{ ...DASH_DIVIDER, margin: 0 }} />
 
             <div style={{ display: "flex", alignItems: "baseline", gap: 10 }}>
-              <p className="eyebrow" style={{ margin: 0, flexShrink: 0 }}>{t("dash.my_role")}</p>
-              <p style={{ fontSize: 14, color: "#000", margin: 0 }}>{perfil.cargo || "—"}</p>
+              <p className="eyebrow" style={{ margin: 0, flexShrink: 0, fontSize: "0.7rem" }}>{t("dash.my_role")}</p>
+              <p style={{ fontSize: 13, color: "#000", margin: 0 }}>{perfil.cargo || "—"}</p>
             </div>
 
             <hr style={{ ...DASH_DIVIDER, margin: 0 }} />
 
             <div>
               <div style={{ display: "flex", alignItems: "baseline", gap: 10 }}>
-                <p className="eyebrow" style={{ margin: 0, flexShrink: 0 }}>{t("dash.my_country")}</p>
+                <p className="eyebrow" style={{ margin: 0, flexShrink: 0, fontSize: "0.7rem" }}>{t("dash.my_country")}</p>
                 {!editandoPais && (
-                  <p style={{ fontSize: 14, color: perfil.pais ? "#000" : "rgba(0,0,0,.45)", margin: 0 }}>
+                  <p style={{ fontSize: 13, color: perfil.pais ? "#000" : "rgba(0,0,0,.45)", margin: 0 }}>
                     {perfil.pais || t("dash.country_none")}
                   </p>
                 )}
@@ -3700,11 +3750,26 @@ function MisProyectosActivosPage({ token, user, onBack }) {
             const equipoActual = p.equipo || [];
             const disponibles = todosEmpleados.filter((e) => !equipoActual.includes(e));
             const total = estado ? estado.length : equipoActual.length;
-            const done = estado ? estado.filter((m) => m.pendientes.length === 0).length : 0;
+            // Cuántas evaluaciones de compañeros ha COMPLETADO cada persona (como evaluador).
+            // Se prefiere el dato del backend (m.n_completadas); si no llega, se calcula aquí
+            // invirtiendo la relación evaluado→evaluadores del propio estado.
+            const norm = (s) => (s || "").normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase().trim();
+            const completadasMap = {};
+            (estado || []).forEach((tgt) => (tgt.evaluadores || []).forEach((ev) => {
+              const k = norm(ev);
+              completadasMap[k] = (completadasMap[k] || 0) + 1;
+            }));
+            const totalCompaneros = Math.max((estado ? estado.length : equipoActual.length) - 1, 0);
+            const hechasDe = (m) => m.n_completadas ?? completadasMap[norm(m.nombre)] ?? 0;
+            const personaHaCompletado = (m) =>
+              (totalCompaneros === 0 || hechasDe(m) >= totalCompaneros) && m.autoevaluacion_hecha;
+            const done = estado ? estado.filter(personaHaCompletado).length : 0;
             const pct = total ? Math.round((done / total) * 100) : 0;
             const msgEsError = msg.includes("Error") || msg.includes("error");
             return (
-              <div key={nombre} className="card stagger-item" style={{ marginBottom: 16, animationDelay: `${Math.min(idx, 8) * 0.05}s` }}>
+              <React.Fragment key={nombre}>
+              {idx > 0 && <hr style={{ border: "none", borderTop: "1px solid var(--border)", margin: "24px 0" }} />}
+              <div className="card stagger-item" style={{ marginBottom: 16, animationDelay: `${Math.min(idx, 8) * 0.05}s` }}>
                 {/* Header */}
                 <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 16, flexWrap: "wrap", marginBottom: 16 }}>
                   <div>
@@ -3724,24 +3789,28 @@ function MisProyectosActivosPage({ token, user, onBack }) {
                     <table className="gest-table">
                       <thead>
                         <tr>
-                          {[t("mpa.col_member"), t("mpa.col_received"), t("mpa.col_selfeval"), t("mpa.col_status"), ""].map((h, hi) => (
+                          {[t("mpa.col_member"), t("mpa.col_completed"), t("mpa.col_selfeval"), t("mpa.col_status"), ""].map((h, hi) => (
                             <th key={hi}>{h}</th>
                           ))}
                         </tr>
                       </thead>
                       <tbody>
                         {estado.map((m) => {
-                          const nPendientes = m.n_pendientes ?? m.pendientes.length;
-                          const tot = m.n_evaluaciones + nPendientes;
-                          const completo = nPendientes === 0;
-                          const pendienteTitle = completo
-                            ? (m.evaluadores.length ? t("mpa.evaluated_by", { list: m.evaluadores.join(", ") }) : "")
-                            : (m.pendientes.length ? t("mpa.pending_from", { list: m.pendientes.join(", ") }) : t("mpa.pending_from_count", { n: nPendientes }));
+                          const nHechas = hechasDe(m);
+                          const peersCompleto = totalCompaneros === 0 || nHechas >= totalCompaneros;
+                          const personaCompleto = personaHaCompletado(m);
+                          const faltanPeers = Math.max(totalCompaneros - nHechas, 0);
+                          const estadoTitle = personaCompleto
+                            ? t("mpa.done_all")
+                            : [
+                                !m.autoevaluacion_hecha ? t("mpa.pending_self") : null,
+                                faltanPeers > 0 ? t("mpa.pending_peers", { n: faltanPeers }) : null,
+                              ].filter(Boolean).join(" · ");
                           return (
                             <tr key={m.nombre}>
                               <td>{m.nombre}</td>
                               <td>
-                                <span className={`badge ${completo ? "badge-dark" : "badge-light"}`}>{m.n_evaluaciones}/{tot}</span>
+                                <span className={`badge ${peersCompleto ? "badge-dark" : "badge-light"}`}>{nHechas}/{totalCompaneros}</span>
                               </td>
                               <td>
                                 {m.autoevaluacion_hecha
@@ -3749,8 +3818,8 @@ function MisProyectosActivosPage({ token, user, onBack }) {
                                   : <span style={{ color: "var(--accent)", fontSize: 14 }}>✗</span>}
                               </td>
                               <td>
-                                <span className={`badge ${completo ? "badge-dark" : "badge-light"}`} title={pendienteTitle}>
-                                  {completo ? t("mpa.complete") : t("mpa.pending")}
+                                <span className={`badge ${personaCompleto ? "badge-dark" : "badge-light"}`} title={estadoTitle}>
+                                  {personaCompleto ? t("mpa.complete") : t("mpa.pending")}
                                 </span>
                               </td>
                               <td>
@@ -3806,6 +3875,7 @@ function MisProyectosActivosPage({ token, user, onBack }) {
                 </button>
                 {recMsg[nombre] && <p className="fine" style={{ marginTop: 8 }}>{recMsg[nombre]}</p>}
               </div>
+              </React.Fragment>
             );
           })
         )}
@@ -4289,7 +4359,9 @@ function FormularioEvaluacionProyecto({ token, user, proyecto, tipo, manager, ev
           <a className="brand" href="/"><img src="/src/logo.png" alt="igeneris" className="brand-logo" /></a>
           <button className="link-button" onClick={onBack}>{t("common.back")}</button>
         </nav>
-        <p className="fine" style={{ padding: "40px" }}>{t("fep.loading_questions")}</p>
+        <div style={{ padding: "40px", maxWidth: 820, margin: "0 auto", width: "100%" }}>
+          <SkeletonForm rows={4} />
+        </div>
       </main>
     );
   }
@@ -4309,10 +4381,7 @@ function FormularioEvaluacionProyecto({ token, user, proyecto, tipo, manager, ev
 
       {enviado ? (
         <section className="panel" style={{ marginTop: "32px" }}>
-          <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-            <DrawCheck color="#166534" />
-            <p className="fine" style={{ color: "#166534", margin: 0 }}>{t("fep.saved_ok")}</p>
-          </div>
+          <SavedOk text={t("fep.saved_ok")} />
           <div className="actions">
             <button onClick={() => { setEnviado(false); setRespuestas({}); setEvaluado(""); setStatus(""); }}>
               {t("fep.new_eval")}
@@ -4379,7 +4448,7 @@ function FormularioEvaluacionProyecto({ token, user, proyecto, tipo, manager, ev
                       <div style={{ display: "flex", gap: "12px", flexWrap: "wrap", alignItems: "center" }}>
                         <span className="fine" style={{ fontSize: "12px" }}>{t("fep.scale_low")}</span>
                         {[1, 2, 3, 4, 5].map((val) => (
-                          <label key={val} style={{ display: "flex", alignItems: "center", gap: "4px", cursor: "pointer", fontSize: "14px", fontWeight: respuestas[p.id] === String(val) ? 800 : 400 }}>
+                          <label key={val} className="eval-opt" style={{ display: "flex", alignItems: "center", gap: "4px", cursor: "pointer", fontSize: "14px", fontWeight: respuestas[p.id] === String(val) ? 800 : 400 }}>
                             <input
                               type="radio"
                               name={p.id}
@@ -4401,6 +4470,7 @@ function FormularioEvaluacionProyecto({ token, user, proyecto, tipo, manager, ev
                           return (
                             <label
                               key={op}
+                              className="eval-seg"
                               style={{
                                 flex: 1,
                                 display: "flex",
@@ -4423,7 +4493,7 @@ function FormularioEvaluacionProyecto({ token, user, proyecto, tipo, manager, ev
                                 onChange={() => setRespuesta(p.id, op)}
                                 style={{ position: "absolute", opacity: 0, width: 0, height: 0, pointerEvents: "none" }}
                               />
-                              <span style={{ fontSize: "11px", fontWeight: 400, letterSpacing: "0.1em", textTransform: "uppercase" }}>
+                              <span className="eval-seg-text" style={{ display: "inline-block", fontSize: "11px", fontWeight: 400, letterSpacing: "0.1em", textTransform: "uppercase" }}>
                                 {op}
                               </span>
                             </label>
@@ -4672,7 +4742,7 @@ function FormularioEvaluacionExtra({ token, evaluado, contexto, solicitudPageId,
 
       {enviado ? (
         <section className="panel" style={{ marginTop: "32px" }}>
-          <p className="fine" style={{ color: "#166534" }}>{t("fex.saved_ok")}</p>
+          <SavedOk text={t("fex.saved_ok")} />
           <div className="actions">
             <button className="secondary" onClick={onBack}>{t("auth.back_word")}</button>
           </div>

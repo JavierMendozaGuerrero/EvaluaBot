@@ -802,9 +802,57 @@ input, select, textarea { padding: 12px 14px; font-size: 15.5px; }
 .stagger > *:nth-child(8)  { animation-delay: .38s; }
 .stagger > *:nth-child(n+9){ animation-delay: .42s; }
 
+/* B · Feedback táctil: el botón se hunde un pelín al pulsarlo. */
+button, .button, .chat-btn, .eval-tipo-btn {
+  transition: transform .1s ease, opacity .15s, background .15s, border-color .15s, color .15s;
+}
+button:active, .button:active, .chat-btn:active, .eval-tipo-btn:active { transform: scale(.97); }
+
+/* D · Hover lift: las cards se elevan con una sombra suave al pasar el ratón. */
+.role-card, .advisee-page-card, .card {
+  transition: transform .2s cubic-bezier(.2, .75, .2, 1), box-shadow .2s, background .15s, border-color .15s, color .15s, opacity .15s;
+}
+.role-card:hover, .advisee-page-card:hover, .card:hover {
+  transform: translateY(-2px); box-shadow: 0 6px 18px rgba(0, 0, 0, .08);
+}
+.role-card:active, .advisee-page-card:active, .card:active { transform: translateY(-1px) scale(.985); }
+
+/* E · La flecha "avanza": el enlace se desliza en la dirección de su flecha al pasar el ratón. */
+.link-button:hover { transform: translateX(-2px); }
+.menu-item:hover { transform: translateX(3px); }
+
+/* F · Los mensajes de error/estado entran deslizando desde arriba. */
+.error { animation: toast-in .3s cubic-bezier(.2, .75, .2, 1) both; }
+@keyframes toast-in { from { opacity: 0; transform: translateY(-6px); } to { opacity: 1; transform: none; } }
+
+/* I · Transición suave al entrar en una sección/página. */
+.page { animation: page-in .28s ease both; }
+@keyframes page-in { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
+
+/* A · "Pop" al seleccionar una opción de evaluación (escala 1–5 y segmentos). */
+.eval-opt:has(input:checked) { animation: opt-pop .32s cubic-bezier(.2, .75, .2, 1); }
+.eval-seg:has(input:checked) .eval-seg-text { animation: opt-pop .3s cubic-bezier(.2, .75, .2, 1); }
+@keyframes opt-pop { 0% { transform: scale(1); } 45% { transform: scale(1.22); } 100% { transform: scale(1); } }
+
+/* G · Skeleton con brillo animado mientras carga contenido. */
+.skeleton { position: relative; overflow: hidden; background: var(--surface, #f1f1f3); }
+.skeleton::after {
+  content: ""; position: absolute; inset: 0; transform: translateX(-100%);
+  background: linear-gradient(90deg, transparent, rgba(255, 255, 255, .6), transparent);
+  animation: skeleton-shimmer 1.3s ease-in-out infinite;
+}
+@keyframes skeleton-shimmer { to { transform: translateX(100%); } }
+
 @media (prefers-reduced-motion: reduce) {
   .draw-check-circle, .draw-check-mark { animation: none; stroke-dashoffset: 0; }
   .site-footer-links a::after, .link-button::after, .menu-item::after { transition: none; }
   .stagger > *, .stagger-item { animation: none; }
+  button:active, .button:active, .chat-btn:active, .eval-tipo-btn:active,
+  .role-card:hover, .advisee-page-card:hover, .card:hover,
+  .role-card:active, .advisee-page-card:active, .card:active,
+  .link-button:hover, .menu-item:hover { transform: none; }
+  .error, .page,
+  .eval-opt:has(input:checked), .eval-seg:has(input:checked) .eval-seg-text,
+  .skeleton::after { animation: none; }
 }
 button, .button { min-height: 42px; padding: 0 22px; font-size: 15px; }

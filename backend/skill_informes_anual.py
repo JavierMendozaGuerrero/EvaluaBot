@@ -302,19 +302,62 @@ _ETIQUETAS_DIM = {
     "relacion_cliente": "Relación con el cliente",
 }
 
-_ORDEN_CARGO = ["analyst", "associate", "associate sr", "manager"]
+# Escala canonica de niveles de criterios, de menor a mayor. Coincide con los
+# nombres de columna de las BD "Criterios de evaluaciones" de Notion (en espanol).
+_ORDEN_CARGO = ["trainee", "analista", "asociado", "asociado_sr", "manager"]
+
+# Normaliza cualquier etiqueta de nivel (columna de Notion en ES, clave inglesa
+# del fallback hardcodeado, etc.) a la clave canonica de _ORDEN_CARGO.
+_NIVEL_ALIAS = {
+    "trainee": "trainee", "becario": "trainee", "en practicas": "trainee", "intern": "trainee",
+    "analista": "analista", "analyst": "analista",
+    "asociado": "asociado", "associate": "asociado",
+    "asociado sr": "asociado_sr", "asociado senior": "asociado_sr",
+    "associate sr": "asociado_sr", "sr associate": "asociado_sr", "senior associate": "asociado_sr",
+    "manager": "manager",
+}
+
+
+def _norm_txt(s: str) -> str:
+    return " ".join((s or "").strip().lower().replace(".", " ").split())
+
+
+def _nivel_canonico(etiqueta: str) -> str | None:
+    """Etiqueta de nivel (columna de Notion o clave del fallback) -> clave canonica."""
+    return _NIVEL_ALIAS.get(_norm_txt(etiqueta))
 
 
 def _nivel_cargo(cargo: str) -> str | None:
-    c = cargo.strip().lower()
-    if c == "analyst":
-        return "analyst"
-    if c in ("sr associate", "associate sr"):
-        return "associate sr"
-    if c == "associate":
-        return "associate"
-    if c in ("manager", "director"):
-        return "manager"
+    """Cargo del empleado (en ingles en la Lista de empleados) -> nivel canonico de
+    criterios. Los cargos por encima de Manager (Sr. Manager, Director, Partner,
+    Lead/Director de Palantir) usan los criterios de 'Manager'."""
+    c = _norm_txt(cargo)
+    if not c:
+        return None
+    # Palantir: titulos de ingenieria.
+    if "palantir" in c or "engineer" in c:
+        # Ingeniero Jr. = Analista · Ingeniero = Asociado · Ingeniero Sr. = Asociado Sr
+        # Lead / Director / Partner = Manager. Trainee se mantiene por si existe.
+        if "lead" in c or "director" in c or "partner" in c:
+            return "manager"
+        if "trainee" in c or "becario" in c or "intern" in c:
+            return "trainee"
+        if "jr" in c or "junior" in c:
+            return "analista"
+        if "sr" in c or "senior" in c:
+            return "asociado_sr"
+        if "engineer" in c:
+            return "asociado"
+        return None
+    # Negocio / general.
+    if "partner" in c or "director" in c or "manager" in c:
+        return "manager"  # incluye Sr. Manager y Manager
+    if "trainee" in c or "becario" in c or "intern" in c:
+        return "trainee"
+    if "associate" in c or "asociado" in c:
+        return "asociado_sr" if ("sr" in c or "senior" in c) else "asociado"
+    if "analyst" in c or "analista" in c:
+        return "analista"
     return None
 
 
@@ -331,22 +374,31 @@ def _criterios_para_prompt(cargo: str, idioma: str = "es") -> str:
     nivel = _nivel_cargo(cargo)
     grupo = _grupo_por_cargo(cargo)
 
-    # Intentar leer desde Notion
     try:
         criterios_notion = obtener_criterios_evaluacion(grupo, idioma)
     except Exception:
         criterios_notion = {}
 
+    def _por_canon(niveles_dict):
+        d = {}
+        for label, crits in niveles_dict.items():
+            canon = _nivel_canonico(label)
+            if canon and crits:
+                d[canon] = (label, crits)
+        return d
+
+    idx = _ORDEN_CARGO.index(nivel) if nivel in _ORDEN_CARGO else -1
+
+    def _lineas(niveles_dict):
+        por_canon = _por_canon(niveles_dict)
+        presentes = [c for c in _ORDEN_CARGO if c in por_canon]
+        sel = presentes[max(0, idx - 1):] if idx >= 0 else presentes
+        return [f"  [{por_canon[c][0]}]: " + " / ".join(por_canon[c][1]) for c in sel]
+
     if criterios_notion:
-        idx = _ORDEN_CARGO.index(nivel) if nivel and nivel in _ORDEN_CARGO else -1
         bloques = [f"Lo que se espera de un {cargo} en {grupo} y niveles superiores como referencia:"]
         for dim_label, niveles_dict in criterios_notion.items():
-            lineas = []
-            niveles_orden = [lvl for lvl in _ORDEN_CARGO if lvl in niveles_dict]
-            for lvl in (niveles_orden[max(0, idx - 1):] if idx >= 0 else niveles_orden):
-                criterios = niveles_dict.get(lvl, [])
-                if criterios:
-                    lineas.append(f"  [{lvl.title()}]: " + " / ".join(criterios))
+            lineas = _lineas(niveles_dict)
             if lineas:
                 bloques.append(f"\n{dim_label}:\n" + "\n".join(lineas))
         return "\n".join(bloques)
@@ -354,15 +406,9 @@ def _criterios_para_prompt(cargo: str, idioma: str = "es") -> str:
     # Fallback al diccionario hardcodeado (solo Negocio)
     if not nivel:
         return ""
-    idx = _ORDEN_CARGO.index(nivel)
-    bloques = [f"Lo que se espera de un {cargo} (nivel {nivel}) y niveles superiores como referencia:"]
+    bloques = [f"Lo que se espera de un {cargo} y niveles superiores como referencia:"]
     for dim_key, dim_label in _ETIQUETAS_DIM.items():
-        dim_criterios = _CRITERIOS_DTI.get(dim_key, {})
-        lineas = []
-        for lvl in _ORDEN_CARGO[max(0, idx - 1):]:
-            criterios = dim_criterios.get(lvl, [])
-            if criterios:
-                lineas.append(f"  [{lvl.title()}]: " + " / ".join(criterios))
+        lineas = _lineas(_CRITERIOS_DTI.get(dim_key, {}))
         if lineas:
             bloques.append(f"\n{dim_label}:\n" + "\n".join(lineas))
     return "\n".join(bloques)

@@ -34,7 +34,7 @@ class AnimacionCargando:
     def __init__(self, channel: str, thread_ts: str | None = None, idioma: str = "es"):
         self._channel = channel
         self._thread_ts = thread_ts
-        self._texto = "LOADING" if idioma == "en" else "CARGANDO"
+        self._texto = {"en": "LOADING", "pt": "A CARREGAR"}.get(idioma, "CARGANDO")
         self._stop = threading.Event()
         self._hilo: threading.Thread | None = None
         self._ts: str | None = None

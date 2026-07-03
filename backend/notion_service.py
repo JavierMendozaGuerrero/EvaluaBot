@@ -1922,7 +1922,7 @@ def obtener_criterios_evaluacion(grupo: str, idioma: str = "es") -> dict:
     if not db_id:
         return {}
 
-    _NIVELES = ["Analista", "Asociado", "Asociado Sr", "Manager"]
+    _NIVELES = ["Trainee", "Analista", "Asociado", "Asociado Sr", "Manager"]
 
     def _rt(prop):
         return "".join(t.get("plain_text", "") for t in (prop or {}).get("rich_text", [])).strip()

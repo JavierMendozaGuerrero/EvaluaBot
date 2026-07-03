@@ -23,7 +23,7 @@ from datetime import datetime, timezone
 
 from . import config
 from .clients import notion, slack_app
-from .i18n import t
+from .i18n import t, traducir_dimension
 from .notion_service import (
     _buscar_bbdd_en_pagina_id,
     _data_source_id,
@@ -562,6 +562,15 @@ def obtener_preguntas_tipo(tipo_clave: str, idioma: str = "es") -> list:
         base_by = por_idioma.get(idioma, {})
         ordenes = sorted(set(es_by) | set(base_by))
         preguntas = [base_by.get(o) or es_by.get(o) for o in ordenes]
+        # Notion no suele tener filas PT: traducimos las etiquetas fijas (categoría
+        # y enunciados recurrentes) al vuelo. Los enunciados largos sin equivalente
+        # se quedan en su idioma de Notion (ES/EN).
+        if idioma != "es":
+            for p in preguntas:
+                if not p:
+                    continue
+                p["categoria"] = traducir_dimension(p.get("categoria", ""), idioma)
+                p["texto"] = traducir_dimension(p.get("texto", ""), idioma)
         with lock:
             _cache_preguntas_proyecto[cache_key] = {"data": preguntas, "t": ahora}
         return preguntas

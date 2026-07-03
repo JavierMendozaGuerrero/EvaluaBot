@@ -8,7 +8,7 @@ from . import config
 from .clients import slack_app
 from .conversation_back import boton_atras, fila_atras, limpiar_historial, pop_historial, push_historial, tiene_historial
 from .slack_lists import añadir_pendiente, enlace_lista_pendientes, quitar_pendiente
-from .i18n import t, boton_idioma_slack
+from .i18n import t, boton_idioma_slack, traducir_dimension
 from .notion_service import (
     evaluacion_personal_guardada_desde,
     guardar_evaluacion_personal,
@@ -584,7 +584,7 @@ def _build_criterios_view(grupo: str, criterios: dict, expanded: set, idioma: st
     ]
     for subarea, niveles in criterios.items():
         es_liderazgo = _es_subarea_liderazgo(subarea)
-        titulo = f"*{subarea}*" + (t("bp.criteria_leadership_note", idioma) if es_liderazgo else "")
+        titulo = f"*{traducir_dimension(subarea, idioma)}*" + (t("bp.criteria_leadership_note", idioma) if es_liderazgo else "")
         is_expanded = subarea in expanded
         blocks.append({
             "type": "section",
@@ -758,7 +758,7 @@ def _vista_modal_cargando() -> dict:
         "type": "modal",
         "title": {"type": "plain_text", "text": "Ejemplo"},
         "close": {"type": "plain_text", "text": "Cerrar"},
-        "blocks": [{"type": "section", "text": {"type": "mrkdwn", "text": "⏳ Cargando… / Loading…"}}],
+        "blocks": [{"type": "section", "text": {"type": "mrkdwn", "text": "⏳ Cargando… / Loading… / A carregar…"}}],
     }
 
 

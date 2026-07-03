@@ -836,7 +836,7 @@ def _enviar_pregunta_permiso_claude(channel, thread_ts, idioma, estado):
 def _enviar_pregunta_opinion(channel, thread_ts, idioma, estado):
     preguntas = obtener_preguntas_seguimiento_ca(idioma)
     if estado.get("opinion_via_claude"):
-        texto = f"📊 *Resumen generado por Claude:*\n\n{estado.get('resumen_actual', '')}\n\n{preguntas.get('opinion_con_claude', '')}"
+        texto = f"{t('bc.claude_summary_header', idioma)}\n\n{estado.get('resumen_actual', '')}\n\n{preguntas.get('opinion_con_claude', '')}"
     else:
         texto = preguntas.get("opinion_sin_claude", "")
     bloques = [{"type": "section", "text": {"type": "mrkdwn", "text": texto}}] + fila_atras("atras_ca", "bc.back_btn", estado, idioma)
@@ -1175,7 +1175,7 @@ def manejar_mensaje_ca(event, logger) -> None:
         # Mientras Claude "piensa", mostramos una barra de carga animada en el hilo.
         with AnimacionCargando(channel, thread_ts, _idi):
             try:
-                resumen_claude = generar_resumen_evaluacion(advisee, cargo or "", resumen_bruto, idioma_de_persona(advisee))
+                resumen_claude = generar_resumen_evaluacion(advisee, cargo or "", resumen_bruto, _idi)
             except Exception:
                 logging.exception("Error generando resumen Claude para '%s'", advisee)
         with _lock:
@@ -1473,7 +1473,7 @@ def _vista_modal_cargando() -> dict:
         "type": "modal",
         "title": {"type": "plain_text", "text": "Ejemplo"},
         "close": {"type": "plain_text", "text": "Cerrar"},
-        "blocks": [{"type": "section", "text": {"type": "mrkdwn", "text": "⏳ Cargando… / Loading…"}}],
+        "blocks": [{"type": "section", "text": {"type": "mrkdwn", "text": "⏳ Cargando… / Loading… / A carregar…"}}],
     }
 
 

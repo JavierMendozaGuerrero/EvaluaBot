@@ -849,6 +849,9 @@ class ApiHandler(BaseHTTPRequestHandler):
                 if ruta == "/api/eval-anual/confirmar-identidad":
                     self.responder_json(eval_sesion.confirmar_identidad(evaluado))
                     return
+                if ruta == "/api/eval-anual/eliminar":
+                    self.responder_json(eval_sesion.eliminar_sesion(evaluado))
+                    return
                 if ruta == "/api/eval-anual/responder-area":
                     self.responder_json(eval_sesion.responder_area(
                         evaluado, datos.get("clave", "").strip(), datos.get("texto", "")))

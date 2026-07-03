@@ -2325,7 +2325,7 @@ def _vista_modal_cargando() -> dict:
         "type": "modal",
         "title": {"type": "plain_text", "text": "Ejemplo"},
         "close": {"type": "plain_text", "text": "Cerrar"},
-        "blocks": [{"type": "section", "text": {"type": "mrkdwn", "text": "⏳ Cargando… / Loading…"}}],
+        "blocks": [{"type": "section", "text": {"type": "mrkdwn", "text": "⏳ Cargando… / Loading… / A carregar…"}}],
     }
 
 

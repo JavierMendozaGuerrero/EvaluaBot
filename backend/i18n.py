@@ -45,9 +45,13 @@ TEXTOS: dict[str, dict[str, str]] = {
     "bm.pending_fallback": {"es": "📍 Tienes una evaluación mensual pendiente", "en": "📍 You have a monthly evaluation pending"},
     "bm.pending_intro": {
         "es": ("📍 *Tienes una evaluación mensual pendiente.*\n\n"
+               "_Recordatorio: esta evaluación es opcional. Recomendamos realizarla, pero no es obligatoria._\n"
+               "_No es necesario evaluar a todos los miembros del equipo si no lo consideras necesario._\n"
                "_Esta evaluación es totalmente privada, solo podrá verla el CA de la persona evaluada._\n"
                "_Si en algún momento quieres cancelar, escribe SOS en el hilo._"),
         "en": ("📍 *You have a monthly evaluation pending.*\n\n"
+               "_Reminder: this evaluation is optional. We recommend completing it, but it's not mandatory._\n"
+               "_You don't need to evaluate every team member if you don't think it's necessary._\n"
                "_This evaluation is fully private; only the evaluated person's CA can see it._\n"
                "_If at any point you want to cancel, type SOS in the thread._"),
     },
@@ -176,7 +180,7 @@ TEXTOS: dict[str, dict[str, str]] = {
     "bp.opp_3": {"es": "*3.* Señalar limitaciones o aspectos relevantes respecto al cumplimiento de los criterios de evaluación", "en": "*3.* Point out limitations or relevant aspects regarding meeting the evaluation criteria"},
     "bp.btn_view_criteria": {"es": "📊 Ver criterios", "en": "📊 View criteria"},
     "bp.opp_4": {"es": "*4.* Si necesitas ayuda con algún tema o has tenido alguna dificultad que quieras comentar\n_El botón de urgencia notifica a tu CA por Slack. Si no lo pulsas, el problema no se notifica automáticamente y solo quedará registrado._", "en": "*4.* If you need help with anything or have had any difficulty you'd like to raise\n_The urgent button notifies your CA on Slack. If you don't press it, the issue isn't notified automatically and will only be recorded._"},
-    "bp.pending_intro": {"es": "📝 *Tienes opción de seguimiento personal pendiente*\n\n_Esta evaluación es totalmente privada, solo podrá verla tu CA._\n_Si en algún momento quieres cancelar, escribe SOS en el hilo._", "en": "📝 *You have a personal tracking option pending*\n\n_This evaluation is fully private; only your CA can see it._\n_If at any point you want to cancel, type SOS in the thread._"},
+    "bp.pending_intro": {"es": "📝 *Tienes opción de seguimiento personal pendiente*\n\n_Recordatorio: esta evaluación es opcional. Recomendamos realizarla, pero no es obligatoria._\n_Esta evaluación es totalmente privada, solo podrá verla tu CA._\n_Si en algún momento quieres cancelar, escribe SOS en el hilo._", "en": "📝 *You have a personal tracking option pending*\n\n_Reminder: this evaluation is optional. We recommend completing it, but it's not mandatory._\n_This evaluation is fully private; only your CA can see it._\n_If at any point you want to cancel, type SOS in the thread._"},
     "bp.pending_fallback": {"es": "📝 Tienes opción de seguimiento personal pendiente", "en": "📝 You have a personal tracking option pending"},
     "bp.example_label": {"es": ":point_right: Ejemplo:", "en": ":point_right: Example:"},
     "bp.see_example": {"es": "Ver ejemplo", "en": "See example"},
@@ -209,7 +213,7 @@ TEXTOS: dict[str, dict[str, str]] = {
     "bc.not_found_suggest": {"es": "*{nombre}* no aparece tal cual en la lista de empleados.\n¿Querías decir alguno de estos nombres? Responde copiando el nombre exacto:\n{opciones}", "en": "*{nombre}* doesn't appear exactly like that in the employee list.\nDid you mean one of these names? Reply by copying the exact name:\n{opciones}"},
     "bc.not_found": {"es": "*{nombre}* no aparece tal cual en la lista de empleados. Escribe nombre y apellido como aparece en la lista.", "en": "*{nombre}* doesn't appear exactly like that in the employee list. Type the first and last name as they appear in the list."},
     "bc.pending_fallback": {"es": "📋 CA: Tienes evaluación de advisees pendiente", "en": "📋 CA: You have an advisee evaluation pending"},
-    "bc.pending_intro": {"es": "📋 *CA: Tienes evaluación de advisees pendiente*\n\n_Esta evaluación es totalmente privada, solo podrás verla tú._\n_Si en algún momento quieres cancelar, escribe SOS en el hilo._", "en": "📋 *CA: You have an advisee evaluation pending*\n\n_This evaluation is fully private; only you can see it._\n_If at any point you want to cancel, type SOS in the thread._"},
+    "bc.pending_intro": {"es": "📋 *CA: Tienes evaluación de advisees pendiente*\n\n_Recordatorio: esta evaluación es opcional. Recomendamos realizarla, pero no es obligatoria._\n_No es necesario evaluar a todos tus advisees si no lo consideras necesario._\n_Esta evaluación es totalmente privada, solo podrás verla tú._\n_Si en algún momento quieres cancelar, escribe SOS en el hilo._", "en": "📋 *CA: You have an advisee evaluation pending*\n\n_Reminder: this evaluation is optional. We recommend completing it, but it's not mandatory._\n_You don't need to evaluate every one of your advisees if you don't think it's necessary._\n_This evaluation is fully private; only you can see it._\n_If at any point you want to cancel, type SOS in the thread._"},
     "bc.all_advisees_done": {"es": "Ya has opinado sobre todos tus advisees. ¡Perfecto, gracias por tu tiempo! 🎉", "en": "You've now given your opinion on all your advisees. Great, thank you for your time! 🎉"},
     "bc.which_advisee": {"es": "¿De qué advisee te gustaría hacer seguimiento?", "en": "Which advisee would you like to review?"},
     "bc.btn_finish": {"es": "❌ Terminar", "en": "❌ Finish"},
@@ -232,7 +236,8 @@ TEXTOS: dict[str, dict[str, str]] = {
     "bc.error_advisee_not_associated": {"es": "*{advisee}* existe en la lista de empleados, pero no aparece asociado a ti en `Lista CA`.\nTus advisees actuales:\n{opciones}\n\nEscribe uno de esos nombres.", "en": "*{advisee}* exists in the employee list, but is not associated with you in `CA List`.\nYour current advisees:\n{opciones}\n\nType one of those names."},
     "bc.error_advisee_suggest": {"es": "*{advisee}* no está en la lista de empleados.\n¿Querías decir alguno de estos? Copia el nombre exacto:\n{opciones}", "en": "*{advisee}* is not in the employee list.\nDid you mean one of these? Copy the exact name:\n{opciones}"},
     "bc.error_advisee_no_suggest": {"es": "*{advisee}* no está en la lista de empleados. Escríbelo sin tildes, primera letra del nombre y primer apellido en mayúscula, solo primer apellido.", "en": "*{advisee}* is not in the employee list. Type it without accents, first letter of the first name and first surname capitalised, first surname only."},
-    "bc.claude_summary_result": {"es": "📊 *Resumen generado por Claude:*\n\n{resumen}\n\n¿Qué opinas de esto?", "en": "📊 *Summary generated by Claude:*\n\n{resumen}\n\nWhat's your opinion on this?"},
+    "bc.claude_summary_result": {"es": "📊 *Resumen generado por Claude:*\n\n{resumen}\n\n¿Qué opinas de esto?", "en": "📊 *Summary generated by Claude:*\n\n{resumen}\n\nWhat's your opinion on this?", "pt": "📊 *Resumo gerado pelo Claude:*\n\n{resumen}\n\nO que achas disto?"},
+    "bc.claude_summary_header": {"es": "📊 *Resumen generado por Claude:*", "en": "📊 *Summary generated by Claude:*", "pt": "📊 *Resumo gerado pelo Claude:*"},
     "bc.claude_summary_error": {"es": "⚠️ No se pudo generar el resumen con Claude.\n\n¿Qué opinas de esto?", "en": "⚠️ Could not generate the summary with Claude.\n\nWhat's your opinion on this?"},
     "bc.ask_comment": {"es": "¿Qué comentario deseas registrar sobre las evaluaciones de tu advisee?", "en": "What comment would you like to record about your advisee's evaluations?"},
     "bc.clarify_claude": {"es": "Responde `sí` para generar un resumen con Claude, o `no` para continuar directamente.", "en": "Reply `yes` to generate a summary with Claude, or `no` to continue directly."},
@@ -420,3 +425,42 @@ try:
             TEXTOS[_clave_pt]["pt"] = _texto_pt
 except Exception:
     pass
+
+
+# --- Etiquetas fijas de evaluación (dimensiones/criterios + enunciados) -------
+# Los nombres de criterio y algunos enunciados recurrentes se guardan en español
+# (clave estable en Notion y en el código: _DIMS_*, CRITERIOS, _PREGUNTAS_*).
+# Este mapa los traduce solo al mostrarlos. Clave = texto ES en minúsculas.
+# "Contribution to the firm" y las opciones Exceeds/Achieves/Expects more se dejan
+# en inglés a propósito (no están en el mapa → pasan tal cual).
+_ETIQUETAS_EVAL: dict[str, dict[str, str]] = {
+    # Dimensiones / categorías
+    "gestión del proyecto":    {"en": "Project management",  "pt": "Gestão do projeto"},
+    "gestión de proyecto":     {"en": "Project management",  "pt": "Gestão do projeto"},
+    "calidad técnica":         {"en": "Technical quality",   "pt": "Qualidade técnica"},
+    "trabajo en equipo":       {"en": "Teamwork",            "pt": "Trabalho em equipa"},
+    "comunicación":            {"en": "Communication",       "pt": "Comunicação"},
+    "relación con el cliente": {"en": "Client relationship", "pt": "Relação com o cliente"},
+    "liderazgo":               {"en": "Leadership",          "pt": "Liderança"},
+    "desarrollo de talento":   {"en": "Talent Development",  "pt": "Desenvolvimento de Talento"},
+    "motivación":              {"en": "Motivation",          "pt": "Motivação"},
+    "referente":               {"en": "Role model",          "pt": "Referência"},
+    "resultado global":        {"en": "Overall result",      "pt": "Resultado global"},
+    # Enunciados recurrentes (autoevaluación / genéricos)
+    "grado de satisfacción contigo mismo":         {"en": "Level of satisfaction with yourself", "pt": "Grau de satisfação contigo mesmo"},
+    "grado de satisfacción con tu equipo":         {"en": "Level of satisfaction with your team", "pt": "Grau de satisfação com a tua equipa"},
+    "justifica tu respuesta":                      {"en": "Justify your answer", "pt": "Justifica a tua resposta"},
+    "justifica tu respuesta anterior con ejemplos":{"en": "Justify your previous answer with examples", "pt": "Justifica a tua resposta anterior com exemplos"},
+    "añadir comentarios que aporten información":  {"en": "Add comments that provide information", "pt": "Adiciona comentários que acrescentem informação"},
+}
+
+
+def traducir_dimension(nombre: str, idioma: str = IDIOMA_POR_DEFECTO) -> str:
+    """Traduce una etiqueta fija de evaluación (dimensión/criterio o enunciado
+    recurrente). Si no está en el mapa (p.ej. 'Contribution to the firm', un
+    enunciado largo de Notion) o el idioma es 'es', devuelve el texto tal cual.
+    La búsqueda ignora mayúsculas/minúsculas y espacios."""
+    idioma = normalizar_idioma(idioma)
+    if idioma == "es":
+        return nombre
+    return _ETIQUETAS_EVAL.get((nombre or "").strip().lower(), {}).get(idioma, nombre)

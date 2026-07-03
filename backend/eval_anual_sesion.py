@@ -21,7 +21,11 @@ from datetime import datetime, timezone
 
 from . import config
 from .clients import anthropic_client
-from .notion_service import guardar_log_evaluacion_anual
+from .notion_service import (
+    guardar_log_evaluacion_anual,
+    buscar_empleado_y_cargo,
+    obtener_criterios_evaluacion,
+)
 from .utils import slug_archivo
 from . import skill_informes_anual as sk
 
@@ -133,12 +137,103 @@ def _pregunta_area(etiqueta: str) -> str:
             f"Cuéntame tu opinión y qué destacarías.")
 
 
+_STOP = {"de", "del", "la", "el", "con", "al", "a", "los", "las", "y", "the", "of", "to"}
+
+
+def _sig_words(s: str) -> set:
+    return {w for w in (s or "").lower().split() if w not in _STOP}
+
+
+def _match_dim_label(etiqueta: str, criterios: dict) -> str | None:
+    """Empareja la etiqueta del área con la dimensión de Notion por solape de palabras."""
+    objetivo = _sig_words(etiqueta)
+    mejor, mejor_score = None, 0
+    for dim_label in criterios:
+        score = len(objetivo & _sig_words(dim_label))
+        if score > mejor_score:
+            mejor, mejor_score = dim_label, score
+    return mejor if mejor_score > 0 else None
+
+
+def _criterios_area(cargo: str, clave: str, etiqueta: str, idioma: str = "es") -> list[dict]:
+    """Criterios de esa área para el cargo y superiores, DESDE NOTION (fallback hardcoded).
+
+    Devuelve [{"nivel": "Manager", "criterios": [...]}, ...].
+    """
+    grupo = sk._grupo_por_cargo(cargo)
+    nivel = sk._nivel_cargo(cargo)
+    try:
+        crit_notion = obtener_criterios_evaluacion(grupo, idioma) or {}
+    except Exception:
+        crit_notion = {}
+
+    def _seleccionar(niveles_dict: dict) -> list[dict]:
+        # Normaliza las etiquetas de nivel (ES de Notion o inglesas del fallback)
+        # a la escala canonica para poder ordenarlas y seleccionarlas.
+        por_canon: dict = {}
+        for label, crits in niveles_dict.items():
+            canon = sk._nivel_canonico(label)
+            if canon and crits:
+                por_canon[canon] = (label, crits)
+        orden = sk._ORDEN_CARGO
+        idx = orden.index(nivel) if nivel and nivel in orden else -1
+        presentes = [c for c in orden if c in por_canon]
+        sel = presentes[max(0, idx - 1):] if idx >= 0 else presentes
+        return [{"nivel": por_canon[c][0], "criterios": por_canon[c][1]} for c in sel]
+
+    dim_label = _match_dim_label(etiqueta, crit_notion) if crit_notion else None
+    if dim_label:
+        return _seleccionar(crit_notion[dim_label])
+    # Fallback al diccionario hardcodeado (por clave)
+    dim_crit = sk._CRITERIOS_DTI.get(clave, {})
+    return _seleccionar(dim_crit) if dim_crit else []
+
+
+def _generar_diagnostico(cargo: str, etiqueta: str, criterios: list, evidencia: list) -> str:
+    """Claude analiza: a qué nivel está en esta área y qué le falta para subir (con citas)."""
+    if not anthropic_client or not evidencia:
+        return ""
+    crit_txt = "\n".join(f"[{c['nivel']}]: " + " / ".join(c['criterios']) for c in criterios) \
+        or "(sin criterios en Notion para esta área)"
+    ev_txt = "\n".join(f"[{e['cid']}] {e['label']} — {e['texto']}" for e in evidencia)
+    system = (
+        f"Eres el director de RRHH de IGENERIS. La persona tiene el cargo: {cargo or 'no especificado'}. "
+        f"Área: «{etiqueta}». Con los CRITERIOS por nivel (de Notion) y la EVIDENCIA (con citas), evalúa de "
+        "forma BREVE, directa y honesta: (1) a qué nivel está en esta área y POR QUÉ, citando la evidencia "
+        "concreta [X#]; (2) qué le falta (gaps concretos) para consolidar su nivel o para subir al siguiente. "
+        "Devuelve texto plano, 2-4 frases, con las citas [X#] correspondientes. NO inventes: solo lo que "
+        "la evidencia respalde."
+    )
+    user = f"CRITERIOS POR NIVEL:\n{crit_txt}\n\nEVIDENCIA:\n{ev_txt}"
+    try:
+        resp = anthropic_client.messages.create(
+            model="claude-sonnet-4-6", max_tokens=500, temperature=0, system=system,
+            messages=[{"role": "user", "content": user}],
+        )
+        return "".join(b.text for b in resp.content if b.type == "text").strip()
+    except Exception:
+        logging.exception("Fallo generando el diagnóstico del área")
+        return ""
+
+
 # ── API del módulo ────────────────────────────────────────────────────────────
+
+def _cargo_de(advisee: str) -> str:
+    """Cargo del empleado desde 'Lista de empleados' (columna Cargo) en Notion."""
+    try:
+        _, cargo = buscar_empleado_y_cargo(advisee)
+        return (cargo or "").strip()
+    except Exception:
+        logging.exception("No se pudo leer el cargo de '%s'", advisee)
+        return ""
+
 
 def iniciar_sesion(advisee: str, cargo: str = "") -> dict:
     """Crea o recupera la sesión. Devuelve identidad + progreso. NO genera Claude todavía."""
     slug = slug_archivo(advisee)
     sesion = _leer(slug)
+    if not cargo:
+        cargo = _cargo_de(advisee)  # cargo real desde Notion (Lista de empleados)
     if sesion is None:
         emp_data = sk.obtener_datos_empleado_anual(advisee)
         if not emp_data.get("opiniones_ca") and not emp_data.get("evaluaciones") \
@@ -194,6 +289,29 @@ def confirmar_identidad(advisee: str) -> dict:
     return {"ok": True}
 
 
+def eliminar_sesion(advisee: str) -> dict:
+    """Borra por completo la sesión anual (conversaciones, áreas confirmadas y
+    borradores generados) para poder empezar de cero. La siguiente llamada a
+    iniciar_sesion() reconstruye la sesión desde los datos de Notion."""
+    slug = slug_archivo(advisee)
+    ruta = _ruta_sesion(slug)
+    try:
+        if os.path.exists(ruta):
+            os.remove(ruta)
+    except Exception:
+        logging.exception("No se pudo eliminar la sesión anual %s", slug)
+        raise
+    # Limpia también los borradores ya generados, si los hubiera.
+    for nombre_fichero in (f"informe_anual_{slug}.html", f"informe_anual_{slug}.docx"):
+        f = os.path.join(config.CARPETA_WEB, nombre_fichero)
+        try:
+            if os.path.exists(f):
+                os.remove(f)
+        except Exception:
+            logging.exception("No se pudo eliminar el borrador %s", nombre_fichero)
+    return {"ok": True}
+
+
 def obtener_area(advisee: str, clave: str) -> dict:
     """Datos de un área: evidencia que Claude consideró + pregunta abierta + conversación."""
     slug = slug_archivo(advisee)
@@ -205,11 +323,33 @@ def obtener_area(advisee: str, clave: str) -> dict:
         raise ValueError(f"Sección desconocida: {clave}")
     comentarios = _asegurar_comentarios(slug, sesion)
     _, fuentes = _emp_y_fuentes(sesion)
-    area = sesion.get("areas", {}).get(clave, {})
+    evidencia = _evidencia_de_area(comentarios, fuentes, clave)
+    area = sesion.setdefault("areas", {}).setdefault(
+        clave, {"conversacion": [], "propuesta": "", "confirmada": False})
+
+    # Criterios del área (siempre, sin API). Se muestran ANTES de que el CA opine.
+    # El DIAGNÓSTICO (nivel + gaps) NO se genera aquí: solo tras la opinión inicial del CA.
+    if not area.get("criterios"):
+        area["criterios"] = _criterios_area(sesion.get("cargo", ""), clave, secciones[clave])
+        if area["criterios"]:
+            _guardar(slug, sesion)
+
+    # En el panel solo se muestran los criterios del cargo actual; el rango completo
+    # (area["criterios"]) se conserva para el diagnostico/comparacion posterior.
+    nivel_actual = sk._nivel_cargo(sesion.get("cargo", ""))
+    criterios_full = area.get("criterios", [])
+    criterios_mostrar = (
+        [c for c in criterios_full if sk._nivel_canonico(c.get("nivel", "")) == nivel_actual]
+        if nivel_actual else criterios_full
+    )
+
     return {
         "clave": clave,
         "etiqueta": secciones[clave],
-        "evidencia": _evidencia_de_area(comentarios, fuentes, clave),
+        "cargo": sesion.get("cargo", ""),
+        "evidencia": evidencia,
+        "criterios": criterios_mostrar,
+        "diagnostico": area.get("diagnostico", ""),  # vacío hasta que el CA mande su opinión
         "pregunta": _pregunta_area(secciones[clave]),
         "conversacion": area.get("conversacion", []),
         "propuesta": area.get("propuesta", ""),
@@ -217,31 +357,66 @@ def obtener_area(advisee: str, clave: str) -> dict:
     }
 
 
-def _claude_conversa_area(etiqueta: str, evidencia: list, claude_bullets: str, conversacion: list) -> dict:
+def _claude_conversa_area(etiqueta: str, evidencia: list, claude_bullets: str, conversacion: list,
+                          criterios: list | None = None, diagnostico: str = "", cargo: str = "") -> dict:
     """Llama a Claude para reaccionar a los puntos del CA y proponer los bullets del área."""
     ev_txt = "\n".join(f"[{e['cid']}] {e['label']} — {e['texto']}" for e in evidencia) or "(sin evidencia)"
     conv_txt = "\n".join(f"{'CA' if m['rol'] == 'ca' else 'IA'}: {m['texto']}" for m in conversacion)
+    crit_txt = "\n".join(f"[{c['nivel']}]: " + " / ".join(c['criterios']) for c in (criterios or [])) \
+        or "(sin criterios en Notion)"
     if not anthropic_client:
         return {"mensaje": "(IA no disponible) Tomo nota de tus puntos.", "propuesta": claude_bullets}
-    system = (
-        f"Eres el director de RRHH de IGENERIS. Estás co-redactando con el CA el área «{etiqueta}» del "
-        "informe anual. Tienes la EVIDENCIA (con citas [E3]/[O1]/[P2]/[S1]/[B1]) y TU VALORACIÓN basada "
-        "en ella. El CA te da sus puntos. Responde de forma conversacional y BREVE: di qué pondrías tú, "
-        "señala dónde coincides o difieres con el CA, y pregúntale su opinión para cerrar el área. "
-        "NO inventes: cada afirmación de la propuesta debe llevar su cita [X#] de la evidencia. "
+
+    instrucciones = (
+        "Eres el director de RRHH de IGENERIS: riguroso, exigente y directo. Co-rediges con el CA el área "
+        f"«{etiqueta}» del informe anual. Tu papel NO es complacer: eres un SPARRING CRÍTICO que ayuda al "
+        "CA a pensar mejor y a que el informe sea justo y esté respaldado por datos. Sé conversacional pero "
+        "breve e incisivo.\n\n"
+        "REGLAS:\n"
+        "- DESAFÍA activamente: cuestiona las valoraciones del CA. Si algo que dice NO está respaldado por la "
+        "evidencia, dilo sin rodeos y pídele que lo justifique. Señala posibles sesgos: recencia (dar más "
+        "peso a lo último), efecto halo, basarse en un solo evaluador, o generalizar sin base. Haz de abogado "
+        "del diablo cuando toque.\n"
+        "- DEFIENDE con datos: cuando propongas algo, respáldalo con su cita [X#]. Si el CA propone una "
+        "alternativa, contrástala con la evidencia; si no está respaldada, NO la aceptes solo por complacer.\n"
+        "- CEDE solo si el CA aporta un argumento sólido o evidencia, o si es una decisión que le corresponde "
+        "a él como CA (y en ese caso dilo claramente).\n"
+        "- CRITERIOS Y NIVEL: apóyate en los CRITERIOS por cargo (de Notion) y en el DIAGNÓSTICO de nivel. "
+        "Juzga contra el criterio del cargo de la persona, no contra tu opinión; y cuando ayude, recuérdale "
+        "al CA a qué nivel está y qué le falta para subir.\n"
+        "- REFERENCIAS: si el CA pregunta por una referencia (p. ej. 'referencia de E3', '¿qué dice [O1]?'), "
+        "responde con el TEXTO LITERAL de esa fuente (tipo, proyecto/evaluador, fecha y contenido).\n"
+        "- NO inventes: cada afirmación de la propuesta debe llevar su cita [X#] de la evidencia.\n\n"
         'Devuelve SOLO un JSON válido: {"mensaje": "tu respuesta conversacional", '
         '"propuesta": "los bullets finales del área, uno por línea, cada uno con su cita"}.'
     )
-    user = (
-        f"ÁREA: {etiqueta}\n\nEVIDENCIA:\n{ev_txt}\n\n"
-        f"TU VALORACIÓN INICIAL:\n{claude_bullets or '(sin información)'}\n\n"
-        f"CONVERSACIÓN:\n{conv_txt}"
+    # La evidencia, criterios, diagnóstico y tu valoración son ESTÁTICOS durante todo el debate del área
+    # → se cachean (prompt caching): los turnos siguientes casi no pagan esos tokens (mismo modelo, menos API).
+    contexto_estatico = (
+        f"ÁREA: {etiqueta}\nCARGO DE LA PERSONA: {cargo or 'no especificado'}\n\n"
+        f"CRITERIOS POR NIVEL (Notion):\n{crit_txt}\n\n"
+        f"DIAGNÓSTICO DE NIVEL:\n{diagnostico or '(sin diagnóstico)'}\n\n"
+        f"EVIDENCIA:\n{ev_txt}\n\n"
+        f"TU VALORACIÓN INICIAL:\n{claude_bullets or '(sin información)'}"
     )
-    try:
-        resp = anthropic_client.messages.create(
-            model="claude-sonnet-4-6", max_tokens=1500, temperature=0, system=system,
-            messages=[{"role": "user", "content": user}],
+    def _crear(system_arg):
+        return anthropic_client.messages.create(
+            model="claude-sonnet-4-6", max_tokens=1500, temperature=0,
+            system=system_arg,
+            messages=[{"role": "user", "content": f"CONVERSACIÓN:\n{conv_txt}"}],
         )
+
+    system_cacheado = [
+        {"type": "text", "text": instrucciones},
+        {"type": "text", "text": contexto_estatico, "cache_control": {"type": "ephemeral"}},
+    ]
+    try:
+        try:
+            resp = _crear(system_cacheado)
+        except Exception:
+            # Si el prompt caching no está soportado, reintenta sin caché (misma calidad, sin ahorro)
+            logging.warning("Prompt caching no disponible; reintento sin caché")
+            resp = _crear(instrucciones + "\n\n" + contexto_estatico)
         t = "".join(b.text for b in resp.content if b.type == "text").strip()
         if t.startswith("```"):
             t = t.split("```", 2)[1]
@@ -276,13 +451,23 @@ def responder_area(advisee: str, clave: str, texto: str) -> dict:
 
     area = sesion.setdefault("areas", {}).setdefault(
         clave, {"conversacion": [], "propuesta": "", "confirmada": False})
+    if "criterios" not in area:
+        area["criterios"] = _criterios_area(sesion.get("cargo", ""), clave, secciones[clave])
+    # El DIAGNÓSTICO (nivel + gaps) se genera aquí: solo cuando el CA manda su opinión inicial.
+    if "diagnostico" not in area:
+        area["diagnostico"] = _generar_diagnostico(
+            sesion.get("cargo", ""), secciones[clave], area.get("criterios") or [], evidencia)
     area["conversacion"].append({"rol": "ca", "texto": texto.strip()})
 
-    res = _claude_conversa_area(secciones[clave], evidencia, claude_bullets, area["conversacion"])
+    res = _claude_conversa_area(
+        secciones[clave], evidencia, claude_bullets, area["conversacion"],
+        criterios=area.get("criterios"), diagnostico=area.get("diagnostico", ""),
+        cargo=sesion.get("cargo", ""))
     area["conversacion"].append({"rol": "ia", "texto": res["mensaje"]})
     area["propuesta"] = res["propuesta"] or area.get("propuesta", "")
     _guardar(slug, sesion)
-    return {"mensaje": res["mensaje"], "propuesta": area["propuesta"], "conversacion": area["conversacion"]}
+    return {"mensaje": res["mensaje"], "propuesta": area["propuesta"],
+            "conversacion": area["conversacion"], "diagnostico": area.get("diagnostico", "")}
 
 
 def confirmar_area(advisee: str, clave: str) -> dict:

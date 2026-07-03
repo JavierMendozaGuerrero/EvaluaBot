@@ -409,6 +409,11 @@ button:disabled, .button:disabled { opacity: .45; cursor: not-allowed; }
 .nota-ca-texto { margin: 0; font-size: 14px; white-space: pre-wrap; line-height: 1.6; }
 .nota-ca-resumen-wrap { margin-bottom: 10px; }
 .nota-ca-resumen-wrap summary { cursor: pointer; margin-bottom: 6px; }
+.notas-ca-dictado-fila { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+.notas-ca-dictado { align-self: flex-start; }
+.notas-ca-dictado.grabando { background: #d64545; border-color: #d64545; color: #fff; animation: notas-ca-pulso 1.2s ease-in-out infinite; }
+.notas-ca-dictado-hint { color: var(--text-55); }
+@keyframes notas-ca-pulso { 0%, 100% { opacity: 1; } 50% { opacity: 0.55; } }
 
 /* ── Opiniones ── */
 .opiniones-header { display: flex; justify-content: space-between; align-items: flex-start; gap: 16px; margin-bottom: 20px; }

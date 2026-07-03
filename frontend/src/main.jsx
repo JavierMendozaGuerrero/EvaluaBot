@@ -3155,6 +3155,12 @@ function AdviseeDetail({ token, advisee, advisees, onBack, onNavigate }) {
   const [nuevaNota, setNuevaNota] = useState("");
   const [guardandoNota, setGuardandoNota] = useState(false);
   const [notaError, setNotaError] = useState("");
+  const [grabando, setGrabando] = useState(false);
+  const [dictadoError, setDictadoError] = useState("");
+  const recognitionRef = React.useRef(null);
+  const baseNotaRef = React.useRef("");
+  const dictadoSoportado =
+    typeof window !== "undefined" && !!(window.SpeechRecognition || window.webkitSpeechRecognition);
   const [generandoBorrador, setGenerandoBorrador] = useState(false);
   const [borradorError, setBorradorError] = useState("");
   const [opinionesDocOpen, setOpinionesDocOpen] = useState(false);
@@ -3296,6 +3302,54 @@ function AdviseeDetail({ token, advisee, advisees, onBack, onNavigate }) {
     }
   }
 
+  // Detiene el reconocimiento de voz si el componente se desmonta a media grabación.
+  useEffect(() => () => { try { recognitionRef.current?.stop(); } catch {} }, []);
+
+  // Dictado por voz con el reconocimiento nativo del navegador (Web Speech API):
+  // gratuito, sin backend ni API keys. Transcribe en vivo y va rellenando el textarea
+  // para que la persona lo revise y edite antes de guardar. El idioma del
+  // reconocimiento sigue al idioma activo de la web (es/en/pt).
+  function toggleDictado() {
+    if (grabando) {
+      try { recognitionRef.current?.stop(); } catch {}
+      return;
+    }
+    const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+    if (!SR) {
+      setDictadoError(t("ad.dictation_unsupported"));
+      return;
+    }
+    setDictadoError("");
+    const rec = new SR();
+    const LANGS = { es: "es-ES", en: "en-US", pt: "pt-PT" };
+    rec.lang = LANGS[getLang()] || "es-ES";
+    rec.continuous = true;
+    rec.interimResults = true;
+    // Punto de partida: lo que ya hubiera escrito, para dictar a continuación.
+    baseNotaRef.current = nuevaNota ? nuevaNota.trimEnd() + " " : "";
+    rec.onresult = (e) => {
+      let texto = "";
+      for (let i = 0; i < e.results.length; i++) texto += e.results[i][0].transcript;
+      setNuevaNota(baseNotaRef.current + texto);
+    };
+    rec.onerror = (e) => {
+      if (e.error === "not-allowed" || e.error === "service-not-allowed") {
+        setDictadoError(t("ad.dictation_denied"));
+      } else if (e.error !== "no-speech" && e.error !== "aborted") {
+        setDictadoError(t("ad.dictation_error"));
+      }
+      setGrabando(false);
+    };
+    rec.onend = () => setGrabando(false);
+    recognitionRef.current = rec;
+    try {
+      rec.start();
+      setGrabando(true);
+    } catch {
+      setDictadoError(t("ad.dictation_error"));
+    }
+  }
+
   async function guardarNota(e) {
     e.preventDefault();
     const texto = nuevaNota.trim();
@@ -3420,6 +3474,19 @@ function AdviseeDetail({ token, advisee, advisees, onBack, onNavigate }) {
               onChange={(e) => setNuevaNota(e.target.value)}
               rows={4}
             />
+            {dictadoSoportado && (
+              <div className="notas-ca-dictado-fila">
+                <button
+                  type="button"
+                  className={grabando ? "notas-ca-dictado grabando" : "notas-ca-dictado secondary"}
+                  onClick={toggleDictado}
+                >
+                  {grabando ? t("ad.dictation_stop") : t("ad.dictation_start")}
+                </button>
+                {grabando && <span className="notas-ca-dictado-hint fine">{t("ad.dictation_listening")}</span>}
+              </div>
+            )}
+            {dictadoError && <p className="form-error">{dictadoError}</p>}
             {notaError && <p className="form-error">{notaError}</p>}
             <button type="submit" disabled={guardandoNota || !nuevaNota.trim()}>
               {guardandoNota ? t("common.saving") : t("ad.save_note")}
@@ -4026,15 +4093,32 @@ function EvaluacionesProyectoPage({ token, user, proyectos, onBack, onNavigate, 
 // ---------------------------------------------------------------------------
 
 function FormularioEvaluacionProyecto({ token, user, proyecto, tipo, manager, evaluadoProp, onBack, onEnviado }) {
+  const persona = user?.persona || user?.username || "";
+  const draftKey = `evaluabot_borrador:${persona}:${proyecto}:${tipo}`;
+
+  // Lee el borrador guardado una sola vez, en el primer render, para inicializar
+  // el estado directamente (evita carreras con los efectos de autoguardado).
+  const borradorInicial = useMemo(() => {
+    try {
+      const raw = localStorage.getItem(draftKey);
+      if (raw) {
+        const d = JSON.parse(raw);
+        if (d && d.respuestas && Object.keys(d.respuestas).length > 0) return d;
+      }
+    } catch { /* ignorar borradores corruptos */ }
+    return null;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   const [preguntas, setPreguntas] = useState(null);
   const [todosEmpleados, setTodosEmpleados] = useState([]);
-  const [evaluado, setEvaluado] = useState("");
-  const [respuestas, setRespuestas] = useState({});
+  const [evaluado, setEvaluado] = useState(borradorInicial?.evaluado || "");
+  const [respuestas, setRespuestas] = useState(borradorInicial?.respuestas || {});
   const [enviando, setEnviando] = useState(false);
   const [status, setStatus] = useState("");
   const [enviado, setEnviado] = useState(false);
-
-  const persona = user?.persona || user?.username || "";
+  const [borradorMsg, setBorradorMsg] = useState("");
+  const [borradorRestaurado, setBorradorRestaurado] = useState(Boolean(borradorInicial));
 
   const LABELS_TIPOS = {
     autoevaluacion: t("fep.label_auto"),
@@ -4062,8 +4146,38 @@ function FormularioEvaluacionProyecto({ token, user, proyecto, tipo, manager, ev
       .catch(() => {});
   }, [token, necesitaSelector]);
 
+  // Autoguarda el progreso en cada cambio (para poder completar después).
+  // Nunca borra el borrador aquí: eso se hace solo al enviar o al descartar,
+  // para no perder datos por una carrera con la inicialización del estado.
+  useEffect(() => {
+    if (enviado) return;
+    if (Object.keys(respuestas).length === 0) return;
+    try {
+      localStorage.setItem(draftKey, JSON.stringify({ evaluado, respuestas, ts: Date.now() }));
+    } catch { /* almacenamiento no disponible */ }
+  }, [respuestas, evaluado, draftKey, enviado]);
+
   function setRespuesta(id, valor) {
     setRespuestas((prev) => ({ ...prev, [id]: valor }));
+  }
+
+  function guardarProgreso() {
+    try {
+      localStorage.setItem(draftKey, JSON.stringify({ evaluado, respuestas, ts: Date.now() }));
+      setStatus("");
+      setBorradorMsg(t("fep.progress_saved"));
+    } catch {
+      setBorradorMsg(t("fep.err_save"));
+    }
+  }
+
+  function descartarBorrador() {
+    try { localStorage.removeItem(draftKey); } catch { /* noop */ }
+    setRespuestas({});
+    setEvaluado("");
+    setBorradorRestaurado(false);
+    setBorradorMsg("");
+    setStatus("");
   }
 
   const evaluadoFinal = necesitaSelector ? evaluado : evaluadoFijo;
@@ -4071,12 +4185,13 @@ function FormularioEvaluacionProyecto({ token, user, proyecto, tipo, manager, ev
   async function enviar(e) {
     e.preventDefault();
     if (!evaluadoFinal) { setStatus(t("fep.err_select_person")); return; }
-    if (preguntas && preguntas.some((p) => p.tipo !== "abierta" && !respuestas[p.id])) {
+    if (preguntas && preguntas.some((p) => !String(respuestas[p.id] || "").trim())) {
       setStatus(t("fep.err_required"));
       return;
     }
     setEnviando(true);
     setStatus("");
+    setBorradorMsg("");
     try {
       const data = await apiRequest("/api/guardar-evaluacion-proyecto", {
         token,
@@ -4086,6 +4201,7 @@ function FormularioEvaluacionProyecto({ token, user, proyecto, tipo, manager, ev
       if (data.ok) {
         setEnviado(true);
         setStatus(t("fep.saved_notion"));
+        try { localStorage.removeItem(draftKey); } catch { /* noop */ }
         if (onEnviado) onEnviado();
       } else {
         setStatus(data.error || t("fep.err_save"));
@@ -4137,6 +4253,12 @@ function FormularioEvaluacionProyecto({ token, user, proyecto, tipo, manager, ev
         </section>
       ) : (
         <form className="panel" style={{ marginTop: "32px" }} onSubmit={enviar}>
+          {borradorRestaurado && (
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, flexWrap: "wrap", background: "#F5F5F7", border: "1px solid #DBDBDE", borderRadius: "8px", padding: "12px 14px", marginBottom: "20px" }}>
+              <span className="fine" style={{ margin: 0 }}>{t("fep.draft_restored")}</span>
+              <button type="button" className="link-button" onClick={descartarBorrador}>{t("fep.discard_draft")}</button>
+            </div>
+          )}
           {necesitaSelector && (
             <>
               <label>{t("fep.person_to_eval")}</label>
@@ -4181,7 +4303,7 @@ function FormularioEvaluacionProyecto({ token, user, proyecto, tipo, manager, ev
                   <div style={{ marginTop: "18px" }}>
                     {mostrarLabel && (
                       <label style={{ fontWeight: 400, fontSize: "14px", marginBottom: "12px", display: "block", color: "#000000" }}>
-                        {p.texto}
+                        {p.texto} <span style={{ color: "#C1121F" }} aria-hidden="true">*</span>
                       </label>
                     )}
                     {p.tipo === "escala_1_5" && (
@@ -4256,9 +4378,20 @@ function FormularioEvaluacionProyecto({ token, user, proyecto, tipo, manager, ev
           })()}
 
           {status && <p className="error" style={{ marginTop: "16px" }}>{status}</p>}
+          {borradorMsg && (
+            <p className="fine" style={{ marginTop: "16px", color: "#166534" }}>{borradorMsg}</p>
+          )}
           <div className="actions">
             <button type="submit" disabled={enviando || preguntas.length === 0}>
               {enviando ? t("common.saving") : t("fep.submit")}
+            </button>
+            <button
+              type="button"
+              className="secondary"
+              onClick={guardarProgreso}
+              disabled={enviando || Object.keys(respuestas).length === 0}
+            >
+              {t("fep.save_progress")}
             </button>
           </div>
         </form>
@@ -4613,6 +4746,9 @@ function EvaluacionAnualWizard({ token, advisee, onBack }) {
   const [evidOpen, setEvidOpen] = useState(true);
   const [finUrls, setFinUrls] = useState(null);
   const [descInfo, setDescInfo] = useState(false);
+  const [citaSel, setCitaSel] = useState(null);  // cid de la cita abierta en el chat
+  const [resetting, setResetting] = useState(false);
+  const [reloadNonce, setReloadNonce] = useState(0);
 
   useEffect(() => {
     let alive = true;
@@ -4626,13 +4762,13 @@ function EvaluacionAnualWizard({ token, advisee, onBack }) {
       })
       .catch((e) => { if (alive) { setError(e.message); setStep("error"); } });
     return () => { alive = false; };
-  }, [token, nombre]);
+  }, [token, nombre, reloadNonce]);
 
   useEffect(() => {
     if (step !== "loop" || !est) return;
     const sec = est.secciones[secIdx];
     if (!sec) return;
-    setArea(null); setInput(""); setEvidOpen(true); setError("");
+    setArea(null); setInput(""); setEvidOpen(true); setError(""); setCitaSel(null);
     apiRequest(`/api/eval-anual/area?evaluado=${encodeURIComponent(nombre)}&clave=${encodeURIComponent(sec.clave)}`, { token })
       .then(setArea)
       .catch((e) => setError(e.message));
@@ -4652,7 +4788,7 @@ function EvaluacionAnualWizard({ token, advisee, onBack }) {
     setBusy(true); setError("");
     try {
       const r = await apiRequest("/api/eval-anual/responder-area", { token, method: "POST", body: { evaluado: nombre, clave: area.clave, texto: input } });
-      setArea((a) => ({ ...a, conversacion: r.conversacion, propuesta: r.propuesta }));
+      setArea((a) => ({ ...a, conversacion: r.conversacion, propuesta: r.propuesta, diagnostico: r.diagnostico ?? a.diagnostico }));
       setInput(""); setEvidOpen(false);
     } catch (e) { setError(e.message); } finally { setBusy(false); }
   }
@@ -4678,6 +4814,23 @@ function EvaluacionAnualWizard({ token, advisee, onBack }) {
 
   function abrirHtml(path) {
     window.open(apiUrl(`${path}&token=${encodeURIComponent(token)}`), "_blank", "noopener,noreferrer");
+  }
+
+  // Borra por completo la sesión (conversaciones, áreas confirmadas y borradores)
+  // y vuelve a arrancar el asistente desde cero.
+  async function eliminarYEmpezarDeCero() {
+    if (!window.confirm(t("eaw.reset_confirm"))) return;
+    setResetting(true); setError("");
+    try {
+      await apiRequest("/api/eval-anual/eliminar", { token, method: "POST", body: { evaluado: nombre } });
+      setEst(null); setArea(null); setInput(""); setFinUrls(null);
+      setSecIdx(0); setCitaSel(null); setStep("loading");
+      setReloadNonce((n) => n + 1);
+    } catch (e) {
+      setError(e.message);
+    } finally {
+      setResetting(false);
+    }
   }
 
   // Descarga un PDF con TODA la información recibida por la persona (las 4 fuentes juntas).
@@ -4716,9 +4869,17 @@ function EvaluacionAnualWizard({ token, advisee, onBack }) {
         <p className="eyebrow">{t("eaw.eyebrow")}</p>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 16, flexWrap: "wrap" }}>
           <h1 style={{ marginBottom: 6 }}>{nombre}</h1>
-          <button className="secondary" onClick={descargarInfoCompleta} disabled={descInfo}>
-            {descInfo ? t("eaw.generating") : t("eaw.full_info")}
-          </button>
+          <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+            {est && step !== "loading" && step !== "identidad" && (
+              <button className="secondary" onClick={eliminarYEmpezarDeCero} disabled={resetting || busy}
+                style={{ borderColor: "#C1121F", color: "#C1121F" }}>
+                {resetting ? t("eaw.resetting") : t("eaw.reset_all")}
+              </button>
+            )}
+            <button className="secondary" onClick={descargarInfoCompleta} disabled={descInfo}>
+              {descInfo ? t("eaw.generating") : t("eaw.full_info")}
+            </button>
+          </div>
         </div>
         {est && <p className="fine" style={{ marginBottom: 24 }}>{t("eaw.year_stat", { anio: est.anio, done: est.seccionesConfirmadas, total: est.totalSecciones })}</p>}
         {error && <p className="form-error">{error}</p>}
@@ -4747,10 +4908,45 @@ function EvaluacionAnualWizard({ token, advisee, onBack }) {
   if (step === "loop") {
     if (!area) return shell(<p className="fine">{t("eaw.loading_area")}</p>);
     const tieneConv = area.conversacion && area.conversacion.length > 0;
+    const evidMap = {};
+    (area.evidencia || []).forEach((e) => { evidMap[e.cid] = e; });
+    const renderCitas = (texto) => String(texto || "").split(/(\[[EOPSB]\d+\])/g).map((p, k) => {
+      const mm = p.match(/^\[([EOPSB]\d+)\]$/);
+      if (!mm) return p;
+      return (
+        <button key={k} type="button" onClick={() => setCitaSel(mm[1])}
+          style={{ background: "none", border: "none", padding: "0 1px", minHeight: 0, height: "auto",
+                   color: "#0563C1", fontWeight: 700, cursor: "pointer", fontSize: "0.8em", verticalAlign: "super" }}>
+          {p}
+        </button>
+      );
+    });
+    const citaFicha = citaSel ? evidMap[citaSel] : null;
     return shell(
       <section className="panel">
         <p className="eyebrow">{t("eaw.area_n", { i: secIdx + 1, total: est.totalSecciones })}</p>
         <h2 style={{ marginTop: 0 }}>{area.etiqueta}</h2>
+
+        <details open style={{ marginBottom: 16, background: "#f7f7f4", borderRadius: 8, padding: "10px 14px" }}>
+          <summary style={{ cursor: "pointer", fontWeight: 700, fontSize: 14 }}>
+            {t("eaw.criteria_panel")}{area.cargo ? ` · ${area.cargo}` : ""}
+          </summary>
+          {/* El diagnóstico (nivel + gaps) solo aparece tras enviar tu opinión inicial. */}
+          {area.diagnostico && (
+            <p style={{ margin: "10px 0 0", whiteSpace: "pre-line", fontSize: 14 }}>{renderCitas(area.diagnostico)}</p>
+          )}
+          {(area.criterios || []).map((c, i) => (
+            <div key={i} style={{ marginTop: 10 }}>
+              <p className="fine" style={{ margin: 0, fontWeight: 700 }}>{c.nivel}</p>
+              <ul className="fine" style={{ margin: "2px 0 0", paddingLeft: 18 }}>
+                {c.criterios.map((cr, k) => <li key={k}>{cr}</li>)}
+              </ul>
+            </div>
+          ))}
+          {(!area.criterios || area.criterios.length === 0) && !area.diagnostico && (
+            <p className="fine" style={{ margin: "10px 0 0" }}>{t("eaw.no_criteria_position")}</p>
+          )}
+        </details>
 
         <details open={evidOpen} onToggle={(e) => setEvidOpen(e.target.open)} style={{ marginBottom: 16 }}>
           <summary className="fine" style={{ cursor: "pointer" }}>
@@ -4766,18 +4962,35 @@ function EvaluacionAnualWizard({ token, advisee, onBack }) {
         </details>
 
         {tieneConv && (
-          <div style={{ marginBottom: 14 }}>
+          <div style={{ marginBottom: 8 }}>
             {area.conversacion.map((m, i) => (
               <div key={i} style={{ margin: "10px 0", textAlign: m.rol === "ca" ? "right" : "left" }}>
                 <span style={{
                   display: "inline-block", maxWidth: "85%", textAlign: "left", padding: "10px 14px",
                   borderRadius: 12, whiteSpace: "pre-line", fontSize: 14,
                   background: m.rol === "ca" ? "#101010" : "#f4f4f1", color: m.rol === "ca" ? "#fff" : "#101010",
-                }}>{m.texto}</span>
+                }}>{m.rol === "ia" ? renderCitas(m.texto) : m.texto}</span>
               </div>
             ))}
           </div>
         )}
+
+        {citaSel && (
+          <div className="card" style={{ marginBottom: 12, borderLeft: "3px solid #0563C1" }}>
+            <p style={{ margin: 0, display: "flex", justifyContent: "space-between", gap: 8 }}>
+              <strong>[{citaSel}]{citaFicha ? ` ${citaFicha.label}` : ""}</strong>
+              <button type="button" className="link-button" onClick={() => setCitaSel(null)}>✕</button>
+            </p>
+            {citaFicha
+              ? <>
+                  {citaFicha.evaluador && <p className="fine" style={{ margin: "2px 0 0" }}>{citaFicha.evaluador}</p>}
+                  <p className="fine" style={{ margin: "4px 0 0", whiteSpace: "pre-line" }}>{citaFicha.texto || "—"}</p>
+                </>
+              : <p className="fine" style={{ margin: "4px 0 0" }}>{t("eaw.ref_unavailable")}</p>}
+          </div>
+        )}
+
+        {tieneConv && <p className="fine" style={{ margin: "0 0 12px" }}>{t("eaw.ref_hint")}</p>}
 
         {!tieneConv && <p style={{ marginBottom: 10 }}>{area.pregunta}</p>}
 

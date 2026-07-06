@@ -7,7 +7,7 @@ from datetime import datetime, timedelta, timezone
 from slack_bolt.adapter.socket_mode import SocketModeHandler
 
 from . import config
-from .i18n import t, boton_idioma_slack
+from .i18n import t, botones_idioma_slack
 from .conversation_back import boton_atras, fila_atras, limpiar_historial, pop_historial, push_historial, tiene_historial
 from .slack_lists import añadir_pendiente, enlace_lista_pendientes, quitar_pendiente
 from .eval_tracking import registrar_envio_por_slack_id, marcar_completada_por_slack_id
@@ -30,7 +30,7 @@ from .notion_service import (
     obtener_area_por_slack_id,
     obtener_cargo_por_slack_id,
     idioma_por_slack_id,
-    toggle_idioma_slack,
+    guardar_idioma_por_slack_id,
     invalidar_cache_empleados,
     obtener_config_calendario,
     obtener_ejemplos_guia,
@@ -77,11 +77,12 @@ def _editar_dm_inicial_mensual(user_id, idioma=None):
 def _bloques_dm_mensual(idioma, enlace_pendientes=None):
     """Bloques del DM inicial de la evaluación mensual, con botón de cambio de idioma en la cabecera."""
     bloques = [
+        botones_idioma_slack("lang_set_mensual"),
         {
             "type": "section",
-            "text": {"type": "mrkdwn", "text": t("bm.pending_intro", idioma)},
-            "accessory": boton_idioma_slack(idioma, "lang_toggle_mensual"),
+            "text": {"type": "mrkdwn", "text": t("bm.pending_header", idioma)},
         },
+        {"type": "section", "text": {"type": "mrkdwn", "text": t("bm.pending_body", idioma)}},
         {"type": "context", "elements": [{"type": "mrkdwn", "text": t("bot.no_inteligente", idioma)}]},
         {"type": "section", "text": {"type": "mrkdwn", "text": t("bm.example_label", idioma)}},
         {
@@ -2377,12 +2378,13 @@ def _handle_mensual_ver_ejemplo(ack, body, logger):
         logger.exception("Error actualizando modal de ejemplo mensual")
 
 
-@slack_app.action("lang_toggle_mensual")
-def _handle_lang_toggle_mensual(ack, body, logger):
+@slack_app.action(re.compile(r"^lang_set_mensual_(es|en|pt)$"))
+def _handle_lang_set_mensual(ack, body, logger):
     ack()
     try:
         user_id = body.get("user", {}).get("id", "")
-        nuevo = toggle_idioma_slack(user_id)
+        idioma_elegido = body["actions"][0]["value"]
+        nuevo = guardar_idioma_por_slack_id(user_id, idioma_elegido)
         channel = (body.get("channel") or {}).get("id") or (body.get("container") or {}).get("channel_id")
         ts = (body.get("message") or {}).get("ts") or (body.get("container") or {}).get("message_ts")
         if channel and ts:

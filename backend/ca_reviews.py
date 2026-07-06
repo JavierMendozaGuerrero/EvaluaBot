@@ -18,6 +18,7 @@ from . import config
 from .clients import notion, slack_app
 from .conversation_back import boton_atras, fila_atras, limpiar_historial, pop_historial, push_historial, tiene_historial
 from .slack_lists import añadir_pendiente, enlace_lista_pendientes, quitar_pendiente
+from .eval_tracking import registrar_envio_por_slack_id, marcar_completada_por_slack_id
 from .i18n import t, boton_idioma_slack
 from .notion_service import (
     _coincide_parent_bbdd,
@@ -690,6 +691,7 @@ def _bloques_dm_ca(idioma, enlace_pendientes=None):
             "text": {"type": "mrkdwn", "text": t("bc.pending_intro", idioma)},
             "accessory": boton_idioma_slack(idioma, "lang_toggle_ca"),
         },
+        {"type": "context", "elements": [{"type": "mrkdwn", "text": t("bot.no_inteligente", idioma)}]},
         {"type": "section", "text": {"type": "mrkdwn", "text": t("bp.example_label", idioma)}},
         {
             "type": "actions",
@@ -751,11 +753,30 @@ def enviar_pregunta_inicial_ca() -> None:
                     ca_hora_dm[user_id] = time.time()
                     conversaciones_ca.pop(user_id, None)
                 añadir_pendiente("ca", user_id, t("bc.pendientes_titulo", _idi))
+                registrar_envio_por_slack_id(user_id, "ca")
                 logging.info(f"Mensaje CA enviado por DM a {user_id}, ts={resp['ts']}")
             except Exception:
                 logging.exception(f"Error enviando DM CA a {user_id}")
     except Exception:
         logging.exception("Error en enviar_pregunta_inicial_ca")
+
+
+def _editar_dm_inicial_ca(user_id, idioma=None):
+    """Sustituye el mensaje inicial (raíz del hilo) de la evaluación CA por el
+    resumen de 'completada'. Se llama al marcar la evaluación como completada."""
+    ts = ca_dm_ts.get(user_id)
+    canal = ca_dm_canal.get(user_id)
+    if not ts or not canal:
+        return
+    idioma = idioma or idioma_por_slack_id(user_id)
+    texto = t("bc.dm_completada", idioma)
+    try:
+        slack_app.client.chat_update(
+            channel=canal, ts=ts, text=texto,
+            blocks=[{"type": "section", "text": {"type": "mrkdwn", "text": texto}}],
+        )
+    except Exception:
+        logging.exception("No se pudo editar el DM inicial CA de %s", user_id)
 
 
 def _enviar_lista_advisees(user_id, channel, thread_ts, estado, idioma, logger, prefijo=""):
@@ -772,6 +793,8 @@ def _enviar_lista_advisees(user_id, channel, thread_ts, estado, idioma, logger, 
             if user_id in conversaciones_ca:
                 conversaciones_ca[user_id]["modo"] = "terminado"
         quitar_pendiente("ca", user_id)
+        marcar_completada_por_slack_id(user_id, "ca")
+        _editar_dm_inicial_ca(user_id, idioma)
         slack_app.client.chat_postMessage(
             channel=channel, thread_ts=thread_ts, text=prefijo + t("bc.all_advisees_done", idioma),
         )

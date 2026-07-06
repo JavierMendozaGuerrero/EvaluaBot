@@ -4,7 +4,7 @@ import re
 import threading
 import time
 import unicodedata
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from difflib import SequenceMatcher
 
 from . import config
@@ -3973,11 +3973,82 @@ def obtener_preguntas_seguimiento_ca(idioma: str = "es") -> dict:
         return dict(PREGUNTAS_CA_DEFAULT)
 
 
+# --- Seguimiento personal: una BD por persona ("Seg Personal - {Nombre}") ----
+# Estructura (como las evaluaciones mensuales): página contenedora
+# "Resultados Seguimiento personal" (bajo "Resultados Evaluaciones") con una BD por empleado.
+_PREFIJO_SEG_PERSONAL = "Seg Personal - "
+_NOMBRE_PAGINA_SEG_PERSONAL = "Resultados Seguimiento personal"
+_cache_seg_personal_por_nombre: dict = {}   # titulo -> db_id
+_cache_pagina_seg_personal: dict = {"page_id": None}
+
+
+def _obtener_o_crear_pagina_seg_personal() -> str | None:
+    """Devuelve el page_id de la página contenedora 'Resultados Seguimiento personal'
+    (bajo 'Resultados Evaluaciones'); la crea si no existe."""
+    with lock:
+        if _cache_pagina_seg_personal["page_id"]:
+            return _cache_pagina_seg_personal["page_id"]
+    parent_res = _parent_bbdd_en_pagina(config.NOTION_RESULTADOS_EVAL_PAGE_NAME, crear=True)
+    if parent_res.get("type") != "page_id":
+        return None
+    res_id = parent_res["page_id"]
+    objetivo = normalizar_nombre(_NOMBRE_PAGINA_SEG_PERSONAL)
+    page_id = None
+    for bloque in _iter_blocks(res_id):
+        if bloque.get("type") == "child_page" and normalizar_nombre((bloque.get("child_page") or {}).get("title", "")) == objetivo:
+            page_id = bloque["id"]
+            break
+    if not page_id:
+        pagina = notion.pages.create(
+            parent={"type": "page_id", "page_id": res_id},
+            properties={"title": {"title": [{"type": "text", "text": {"content": _NOMBRE_PAGINA_SEG_PERSONAL}}]}},
+        )
+        page_id = pagina["id"]
+        logging.info("Página '%s' creada", _NOMBRE_PAGINA_SEG_PERSONAL)
+    with lock:
+        _cache_pagina_seg_personal["page_id"] = page_id
+    return page_id
+
+
+def obtener_o_crear_bbdd_seg_personal(nombre: str) -> str | None:
+    """Busca/crea la BD 'Seg Personal - {nombre}' dentro de la página contenedora."""
+    titulo = f"{_PREFIJO_SEG_PERSONAL}{' '.join((nombre or '').split()).strip() or 'Sin nombre'}"
+    with lock:
+        if titulo in _cache_seg_personal_por_nombre:
+            return _cache_seg_personal_por_nombre[titulo]
+    pagina_id = _obtener_o_crear_pagina_seg_personal()
+    if not pagina_id:
+        return None
+    db_id = _buscar_bbdd_en_pagina_id(pagina_id, titulo)
+    if not db_id:
+        parent = {"type": "page_id", "page_id": pagina_id}
+        try:
+            if _usa_data_sources():
+                nueva = notion.databases.create(
+                    parent=parent,
+                    title=[{"type": "text", "text": {"content": titulo}}],
+                    initial_data_source={"title": [{"type": "text", "text": {"content": titulo}}], "properties": _PROPS_EVALUACIONES_PERSONALES},
+                )
+                nueva = notion.databases.retrieve(database_id=nueva["id"])
+            else:
+                nueva = notion.databases.create(
+                    parent=parent,
+                    title=[{"type": "text", "text": {"content": titulo}}],
+                    properties=_PROPS_EVALUACIONES_PERSONALES,
+                )
+            db_id = _data_source_id(nueva)
+            logging.info("BD '%s' creada", titulo)
+        except Exception:
+            logging.exception("Error creando BD de seguimiento personal '%s'", titulo)
+            return None
+    with lock:
+        _cache_seg_personal_por_nombre[titulo] = db_id
+    return db_id
+
+
 def guardar_evaluacion_personal(nombre: str, respuestas: dict) -> bool:
     try:
-        db_id = _buscar_o_crear_bbdd_en_personales(
-            "Respuestas", _PROPS_EVALUACIONES_PERSONALES, _cache_personal_eval_db,
-        )
+        db_id = obtener_o_crear_bbdd_seg_personal(nombre)
     except Exception:
         logging.exception("Error localizando BD de evaluaciones personales para '%s'", nombre)
         return False
@@ -4000,6 +4071,9 @@ def guardar_evaluacion_personal(nombre: str, respuestas: dict) -> bool:
 
 
 _cache_calendario_db: dict = {"db_id": None}
+# Lock dedicado: se mantiene durante TODA la búsqueda/creación para que dos hilos
+# concurrentes (ca/personal/... al arrancar) no creen 'Calendario evaluaciones' duplicados.
+_lock_calendario = threading.Lock()
 
 _PROPS_CALENDARIO = {
     "Nombre": {"title": {}},
@@ -4008,56 +4082,63 @@ _PROPS_CALENDARIO = {
 
 
 def _obtener_o_crear_bbdd_calendario() -> str | None:
-    with lock:
-        db_id = _cache_calendario_db["db_id"]
-    if db_id:
+    with _lock_calendario:
+        if _cache_calendario_db["db_id"]:
+            return _cache_calendario_db["db_id"]
+
+        # Parent previsto: "Datos a Monitorizar" si existe, si no la página raíz.
+        parent = _parent_bbdd_en_pagina(config.NOTION_DATA_LISTS_PAGE_NAME, crear=False)
+        if parent.get("type") != "page_id":
+            parent = _parent_bbdd_referencia()
+        parent_id = parent.get("page_id")
+
+        # 1) Buscar como hija del parent: children.list es consistente al instante, así que
+        #    evita duplicar por el lag de indexación de notion.search (incluso tras reiniciar).
+        db_id = None
+        if parent_id:
+            db_id = _buscar_bbdd_en_pagina_id(parent_id, "Calendario evaluaciones")
+
+        # 2) Fallback: búsqueda global por si la BD está en otra ubicación.
+        if not db_id:
+            try:
+                res = notion.search(
+                    query="Calendario evaluaciones",
+                    filter={"value": _tipo_objeto_busqueda_bbdd(), "property": "object"},
+                    page_size=10,
+                )
+                for bbdd in res.get("results", []):
+                    if normalizar_nombre(_extraer_titulo_bbdd(bbdd)) == "calendario evaluaciones":
+                        db_id = _data_source_id(bbdd)
+                        break
+            except Exception:
+                pass
+
+        # 3) Crear solo si de verdad no existe.
+        if not db_id:
+            try:
+                if _usa_data_sources():
+                    nueva = notion.databases.create(
+                        parent=parent,
+                        title=[{"type": "text", "text": {"content": "Calendario evaluaciones"}}],
+                        initial_data_source={
+                            "title": [{"type": "text", "text": {"content": "Calendario evaluaciones"}}],
+                            "properties": _PROPS_CALENDARIO,
+                        },
+                    )
+                    nueva = notion.databases.retrieve(database_id=nueva["id"])
+                else:
+                    nueva = notion.databases.create(
+                        parent=parent,
+                        title=[{"type": "text", "text": {"content": "Calendario evaluaciones"}}],
+                        properties=_PROPS_CALENDARIO,
+                    )
+                db_id = _data_source_id(nueva)
+            except Exception:
+                logging.exception("Error creando 'Calendario evaluaciones' en Notion")
+                return None
+
+        _cache_calendario_db["db_id"] = db_id
         return db_id
-
-    # Buscar en cualquier ubicación via búsqueda global
-    try:
-        res = notion.search(
-            query="Calendario evaluaciones",
-            filter={"value": _tipo_objeto_busqueda_bbdd(), "property": "object"},
-            page_size=10,
-        )
-        for bbdd in res.get("results", []):
-            if normalizar_nombre(_extraer_titulo_bbdd(bbdd)) == "calendario evaluaciones":
-                db_id = _data_source_id(bbdd)
-                with lock:
-                    _cache_calendario_db["db_id"] = db_id
-                return db_id
-    except Exception:
-        pass
-
-    # No existe — crear bajo "Datos a Monitorizar" si existe, si no bajo root
-    parent = _parent_bbdd_en_pagina(config.NOTION_DATA_LISTS_PAGE_NAME, crear=False)
-    if parent.get("type") != "page_id":
-        parent = _parent_bbdd_referencia()
-
-    try:
-        if _usa_data_sources():
-            nueva = notion.databases.create(
-                parent=parent,
-                title=[{"type": "text", "text": {"content": "Calendario evaluaciones"}}],
-                initial_data_source={
-                    "title": [{"type": "text", "text": {"content": "Calendario evaluaciones"}}],
-                    "properties": _PROPS_CALENDARIO,
-                },
-            )
-            nueva = notion.databases.retrieve(database_id=nueva["id"])
-        else:
-            nueva = notion.databases.create(
-                parent=parent,
-                title=[{"type": "text", "text": {"content": "Calendario evaluaciones"}}],
-                properties=_PROPS_CALENDARIO,
-            )
-        db_id = _data_source_id(nueva)
-        with lock:
-            _cache_calendario_db["db_id"] = db_id
-        return db_id
-    except Exception:
-        logging.exception("Error creando 'Calendario evaluaciones' en Notion")
-        return None
 
 
 def obtener_config_calendario() -> dict:
@@ -4101,10 +4182,8 @@ def siguiente_envio_calendario(fecha_inicio_str: str, semanas: int) -> "datetime
 
 
 def obtener_comentarios_personales(nombre: str) -> list[dict]:
-    """Devuelve los comentarios de evaluaciones personales escritos por 'nombre'."""
-    db_id = _buscar_o_crear_bbdd_en_personales(
-        "Respuestas", _PROPS_EVALUACIONES_PERSONALES, _cache_personal_eval_db,
-    )
+    """Devuelve los comentarios de seguimiento personal de 'nombre' (su propia BD 'Seg Personal - ...')."""
+    db_id = obtener_o_crear_bbdd_seg_personal(nombre)
     if not db_id:
         return []
     try:

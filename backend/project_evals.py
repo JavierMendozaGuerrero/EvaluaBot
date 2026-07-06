@@ -680,6 +680,8 @@ def activar_evaluaciones_empleados(manager: str, proyecto: str, empleados: list,
                 "Activo": {"checkbox": True},
             })
             activados.append(nombre_empleado)
+            from .eval_tracking import registrar_envio
+            registrar_envio(nombre_empleado, "proyecto", detalle=proyecto)
             slack_id = empleados_notion.get(normalizar_nombre(nombre_empleado))
             if slack_id:
                 _notificar_evaluacion_activada(nombre_empleado, proyecto, slack_id)
@@ -807,20 +809,35 @@ def obtener_evals_completadas_proyecto(evaluador: str, proyecto: str) -> list:
         return []
 
     label_to_tipo = {v: k for k, v in LABELS_TIPOS.items()}
+    evaluador_norm = normalizar_nombre(evaluador)
     completadas = []
     try:
-        resp = _query_bbdd(db_id, filter={
-            "property": "Evaluador", "rich_text": {"equals": evaluador},
-        })
-        for row in resp.get("results", []):
-            props = row.get("properties", {})
-            evaluado = "".join(
-                p.get("plain_text", "") for p in (props.get("Evaluado") or {}).get("rich_text", [])
-            ).strip()
-            tipo_label = (props.get("Tipo") or {}).get("select", {}).get("name", "")
-            tipo_key = label_to_tipo.get(tipo_label)
-            if tipo_key and evaluado:
-                completadas.append({"tipo": tipo_key, "evaluado": evaluado})
+        # Sin filtro Notion 'equals' (exacto/sensible): traemos todas y comparamos el
+        # Evaluador NORMALIZADO, para que casen aunque el nombre guardado varíe
+        # (mayúsculas/acentos/espacios, o guardado desde el bot con otra forma).
+        cursor = None
+        while True:
+            kwargs = {"page_size": 100}
+            if cursor:
+                kwargs["start_cursor"] = cursor
+            resp = _query_bbdd(db_id, **kwargs)
+            for row in resp.get("results", []):
+                props = row.get("properties", {})
+                evaluador_fila = "".join(
+                    p.get("plain_text", "") for p in (props.get("Evaluador") or {}).get("rich_text", [])
+                ).strip()
+                if normalizar_nombre(evaluador_fila) != evaluador_norm:
+                    continue
+                evaluado = "".join(
+                    p.get("plain_text", "") for p in (props.get("Evaluado") or {}).get("rich_text", [])
+                ).strip()
+                tipo_label = (props.get("Tipo") or {}).get("select", {}).get("name", "")
+                tipo_key = label_to_tipo.get(tipo_label)
+                if tipo_key and evaluado:
+                    completadas.append({"tipo": tipo_key, "evaluado": evaluado})
+            if not resp.get("has_more"):
+                break
+            cursor = resp.get("next_cursor")
     except Exception:
         logging.exception("Error consultando completadas de '%s' en '%s'", evaluador, proyecto)
 
@@ -950,6 +967,20 @@ def obtener_estado_evaluaciones_proyecto(proyecto: str) -> list:
         evaluadores_norm = {normalizar_nombre(e) for e in evaluadores}
         pendientes = [m for m in equipo if m != miembro and normalizar_nombre(m) not in evaluadores_norm]
         resultado.append({"nombre": miembro, "n_evaluaciones": len(evaluadores), "evaluadores": evaluadores, "pendientes": pendientes, "autoevaluacion_hecha": autoevaluacion_hecha})
+
+    # Cuántas evaluaciones de compañeros ha COMPLETADO cada miembro (como evaluador).
+    # Se obtiene invirtiendo la relación: si M aparece como evaluador de otro miembro,
+    # es que M ha completado esa evaluación de compañero. No incluye la autoevaluación.
+    total_companeros = max(len(equipo) - 1, 0)
+    hechas_por_evaluador: dict = {normalizar_nombre(m): 0 for m in equipo}
+    for r in resultado:
+        for ev in r["evaluadores"]:
+            k = normalizar_nombre(ev)
+            if k in hechas_por_evaluador:
+                hechas_por_evaluador[k] += 1
+    for r in resultado:
+        r["n_completadas"] = hechas_por_evaluador.get(normalizar_nombre(r["nombre"]), 0)
+        r["total_companeros"] = total_companeros
 
     return resultado
 
@@ -1141,6 +1172,8 @@ def guardar_evaluacion_proyecto(
             "Proyecto": {"rich_text": [{"type": "text", "text": {"content": proyecto}}]},
             "Respuestas": {"rich_text": [{"type": "text", "text": {"content": respuestas_texto[:2000]}}]},
         })
+        from .eval_tracking import marcar_completada
+        marcar_completada(evaluador, "proyecto")
         threading.Thread(target=_verificar_y_cerrar_proyecto, args=(proyecto,), daemon=True).start()
         return True
     except Exception:

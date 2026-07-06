@@ -3647,6 +3647,7 @@ _PERSONAL_PREGUNTAS_TTL = 300
 _PROPS_EVALUACIONES_PERSONALES = {
     "Nombre": {"title": {}},
     "Fecha": {"date": {}},
+    "Tipo": {"rich_text": {}},
     "Comentario": {"rich_text": {}},
 }
 
@@ -3667,9 +3668,21 @@ PREGUNTAS_PERSONALES_DEFAULT = {
     "item_2": "Cómo te estás acercando a tus objetivos",
     "item_3": "Recordar los criterios de evaluación",
     "item_4": "Solicitar apoyo en alguna área o informar sobre alguna dificultad.",
+    "pregunta_tipo": "¿Sobre qué vas a querer hablar hoy?",
+    "topic_cttf": "CTTF",
+    "topic_objetivos": "Objetivos",
+    "topic_dificultades": "Dificultades",
+    "topic_trayectoria": "Trayectoria",
 }
 
+# Claves añadidas después del despliegue inicial: se siembran en BDs "Preguntas" ya existentes
+# para que el admin pueda editarlas en Notion (una vez por proceso, respetando borrados manuales).
+_CLAVES_PERSONAL_NUEVAS = (
+    "pregunta_tipo", "topic_cttf", "topic_objetivos", "topic_dificultades", "topic_trayectoria",
+)
+
 _mensaje_inicial_migrado: set = set()
+_claves_personal_migradas: set = set()
 
 
 def _migrar_mensaje_inicial(db_id: str) -> None:
@@ -3690,6 +3703,49 @@ def _migrar_mensaje_inicial(db_id: str) -> None:
                     _cache_personal_preguntas.clear()
     except Exception:
         logging.exception("Error migrando mensaje_inicial personal")
+
+
+def _asegurar_claves_personal(db_id: str) -> None:
+    """Inserta en la BD de preguntas las claves nuevas (pregunta_tipo, topic_*) que falten,
+    para que aparezcan en Notion y el admin pueda editarlas.
+
+    Se hace una vez por proceso y solo inserta las que no existan; si el admin borra una a
+    propósito, no se vuelve a crear en la misma ejecución."""
+    if db_id in _claves_personal_migradas:
+        return
+    _claves_personal_migradas.add(db_id)
+    try:
+        existentes: set = set()
+        cursor = None
+        while True:
+            kwargs: dict = {"page_size": 100}
+            if cursor:
+                kwargs["start_cursor"] = cursor
+            resp = _query_bbdd(db_id, **kwargs)
+            for fila in resp.get("results", []):
+                clave = " ".join(
+                    p.get("plain_text", "") for p in fila.get("properties", {}).get("Clave", {}).get("title", [])
+                ).strip()
+                if clave:
+                    existentes.add(clave)
+            if not resp.get("has_more"):
+                break
+            cursor = resp.get("next_cursor")
+
+        creada = False
+        for clave in _CLAVES_PERSONAL_NUEVAS:
+            if clave in existentes:
+                continue
+            _crear_pagina_en_bbdd(db_id, {
+                "Clave": {"title": [{"type": "text", "text": {"content": clave}}]},
+                "Texto": {"rich_text": [{"type": "text", "text": {"content": PREGUNTAS_PERSONALES_DEFAULT[clave]}}]},
+            })
+            creada = True
+        if creada:
+            with lock:
+                _cache_personal_preguntas.clear()
+    except Exception:
+        logging.exception("Error asegurando claves nuevas personales")
 
 
 _NOMBRE_PREGUNTAS_EVAL_PERSONAL = "Preguntas evaluación personal"
@@ -3837,6 +3893,7 @@ def obtener_preguntas_personales(idioma: str = "es") -> dict:
         return dict(PREGUNTAS_PERSONALES_DEFAULT)
 
     _migrar_mensaje_inicial(db_id)
+    _asegurar_claves_personal(db_id)
 
     try:
         mapas: dict = {}  # idioma -> {clave: texto}
@@ -4059,6 +4116,23 @@ def obtener_o_crear_bbdd_seg_personal(nombre: str) -> str | None:
     return db_id
 
 
+def _asegurar_propiedades_seg_personal(db_id: str) -> None:
+    """Añade a la BD por persona las columnas que falten (p.ej. 'Tipo' en BDs antiguas)."""
+    try:
+        if _usa_data_sources():
+            bbdd = notion.data_sources.retrieve(data_source_id=db_id)
+            faltantes = {k: v for k, v in _PROPS_EVALUACIONES_PERSONALES.items() if k not in bbdd.get("properties", {})}
+            if faltantes:
+                notion.data_sources.update(data_source_id=db_id, properties=faltantes)
+        else:
+            bbdd = notion.databases.retrieve(database_id=db_id)
+            faltantes = {k: v for k, v in _PROPS_EVALUACIONES_PERSONALES.items() if k not in bbdd.get("properties", {})}
+            if faltantes:
+                notion.databases.update(database_id=db_id, properties=faltantes)
+    except Exception:
+        logging.exception("Error asegurando propiedades de BD seg personal %s", db_id)
+
+
 def guardar_evaluacion_personal(nombre: str, respuestas: dict) -> bool:
     try:
         db_id = obtener_o_crear_bbdd_seg_personal(nombre)
@@ -4069,10 +4143,12 @@ def guardar_evaluacion_personal(nombre: str, respuestas: dict) -> bool:
         return False
     try:
         from datetime import datetime, timezone
+        _asegurar_propiedades_seg_personal(db_id)
         fecha_iso = datetime.now(timezone.utc).isoformat()
         props = {
             "Nombre": {"title": [{"type": "text", "text": {"content": nombre or ""}}]},
             "Fecha": {"date": {"start": fecha_iso}},
+            "Tipo": {"rich_text": [{"type": "text", "text": {"content": respuestas.get("tipo", "") or ""}}]},
             "Comentario": {"rich_text": [{"type": "text", "text": {"content": respuestas.get("comentario", "") or ""}}]},
         }
         _crear_pagina_en_bbdd(db_id, props)

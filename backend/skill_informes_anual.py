@@ -921,22 +921,32 @@ def interpretar_evaluaciones_anual(emp_data: dict, cargo: str = "", criterios: s
             "insuficiente' (sem citação)."
         )
 
-    respuesta = anthropic_client.messages.create(
-        model="claude-sonnet-4-6",
-        max_tokens=4000,
-        temperature=0,
-        system=system,
-        messages=[{
-            "role": "user",
-            "content": (
-                f"Empleado: {emp_data['empleado']}\n"
-                f"Cargo: {cargo or 'No especificado'}\n"
-                f"CA: {emp_data.get('ca', 'No especificado')}\n"
-                f"{criterios_section}\n\n"
-                f"{contexto}"
-            ),
-        }],
+    user_content = (
+        f"Empleado: {emp_data['empleado']}\n"
+        f"Cargo: {cargo or 'No especificado'}\n"
+        f"CA: {emp_data.get('ca', 'No especificado')}\n"
+        f"{criterios_section}\n\n"
+        f"{contexto}"
     )
+
+    def _crear(system_arg):
+        return anthropic_client.messages.create(
+            model="claude-sonnet-4-6",
+            max_tokens=4000,
+            temperature=0,
+            system=system_arg,
+            messages=[{"role": "user", "content": user_content}],
+        )
+
+    # El `system` (instrucciones + formato) es ESTÁTICO por (cargo, idioma) y se repite entre
+    # empleados generados en ráfaga → se cachea (prompt caching): mismo modelo y misma calidad,
+    # solo se paga una vez el prefijo durante la ventana de caché. La evidencia (variable por
+    # persona) va en el mensaje del usuario, fuera de la caché.
+    try:
+        respuesta = _crear([{"type": "text", "text": system, "cache_control": {"type": "ephemeral"}}])
+    except Exception:
+        logging.warning("[informe anual] Prompt caching no disponible; reintento sin caché")
+        respuesta = _crear(system)
     texto = "".join(b.text for b in respuesta.content if b.type == "text").strip()
     if texto.startswith("```"):
         texto = texto.split("```", 2)[1]

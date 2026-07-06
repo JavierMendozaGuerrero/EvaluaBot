@@ -16,7 +16,7 @@
 - `ca_dm_canal: dict` — `user_id` → id del canal DM.
 - `ca_hora_dm: dict` — `user_id` → timestamp de envío del DM inicial.
 - `ca_ultimo_recordatorio_dm: dict` — `user_id` → timestamp del último recordatorio.
-- `conversaciones_ca: dict` — `user_id` → diccionario de estado de la conversación (contiene `modo`, `ca_nombre`, `advisee_actual`, `resumen_bruto`, `resumen_actual`, `opinion_actual`, `lista_advisees`, `advisees_guardados`, `campo_modificando`, etc.).
+- `conversaciones_ca: dict` — `user_id` → diccionario de estado de la conversación (contiene `modo`, `ca_nombre`, `advisee_actual`, `resumen_bruto`, `resumen_actual`, `resumen_claude_cache` (memo `{bruto, texto}` del último resumen de Claude, para no re-llamar a la API con el mismo texto), `opinion_actual`, `lista_advisees`, `advisees_guardados`, `campo_modificando`, etc.).
 - `_cache_bbdd: dict` — cache título de BD → id de data source (evita recrear/buscar BD de opiniones).
 - `_cache_nombre_usuario: dict` — cache `user_id` → nombre real (desde Notion).
 - `_cache_lista_empleados: dict` — cache de lista de empleados (declarado; no se usa activamente en este archivo).
@@ -95,6 +95,7 @@ Botones: `permiso_claude_si` (estilo primary) y `permiso_claude_no`. Este es el 
 > 📷 **[Captura pendiente: pregunta de consentimiento con botones Sí/No para resumen de Claude]**
 
 - **Si "Sí"** (`llamar_claude`, [L895](../backend/ca_reviews.py#L895)): se llama a `generar_resumen_evaluacion(advisee, cargo, resumen_bruto)` y se muestra:
+  (Para ahorrar API: si el estado ya tiene un `resumen_claude_cache` con el **mismo** `resumen_bruto` —p. ej. el CA vuelve atrás y reenvía— se reutiliza ese resumen y **no** se vuelve a llamar a Claude.)
 > 📊 *Resumen generado por Claude:*
 >
 > {resumen_claude}

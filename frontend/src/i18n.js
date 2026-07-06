@@ -128,7 +128,7 @@ export const STRINGS = {
   "goals.title_label": { es: "Título *", en: "Title *" },
   "goals.title_ph": { es: "Ej: Mejorar habilidades de presentación", en: "e.g. Improve presentation skills" },
   "goals.type_label": { es: "Tipo", en: "Type" },
-  "goals.type_ph": { es: "Ej: Desarrollo personal, Técnico, Liderazgo...", en: "e.g. Personal development, Technical, Leadership..." },
+  "goals.type_ph": { es: "Ej: CTTF, proyecto", en: "e.g. CTTF, project" },
   "goals.kpis_field_label": { es: "KPIs para su cumplimiento", en: "KPIs to achieve it" },
   "goals.kpis_ph": { es: "Ej: Presentar en 2 reuniones de cliente al trimestre", en: "e.g. Present at 2 client meetings per quarter" },
   "goals.desc_label": { es: "Descripción", en: "Description" },

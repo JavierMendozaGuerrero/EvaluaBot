@@ -1193,6 +1193,17 @@ def manejar_mensaje_ca(event, logger) -> None:
     elif accion == "llamar_claude":
         advisee = payload["advisee"]
         resumen_bruto = payload.get("resumen_bruto", "")
+        # Memo en conversación: si ya generamos el resumen de Claude para este MISMO texto en
+        # bruto (p. ej. el CA vuelve atrás y reenvía), reutilízalo en vez de re-llamar a la API
+        # (y evita releer el cargo en Notion). Solo cachea resúmenes reales de Claude, no el
+        # texto en bruto de reserva.
+        _cache = (estado.get("resumen_claude_cache") or {})
+        if _cache.get("bruto") == resumen_bruto and _cache.get("texto"):
+            with _lock:
+                if conv_key in conversaciones_ca:
+                    conversaciones_ca[conv_key]["resumen_actual"] = _cache["texto"]
+            _enviar_pregunta_opinion(channel, thread_ts, _idi, estado)
+            return
         _, cargo = buscar_empleado_y_cargo(advisee)
         resumen_claude = None
         # Mientras Claude "piensa", mostramos una barra de carga animada en el hilo.
@@ -1204,6 +1215,8 @@ def manejar_mensaje_ca(event, logger) -> None:
         with _lock:
             if conv_key in conversaciones_ca:
                 conversaciones_ca[conv_key]["resumen_actual"] = resumen_claude or resumen_bruto
+                if resumen_claude:
+                    conversaciones_ca[conv_key]["resumen_claude_cache"] = {"bruto": resumen_bruto, "texto": resumen_claude}
         if resumen_claude:
             _enviar_pregunta_opinion(channel, thread_ts, _idi, estado)
         else:

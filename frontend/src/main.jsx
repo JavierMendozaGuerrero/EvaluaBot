@@ -2425,13 +2425,13 @@ function DashNavItem({ label, onClick, disabled }) {
       onMouseEnter={() => setHover(true)}
       onMouseLeave={() => setHover(false)}
       style={{
-        padding: "11px 0", fontSize: 14, fontWeight: 400,
+        padding: "6px 0", fontSize: 14, fontWeight: 400,
         cursor: disabled ? "default" : "pointer",
         color: disabled ? "rgba(0,0,0,.3)" : hover ? "var(--accent)" : "#000",
         transition: "color .15s", userSelect: "none",
       }}
     >
-      {label}
+      <span className="dash-dot" />{label}
     </div>
   );
 }
@@ -2440,7 +2440,7 @@ function DashCollapsible({ title, open, onToggle, children }) {
   return (
     <div>
       <div onClick={onToggle} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", cursor: "pointer", userSelect: "none" }}>
-        <span className="eyebrow" style={{ marginBottom: 0, fontSize: "0.7rem" }}>{title}</span>
+        <span className="eyebrow" style={{ marginBottom: 0, fontSize: "0.7rem" }}><span className="dash-dot" />{title}</span>
         <svg viewBox="0 0 24 24" fill="none" stroke="rgba(0,0,0,.3)" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"
           style={{ width: 11, height: 11, flexShrink: 0, transform: open ? "rotate(180deg)" : "rotate(0deg)", transition: "transform .25s" }}>
           <polyline points="18 15 12 9 6 15" />
@@ -2781,7 +2781,7 @@ function Dashboard({ token, user, onLogout, onNavigate, onBackToRoleSelect = nul
         <div className="profile-grid">
 
           {/* LEFT — To-do */}
-          <div style={{ display: "flex", flexDirection: "column", gap: 20 }}>
+          <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
             <p className="eyebrow" style={{ color: "var(--fg)", textAlign: "center", fontWeight: 500, display: "flex", alignItems: "center", justifyContent: "center", gap: 6 }}>
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ width: 14, height: 14, flexShrink: 0 }}>
                 <path d="M9 11l3 3L20 4" />
@@ -2799,9 +2799,9 @@ function Dashboard({ token, user, onLogout, onNavigate, onBackToRoleSelect = nul
                   role="button"
                   tabIndex={0}
                   onClick={() => setExtraEvalOpen((v) => !v)}
-                  style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "11px 0", fontSize: 14, fontWeight: 400, cursor: "pointer", color: "#000", userSelect: "none" }}
+                  style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "6px 0", fontSize: 14, fontWeight: 400, cursor: "pointer", color: "#000", userSelect: "none" }}
                 >
-                  <span>{t("dash.nav_extra_evals")}</span>
+                  <span><span className="dash-dot" />{t("dash.nav_extra_evals")}</span>
                   <span style={{ display: "inline-flex", alignItems: "center", gap: 8, flexShrink: 0 }}>
                     {evaluacionesExtraPendientes.length > 0 && (
                       <span style={{ display: "inline-flex", alignItems: "center", gap: 6, flexShrink: 0 }}>
@@ -2854,9 +2854,9 @@ function Dashboard({ token, user, onLogout, onNavigate, onBackToRoleSelect = nul
                     role="button"
                     tabIndex={0}
                     onClick={() => setProjOpen((v) => !v)}
-                    style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "11px 0", fontSize: 14, fontWeight: 400, cursor: "pointer", color: "#000", userSelect: "none" }}
+                    style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "6px 0", fontSize: 14, fontWeight: 400, cursor: "pointer", color: "#000", userSelect: "none" }}
                   >
-                    <span>{t("dash.nav_proj_evals")}</span>
+                    <span><span className="dash-dot" />{t("dash.nav_proj_evals")}</span>
                     <span style={{ display: "inline-flex", alignItems: "center", gap: 8, flexShrink: 0 }}>
                       {projPendTotal > 0 && (
                         <span style={{ display: "inline-flex", alignItems: "center", gap: 6, flexShrink: 0 }}>
@@ -2959,7 +2959,7 @@ function Dashboard({ token, user, onLogout, onNavigate, onBackToRoleSelect = nul
 
             <div>
               <div style={{ display: "flex", alignItems: "baseline", gap: 10 }}>
-                <p className="eyebrow" style={{ margin: 0, flexShrink: 0, fontSize: "0.7rem" }}>{t("dash.my_country")}</p>
+                <p className="eyebrow" style={{ margin: 0, flexShrink: 0, fontSize: "0.7rem" }}><span className="dash-dot" />{t("dash.my_country")}</p>
                 {!editandoPais && (
                   <p style={{ fontSize: 13, color: perfil.pais ? "#000" : "rgba(0,0,0,.45)", margin: 0 }}>
                     {perfil.pais || t("dash.country_none")}
@@ -2969,7 +2969,8 @@ function Dashboard({ token, user, onLogout, onNavigate, onBackToRoleSelect = nul
                   <button
                     type="button"
                     onClick={abrirEdicionPais}
-                    style={{ border: "none", background: "none", cursor: "pointer", padding: 0, minHeight: "auto", fontSize: 12, fontWeight: 400, color: "rgba(0,0,0,.55)", marginLeft: "auto", flexShrink: 0 }}
+                    className="dash-cambiar"
+                    style={{ border: "none", background: "none", cursor: "pointer", padding: 0, minHeight: "auto", fontSize: 12, fontWeight: 400, marginLeft: "auto", flexShrink: 0 }}
                   >{t("dash.country_change")}</button>
                 )}
               </div>
@@ -3009,11 +3010,11 @@ function Dashboard({ token, user, onLogout, onNavigate, onBackToRoleSelect = nul
 
             <DashCollapsible title={t("dash.my_goals")} open={objOpen} onToggle={() => setObjOpen((v) => !v)}>
               {misObjetivos.length ? (
-                <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+                <div style={{ display: "flex", flexDirection: "column", gap: 8, paddingLeft: 12 }}>
                   {misObjetivos.map((obj, i) => (
                     <div key={i}>
                       <p style={{ fontSize: 13, color: "#000", display: "flex", alignItems: "center", gap: 6 }}>
-                        <span style={{ width: 6, height: 6, borderRadius: "50%", background: "var(--accent)", flexShrink: 0, display: "inline-block" }} />
+                        <span style={{ color: "var(--accent)", flexShrink: 0, fontSize: "1.3em" }}>•</span>
                         {obj.titulo}
                       </p>
                       {obj.kpis && <p style={{ fontSize: 13, fontWeight: 200, color: "rgba(0,0,0,.55)", paddingLeft: 12 }}>{obj.kpis}</p>}
@@ -3869,7 +3870,7 @@ function MisProyectosActivosPage({ token, user, onBack }) {
         <button className="link-button" onClick={onBack}>{t("common.back")}</button>
       </nav>
 
-      <div style={{ flex: 1, width: "100%", paddingTop: 40, paddingBottom: 48 }}>
+      <div style={{ flex: 1, width: "100%", paddingTop: "clamp(44px, 6vw, 68px)", paddingBottom: 48 }}>
         <p className="eyebrow">{t("mpa.kicker")}</p>
         <h1 style={{ marginBottom: 28 }}>{t("mpa.title")}</h1>
 
@@ -4090,7 +4091,7 @@ function ActivarEvaluacionesProyectoPage({ token, user, onBack, onActivado }) {
         <button className="link-button" onClick={onBack}>{t("common.back")}</button>
       </nav>
 
-      <div style={{ flex: 1, width: "100%", paddingTop: 40, paddingBottom: 48 }}>
+      <div style={{ flex: 1, width: "100%", paddingTop: "clamp(44px, 6vw, 68px)", paddingBottom: 48 }}>
         <p className="eyebrow">{t("mpa.kicker")}</p>
         <h1>{t("aep.title")}</h1>
         <p className="fine" style={{ marginTop: 10, color: "rgba(0,0,0,.6)" }}>
@@ -4310,7 +4311,7 @@ function EvaluacionesProyectoPage({ token, user, proyectos, onBack, onNavigate, 
         <button className="link-button" onClick={onBack}>{t("common.back")}</button>
       </nav>
 
-      <div style={{ flex: 1, width: "100%", paddingTop: 40, paddingBottom: 48 }}>
+      <div style={{ flex: 1, width: "100%", paddingTop: "clamp(44px, 6vw, 68px)", paddingBottom: 48 }}>
         <p className="eyebrow">{t("ep.kicker")}</p>
         <h1 style={{ marginBottom: 24 }}>{proyectoSeleccionado || t("dash.nav_proj_evals")}</h1>
 
@@ -4584,19 +4585,35 @@ function FormularioEvaluacionProyecto({ token, user, proyecto, tipo, manager, ev
                     {p.tipo === "escala_1_5" && (
                       <div style={{ display: "flex", gap: "12px", flexWrap: "wrap", alignItems: "center" }}>
                         <span className="fine" style={{ fontSize: "12px" }}>{t("fep.scale_low")}</span>
-                        {[1, 2, 3, 4, 5].map((val) => (
-                          <label key={val} className="eval-opt" style={{ display: "flex", alignItems: "center", gap: "4px", cursor: "pointer", fontSize: "14px", fontWeight: respuestas[p.id] === String(val) ? 800 : 400 }}>
-                            <input
-                              type="radio"
-                              name={p.id}
-                              value={String(val)}
-                              checked={respuestas[p.id] === String(val)}
-                              onChange={() => setRespuesta(p.id, String(val))}
-                              style={{ width: "auto" }}
-                            />
-                            {val}
-                          </label>
-                        ))}
+                        <div style={{ display: "flex", border: "1px solid #DBDBDE", borderRadius: "8px", overflow: "hidden", width: "100%", maxWidth: "360px" }}>
+                          {[1, 2, 3, 4, 5].map((val, idx) => {
+                            const selected = respuestas[p.id] === String(val);
+                            return (
+                              <label
+                                key={val}
+                                className="eval-seg"
+                                style={{
+                                  flex: 1, display: "flex", alignItems: "center", justifyContent: "center",
+                                  padding: "14px 8px", cursor: "pointer",
+                                  background: selected ? "#000000" : "#FFFFFF",
+                                  color: selected ? "#FFFFFF" : "rgba(0,0,0,0.55)",
+                                  borderLeft: idx > 0 ? "1px solid #DBDBDE" : "none",
+                                  userSelect: "none", transition: "background 0.15s, color 0.15s",
+                                }}
+                              >
+                                <input
+                                  type="radio"
+                                  name={p.id}
+                                  value={String(val)}
+                                  checked={selected}
+                                  onChange={() => setRespuesta(p.id, String(val))}
+                                  style={{ position: "absolute", opacity: 0, width: 0, height: 0, pointerEvents: "none" }}
+                                />
+                                <span className="eval-seg-text" style={{ display: "inline-block", fontSize: "14px", fontWeight: 400 }}>{val}</span>
+                              </label>
+                            );
+                          })}
+                        </div>
                         <span className="fine" style={{ fontSize: "12px" }}>{t("fep.scale_high")}</span>
                       </div>
                     )}
@@ -4735,7 +4752,7 @@ function SolicitarEvaluacionExtraPage({ token, user, onBack }) {
         <button className="link-button" onClick={onBack}>{t("common.back")}</button>
       </nav>
 
-      <div style={{ flex: 1, width: "100%", paddingTop: 40, paddingBottom: 48 }}>
+      <div style={{ flex: 1, width: "100%", paddingTop: "clamp(44px, 6vw, 68px)", paddingBottom: 48 }}>
         <p className="eyebrow">{t("sex.kicker")}</p>
         <h1>{t("sex.title")}</h1>
         <p className="fine" style={{ marginTop: 10, color: "rgba(0,0,0,.6)" }}>
@@ -4896,6 +4913,7 @@ function FormularioEvaluacionExtra({ token, evaluado, contexto, solicitudPageId,
             {[1, 2, 3, 4].map((val, idx) => (
               <label
                 key={val}
+                className="eval-seg"
                 style={{
                   flex: 1, display: "flex", alignItems: "center", justifyContent: "center",
                   padding: "14px 8px", cursor: "pointer",
@@ -4913,7 +4931,7 @@ function FormularioEvaluacionExtra({ token, evaluado, contexto, solicitudPageId,
                   onChange={() => setNota(val)}
                   style={{ position: "absolute", opacity: 0, width: 0, height: 0, pointerEvents: "none" }}
                 />
-                <span style={{ fontSize: "14px", fontWeight: 400 }}>{val}</span>
+                <span className="eval-seg-text" style={{ display: "inline-block", fontSize: "14px", fontWeight: 400 }}>{val}</span>
               </label>
             ))}
           </div>
@@ -4947,7 +4965,7 @@ function EvaluacionesSlackPage({ token, user, advisees, onBack, onNavigate, comp
         <a className="brand" href="/"><img src="/src/logo.png" alt="igeneris" className="brand-logo" /></a>
         <button className="link-button" onClick={onBack}>{t("common.back")}</button>
       </nav>
-      <div style={{ paddingTop: "40px" }}>
+      <div style={{ paddingTop: "clamp(44px, 6vw, 68px)" }}>
         <p className="kicker">{t("ess.page_kicker")}</p>
         <EvaluacionesSlackSection token={token} user={user} advisees={advisees || []} onNavigate={onNavigate} completadasApp={completadasApp} onCompletada={onCompletada} />
       </div>
@@ -5174,7 +5192,7 @@ function EvaluacionAnualWizard({ token, advisee, onBack }) {
         <a className="brand" href="/"><img src="/src/logo.png" alt="igeneris" className="brand-logo" /></a>
         <button className="link-button" onClick={onBack}>{t("common.back")}</button>
       </nav>
-      <div style={{ flex: 1, paddingTop: 32, paddingBottom: 48, maxWidth: 820, margin: "0 auto", width: "100%" }}>
+      <div style={{ flex: 1, paddingTop: "clamp(44px, 6vw, 68px)", paddingBottom: 48, maxWidth: 820, margin: "0 auto", width: "100%" }}>
         <p className="eyebrow">{t("eaw.eyebrow")}</p>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 16, flexWrap: "wrap" }}>
           <h1 style={{ marginBottom: 6 }}>{nombre}</h1>

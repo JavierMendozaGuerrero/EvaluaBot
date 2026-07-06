@@ -125,7 +125,11 @@ redacta el informe por competencias **obligando a que cada frase lleve una cita*
 propio código **valida** las citas (borra lo que no esté respaldado) y un **verificador** avisa de frases
 dudosas. El resultado es un Word con la plantilla oficial de Igeneris y un HTML con la evidencia clicable.
 Está pensado para que la IA **no pueda inventar** y para que el CA tenga siempre la última palabra.
-Documentación ampliada: [skills/eval-informes-rrhh.md](../skills/eval-informes-rrhh.md).
+Para **reducir coste de API**, el `system` (instrucciones + formato, estático por cargo/idioma) se envía con
+**prompt caching** (`cache_control: ephemeral`): entre informes generados en ráfaga solo se paga una vez ese
+prefijo, con **la misma calidad** (mismo modelo y mismo input); si el caching no está disponible reintenta sin
+él. La generación completa, además, ya está **cacheada por huella** de los datos (no vuelve a llamar a Claude si
+nada cambió). Documentación ampliada: [skills/eval-informes-rrhh.md](../skills/eval-informes-rrhh.md).
 
 **`backend/eval_anual_sesion.py`** — La **sesión interactiva de la evaluación anual asistida**. Guarda el
 progreso del CA mientras revisa a un advisee área por área (identidad → evidencia por bloques → su
@@ -136,6 +140,8 @@ valoración se bloquea → ve la de Claude → decide mía/IA/fusión). Persiste
 de las descargas de evidencia del panel del CA).
 
 **`backend/skill_resumen_evaluacion.py`** — Produce un **resumen de una evaluación** (síntesis breve del feedback).
+El flujo del CA (`llamar_claude` en `ca_reviews.py`) **memoriza el resumen en la conversación**: si el CA vuelve
+atrás y reenvía el mismo texto en bruto, reutiliza el resumen ya generado en vez de re-llamar (y pagar) a Claude.
 
 **`backend/skill_pdfs_fuentes.py`** — Genera los **PDFs de fuentes/evidencia** (evaluaciones mensuales, de
 proyecto, seguimiento personal…) que el CA puede descargar para redactar el informe manualmente.

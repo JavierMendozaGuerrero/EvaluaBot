@@ -62,6 +62,17 @@ def _editar_dm_inicial_personal(user_id, idioma=None):
         logging.exception("No se pudo editar el DM inicial personal de %s", user_id)
 
 
+# Temas del selector "¿Sobre qué vas a querer hablar hoy?".
+# (clave del action_id, clave i18n de la etiqueta del botón, valor canónico guardado en Notion → columna "Tipo")
+_TOPICOS_PERSONAL = [
+    ("cttf",         "bp.topic_cttf",         "CTTF"),
+    ("objetivos",    "bp.topic_objetivos",    "Objetivos"),
+    ("dificultades", "bp.topic_dificultades", "Dificultades"),
+    ("trayectoria",  "bp.topic_trayectoria",  "Trayectoria"),
+]
+_TOPICO_LABEL = {clave: label for clave, _i18n, label in _TOPICOS_PERSONAL}
+
+
 def _obtener_bloques_oportunidad(idioma: str = "es") -> list:
     preguntas = obtener_preguntas_personales(idioma)
     items = [
@@ -77,7 +88,46 @@ def _obtener_bloques_oportunidad(idioma: str = "es") -> list:
         if accessory:
             bloque["accessory"] = accessory
         bloques.append(bloque)
+
+    bloques.append({"type": "divider"})
+    bloques.extend(_bloques_selector_topico(idioma, preguntas))
     return bloques
+
+
+def _bloques_selector_topico(idioma: str = "es", preguntas: dict | None = None) -> list:
+    """Bloques del selector '¿Sobre qué vas a querer hablar hoy?' (pregunta + 4 botones).
+
+    Tanto el texto de la pregunta ('pregunta_tipo') como las etiquetas de los botones
+    ('topic_*') son editables en Notion (BD 'Preguntas'); si faltan, se usa el texto i18n."""
+    if preguntas is None:
+        preguntas = obtener_preguntas_personales(idioma)
+    pregunta_tipo = preguntas.get("pregunta_tipo") or t("bp.q_topic", idioma)
+    return [
+        {"type": "section", "text": {"type": "mrkdwn", "text": f"*{pregunta_tipo}*"}},
+        {
+            "type": "actions",
+            "elements": [
+                {
+                    "type": "button",
+                    "text": {"type": "plain_text", "text": preguntas.get(f"topic_{clave}") or t(clave_i18n, idioma), "emoji": True},
+                    "action_id": f"personal_tipo_{clave}",
+                }
+                for clave, clave_i18n, _label in _TOPICOS_PERSONAL
+            ],
+        },
+    ]
+
+
+def _enviar_selector_topico(dm_channel, thread_ts, idioma="es", prefijo="") -> None:
+    """Envía un mensaje con el selector de tema (para cuando pide 'otro comentario')."""
+    preguntas = obtener_preguntas_personales(idioma)
+    pregunta_tipo = preguntas.get("pregunta_tipo") or t("bp.q_topic", idioma)
+    bloques = _bloques_selector_topico(idioma, preguntas)
+    if prefijo:
+        bloques = [{"type": "section", "text": {"type": "mrkdwn", "text": prefijo}}] + bloques
+    slack_app.client.chat_postMessage(
+        channel=dm_channel, thread_ts=thread_ts, text=pregunta_tipo, blocks=bloques,
+    )
 
 
 def _bloques_dm_personal(idioma, enlace_pendientes=None):
@@ -342,8 +392,7 @@ def manejar_mensaje_personal(event, logger) -> None:
             if texto_norm in {"si", "sí", "s", "ok", "okay", "yes", "y", "sim"}:
                 estado["respuestas"] = {}
                 estado["modo"] = "esperando_comentario"
-                accion = "preguntar"
-                pregunta = t("bp.what_else", _idi)
+                accion = "mostrar_topicos"
             elif texto_norm in {"no", "n", "cancelar", "cancel", "nao", "não", "cancelar"}:
                 estado["modo"] = "terminado"
                 personal_dm_activas.discard(user_id)
@@ -404,13 +453,18 @@ def manejar_mensaje_personal(event, logger) -> None:
                     limpiar_historial(conversaciones_personal[user_id])
             quitar_pendiente("personal", user_id)
             marcar_completada_por_slack_id(user_id, "personal")
-            _editar_dm_inicial_personal(user_id, _idi)
             _enviar_preguntando_otro(dm_channel, thread_ts, _idi)
         else:
             reply(t("bp.err_save", _idi))
         return
 
+    if accion == "mostrar_topicos":
+        _enviar_selector_topico(dm_channel, thread_ts, _idi)
+        return
+
     if accion == "ya_terminado":
+        # El mensaje inicial solo se marca como "completado" cuando el usuario termina del todo.
+        _editar_dm_inicial_personal(user_id, _idi)
         reply(t("bp.eval_finished", _idi))
         return
 
@@ -445,6 +499,36 @@ def _handle_personal_modificar(ack, body, logger):
         manejar_mensaje_personal(evento, logger)
     except Exception:
         logger.exception("Error procesando modificación personal interactiva")
+
+
+@slack_app.action(re.compile(r"^personal_tipo_(cttf|objetivos|dificultades|trayectoria)$"))
+def _handle_personal_tipo(ack, body, logger):
+    ack()
+    try:
+        user_id = body["user"]["id"]
+        channel = body["channel"]["id"]
+        msg = body.get("message", {})
+        thread_ts = msg.get("thread_ts") or msg.get("ts", "")
+        dm_channel = personal_dm_canal.get(user_id, channel)
+        clave = body["actions"][0]["action_id"].replace("personal_tipo_", "")
+        # 'Tipo' guardado = etiqueta canónica en ES (editable en Notion), consistente entre idiomas.
+        tipo = obtener_preguntas_personales("es").get(f"topic_{clave}") or _TOPICO_LABEL.get(clave, "")
+        with _lock:
+            estado = conversaciones_personal.get(user_id)
+            if estado is None:
+                estado = {"modo": "esperando_comentario", "respuestas": {}, "idioma": idioma_por_slack_id(user_id)}
+                conversaciones_personal[user_id] = estado
+            estado.setdefault("respuestas", {})["tipo"] = tipo
+            if estado.get("modo") != "terminado":
+                estado["modo"] = "esperando_comentario"
+            _idi = estado.get("idioma", "es")
+        slack_app.client.chat_postMessage(
+            channel=dm_channel,
+            thread_ts=thread_ts,
+            text=f"*{tipo}*\n{t('bp.write_comment', _idi)}",
+        )
+    except Exception:
+        logger.exception("Error procesando selección de tipo personal")
 
 
 @slack_app.action("atras_personal")

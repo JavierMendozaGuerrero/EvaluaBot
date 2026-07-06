@@ -1917,7 +1917,6 @@ def handle_message_events(event, logger):
                 })
             quitar_pendiente("mensual", user_id)
             marcar_completada_por_slack_id(user_id, "mensual")
-            _editar_dm_inicial_mensual(user_id, estado.get("idioma", "es"))
             _enviar_mas_miembros(dm_channel, thread_ts, estado.get("idioma", "es"), estado=estado)
             return
         reply(t("bm.err_save_notion", estado.get("idioma", "es")))
@@ -1935,6 +1934,8 @@ def handle_message_events(event, logger):
         reply(t("bm.already_completed", estado.get("idioma", "es")))
         return
     if accion == "terminar":
+        if estado.get("evaluaciones_guardadas"):
+            _editar_dm_inicial_mensual(user_id, estado.get("idioma", "es"))
         reply(t("bm.thanks_end", estado.get("idioma", "es")))
         _ahora_t = time.time()
         _evs_t = [e for e in (estado.get("evaluaciones_guardadas") or []) if _ahora_t - e["ts"] <= 2 * 24 * 3600]
@@ -2027,7 +2028,6 @@ def handle_proyecto_confirmar(ack, body, logger):
             })
         quitar_pendiente("mensual", user_id)
         marcar_completada_por_slack_id(user_id, "mensual")
-        _editar_dm_inicial_mensual(user_id, estado.get("idioma", "es"))
         _enviar_mas_miembros(dm_channel, thread_ts, estado.get("idioma", "es"), estado=estado)
         return
     reply(t("bm.err_save_notion", estado.get("idioma", "es")))
@@ -2099,6 +2099,7 @@ def handle_proyecto_mas_no(ack, body):
             _evs_mo = []
 
     if _area_mp == "middleoffice":
+        _editar_dm_inicial_mensual(user_id, estado.get("idioma", "es"))
         reply(t("bm.thanks_end", estado.get("idioma", "es")))
         if _evs_mo:
             _enviar_boton_modificar(dm_channel, thread_ts, estado.get("idioma", "es"))
@@ -2275,6 +2276,7 @@ def handle_proyecto_proyectos_no(ack, body):
         estado["modo"] = "terminado"
         _evs_pno = [e for e in (estado.get("evaluaciones_guardadas") or []) if time.time() - e["ts"] <= 2 * 24 * 3600]
 
+    _editar_dm_inicial_mensual(user_id, estado.get("idioma", "es"))
     reply(t("bm.thanks_end", estado.get("idioma", "es")))
     if _evs_pno:
         _enviar_boton_modificar(dm_channel, thread_ts, estado.get("idioma", "es"))

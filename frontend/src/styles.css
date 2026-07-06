@@ -97,7 +97,7 @@ p { line-height: 1.6; margin: 0; }
   display: grid;
   grid-template-columns: minmax(0, 1.05fr) minmax(280px, .95fr);
   gap: clamp(28px, 6vw, 64px);
-  padding-top: clamp(28px, 5vw, 56px);
+  padding-top: clamp(44px, 6vw, 68px);
   align-items: start;
 }
 .hero > * { min-width: 0; }
@@ -339,7 +339,7 @@ button:disabled, .button:disabled { opacity: .45; cursor: not-allowed; }
   font-family: var(--font-display);
   font-size: clamp(40px, 5vw, 60px); font-weight: 500;
 }
-.profile-info { display: flex; flex-direction: column; gap: 20px; }
+.profile-info { display: flex; flex-direction: column; gap: 12px; }
 .profile-info-label {
   font-size: 0.78rem;
   text-transform: uppercase;
@@ -372,7 +372,7 @@ button:disabled, .button:disabled { opacity: .45; cursor: not-allowed; }
 .advisee-nombre { font-size: 13px; font-weight: 400; text-align: center; color: var(--fg); }
 .advisee-btn { min-height: 32px; padding: 0 14px; font-size: 12px; }
 
-.advisees-page-wrap { padding-top: 40px; text-align: center; }
+.advisees-page-wrap { padding-top: clamp(44px, 6vw, 68px); text-align: center; }
 .advisees-page-grid { display: flex; flex-wrap: wrap; justify-content: center; gap: 44px; margin-top: 44px; }
 .advisee-page-card {
   display: flex; flex-direction: column; align-items: center; gap: 18px;
@@ -406,7 +406,7 @@ button:disabled, .button:disabled { opacity: .45; cursor: not-allowed; }
 .eval-compliance-row { display: flex; justify-content: space-between; gap: 16px; font-size: 14px; }
 .eval-compliance-ratio { font-variant-numeric: tabular-nums; color: var(--muted); }
 
-.advisee-detail-wrap { padding-top: 40px; }
+.advisee-detail-wrap { padding-top: clamp(44px, 6vw, 68px); }
 .advisee-detail-layout { display: flex; align-items: flex-start; gap: 56px; }
 .advisee-detail-left { display: flex; flex-direction: column; align-items: center; gap: 16px; }
 .advisee-detail-foto { width: clamp(120px, 22vw, 180px); height: clamp(120px, 22vw, 180px); border-radius: 50%; object-fit: cover; font-size: clamp(40px, 8vw, 56px); }
@@ -588,7 +588,7 @@ button.role-card.secondary:hover { color: #fff; }
 .role-card-desc { font-size: 13px; font-weight: 200; line-height: 1.6; color: var(--text-55); }
 
 /* ── Admin search / employee ── */
-.admin-search-wrap, .admin-employee-wrap { padding-top: 40px; }
+.admin-search-wrap, .admin-employee-wrap { padding-top: clamp(44px, 6vw, 68px); }
 .admin-search-wrap { display: flex; flex-direction: column; align-items: center; text-align: center; }
 .admin-search-field { width: 100%; max-width: 420px; margin-top: 16px; }
 .admin-employee-layout { display: grid; grid-template-columns: auto 1fr; gap: 40px; align-items: start; }
@@ -598,7 +598,7 @@ button.role-card.secondary:hover { color: #fff; }
 
 /* ── Footer ── */
 .site-footer {
-  margin-top: auto;
+  margin-top: 48px;
   padding: 18px clamp(18px, 4vw, 48px);
   border-top: 1px solid var(--border);
   display: flex; flex-direction: column; align-items: center; text-align: center; gap: 4px;
@@ -955,4 +955,11 @@ button, .button { min-height: 42px; padding: 0 22px; font-size: 15px; }
 }
 .tarea-row:hover { color: var(--accent); }
 .tarea-label { min-width: 0; }
-.tarea-label::before { content: "•"; margin-right: 9px; color: currentColor; }
+.tarea-label::before { content: "•"; margin-right: 9px; color: var(--accent); font-size: 1.3em; }
+
+/* Punto delante de cada apartado del dashboard (To-do / To-see). */
+.dash-dot { display: inline-block; width: 4px; height: 4px; border-radius: 50%; background: var(--text-30); margin-right: 10px; vertical-align: middle; flex-shrink: 0; }
+
+/* Enlace 'Cambiar' (país) del dashboard: gris que pasa a naranja al pasar el ratón. */
+.dash-cambiar { color: var(--text-55); transition: color .15s; }
+.dash-cambiar:hover { color: var(--accent); }

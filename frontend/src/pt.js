@@ -319,7 +319,7 @@ export const PT = {
   "goals.title_label": "Título *",
   "goals.title_ph": "Ex: Melhorar competências de apresentação",
   "goals.type_label": "Tipo",
-  "goals.type_ph": "Ex: Desenvolvimento pessoal, Técnico, Liderança...",
+  "goals.type_ph": "Ex: CTTF, projeto",
   "hist.col_date": "Data",
   "hist.col_justif": "Justificação",
   "hist.col_relation": "Relação",

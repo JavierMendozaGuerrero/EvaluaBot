@@ -19,7 +19,7 @@ from .clients import notion, slack_app
 from .conversation_back import boton_atras, fila_atras, limpiar_historial, pop_historial, push_historial, tiene_historial
 from .slack_lists import añadir_pendiente, enlace_lista_pendientes, quitar_pendiente
 from .eval_tracking import registrar_envio_por_slack_id, marcar_completada_por_slack_id
-from .i18n import t, boton_idioma_slack
+from .i18n import t, botones_idioma_slack
 from .notion_service import (
     _coincide_parent_bbdd,
     _crear_pagina_en_bbdd,
@@ -32,7 +32,7 @@ from .notion_service import (
     _usa_data_sources,
     idioma_por_slack_id,
     idioma_de_persona,
-    toggle_idioma_slack,
+    guardar_idioma_por_slack_id,
     invalidar_cache_empleados,
     buscar_empleado_en_lista,
     buscar_empleado_y_cargo,
@@ -686,10 +686,10 @@ def _advisee_permitido_para_ca(ca_nombre: str, ca_aliases: list[str], advisee: s
 def _bloques_dm_ca(idioma, enlace_pendientes=None):
     """Bloques del DM inicial de las evaluaciones CA, con botón de cambio de idioma en la cabecera."""
     bloques = [
+        botones_idioma_slack("lang_set_ca"),
         {
             "type": "section",
             "text": {"type": "mrkdwn", "text": t("bc.pending_intro", idioma)},
-            "accessory": boton_idioma_slack(idioma, "lang_toggle_ca"),
         },
         {"type": "context", "elements": [{"type": "mrkdwn", "text": t("bot.no_inteligente", idioma)}]},
         {"type": "section", "text": {"type": "mrkdwn", "text": t("bp.example_label", idioma)}},
@@ -1471,12 +1471,13 @@ def _build_ejemplo_ca_view(idioma="es") -> dict:
     }
 
 
-@slack_app.action("lang_toggle_ca")
-def _handle_lang_toggle_ca(ack, body, logger):
+@slack_app.action(re.compile(r"^lang_set_ca_(es|en|pt)$"))
+def _handle_lang_set_ca(ack, body, logger):
     ack()
     try:
         user_id = body.get("user", {}).get("id", "")
-        nuevo = toggle_idioma_slack(user_id)
+        idioma_elegido = body["actions"][0]["value"]
+        nuevo = guardar_idioma_por_slack_id(user_id, idioma_elegido)
         channel = (body.get("channel") or {}).get("id") or (body.get("container") or {}).get("channel_id")
         ts = (body.get("message") or {}).get("ts") or (body.get("container") or {}).get("message_ts")
         if channel and ts:

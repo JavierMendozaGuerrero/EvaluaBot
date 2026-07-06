@@ -1,5 +1,6 @@
 import json
 import logging
+import re
 import threading
 import time
 from datetime import datetime, timezone
@@ -9,12 +10,12 @@ from .clients import slack_app
 from .conversation_back import boton_atras, fila_atras, limpiar_historial, pop_historial, push_historial, tiene_historial
 from .slack_lists import añadir_pendiente, enlace_lista_pendientes, quitar_pendiente
 from .eval_tracking import registrar_envio_por_slack_id, marcar_completada_por_slack_id
-from .i18n import t, boton_idioma_slack, traducir_dimension
+from .i18n import t, botones_idioma_slack, traducir_dimension
 from .notion_service import (
     evaluacion_personal_guardada_desde,
     guardar_evaluacion_personal,
     idioma_por_slack_id,
-    toggle_idioma_slack,
+    guardar_idioma_por_slack_id,
     invalidar_cache_empleados,
     obtener_ca_de_empleado,
     obtener_config_calendario,
@@ -82,11 +83,12 @@ def _obtener_bloques_oportunidad(idioma: str = "es") -> list:
 def _bloques_dm_personal(idioma, enlace_pendientes=None):
     """Bloques del DM inicial de la evaluación personal, con botón de cambio de idioma en la cabecera."""
     bloques = [
+        botones_idioma_slack("lang_set_personal"),
         {
             "type": "section",
-            "text": {"type": "mrkdwn", "text": t("bp.pending_intro", idioma)},
-            "accessory": boton_idioma_slack(idioma, "lang_toggle_personal"),
+            "text": {"type": "mrkdwn", "text": t("bp.pending_header", idioma)},
         },
+        {"type": "section", "text": {"type": "mrkdwn", "text": t("bp.pending_body", idioma)}},
         {"type": "context", "elements": [{"type": "mrkdwn", "text": t("bot.no_inteligente", idioma)}]},
         {"type": "section", "text": {"type": "mrkdwn", "text": t("bp.example_label", idioma)}},
         {
@@ -756,12 +758,13 @@ def _build_ejemplos_personal_view(ejemplos: dict, expanded: set, idioma: str = "
     }
 
 
-@slack_app.action("lang_toggle_personal")
-def _handle_lang_toggle_personal(ack, body, logger):
+@slack_app.action(re.compile(r"^lang_set_personal_(es|en|pt)$"))
+def _handle_lang_set_personal(ack, body, logger):
     ack()
     try:
         user_id = body.get("user", {}).get("id", "")
-        nuevo = toggle_idioma_slack(user_id)
+        idioma_elegido = body["actions"][0]["value"]
+        nuevo = guardar_idioma_por_slack_id(user_id, idioma_elegido)
         channel = (body.get("channel") or {}).get("id") or (body.get("container") or {}).get("channel_id")
         ts = (body.get("message") or {}).get("ts") or (body.get("container") or {}).get("message_ts")
         if channel and ts:

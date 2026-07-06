@@ -9,7 +9,7 @@ from difflib import SequenceMatcher
 
 from . import config
 from .clients import notion
-from .i18n import IDIOMAS_SOPORTADOS, siguiente_idioma
+from .i18n import IDIOMAS_SOPORTADOS
 from .state import bbdd_por_evaluado, lock
 from .utils import normalizar_nombre
 
@@ -2260,12 +2260,6 @@ def guardar_idioma_por_slack_id(user_id: str, idioma: str) -> str:
         if registro.get("id_usuario") == user_id:
             return _guardar_idioma_en_registro(registro, idioma)
     return "es"
-
-
-def toggle_idioma_slack(user_id: str) -> str:
-    """Rota el idioma del empleado (ES->EN->PT->ES) y lo escribe en Notion. Devuelve el nuevo idioma."""
-    nuevo = siguiente_idioma(idioma_por_slack_id(user_id))
-    return guardar_idioma_por_slack_id(user_id, nuevo)
 
 
 def guardar_idioma_por_sesion(sesion: dict, idioma: str) -> str:

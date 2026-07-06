@@ -15,16 +15,8 @@ import logging
 IDIOMA_POR_DEFECTO = "es"
 IDIOMAS_SOPORTADOS = ("es", "en", "pt")
 _ETIQUETA_IDIOMA = {"es": "ES", "en": "EN", "pt": "PT"}
+_BANDERA_IDIOMA = {"es": "🇪🇸", "en": "🇬🇧", "pt": "🇵🇹"}
 
-
-def siguiente_idioma(idioma: str) -> str:
-    """Siguiente idioma en la rueda cíclica ES -> EN -> PT -> ES."""
-    orden = IDIOMAS_SOPORTADOS
-    try:
-        i = orden.index(idioma)
-    except ValueError:
-        i = 0
-    return orden[(i + 1) % len(orden)]
 
 # Catalogo de textos: clave -> {"es": ..., "en": ...}
 # Los textos admiten placeholders de str.format, p.ej. "Hola {nombre}".
@@ -48,17 +40,24 @@ TEXTOS: dict[str, dict[str, str]] = {
     "bm.pendientes_link": {"es": "📋 También la tienes en tu <{url}|lista de pendientes>", "en": "📋 You can also find it in your <{url}|pending list>"},
     "bm.pendientes_titulo": {"es": "Evaluación mensual", "en": "Monthly evaluation"},
     "bm.pending_fallback": {"es": "📍 Tienes una evaluación mensual pendiente", "en": "📍 You have a monthly evaluation pending"},
-    "bm.pending_intro": {
-        "es": ("📍 *Tienes una evaluación mensual pendiente.*\n\n"
-               "_Recordatorio: esta evaluación es opcional. Recomendamos realizarla, pero no es obligatoria._\n"
+    "bm.pending_header": {
+        "es": "📍 *Tienes una evaluación mensual pendiente.*",
+        "en": "📍 *You have a monthly evaluation pending.*",
+        "pt": "📍 *Tens uma avaliação mensal pendente.*",
+    },
+    "bm.pending_body": {
+        "es": ("_Recordatorio: esta evaluación es opcional. Recomendamos realizarla, pero no es obligatoria._\n"
                "_No es necesario evaluar a todos los miembros del equipo si no lo consideras necesario._\n"
-               "_Esta evaluación es totalmente privada, solo podrá verla el CA de la persona evaluada._\n"
+               "_Esta evaluación es totalmente privada._\n"
                "_Si en algún momento quieres cancelar, escribe SOS en el hilo._"),
-        "en": ("📍 *You have a monthly evaluation pending.*\n\n"
-               "_Reminder: this evaluation is optional. We recommend completing it, but it's not mandatory._\n"
+        "en": ("_Reminder: this evaluation is optional. We recommend completing it, but it's not mandatory._\n"
                "_You don't need to evaluate every team member if you don't think it's necessary._\n"
-               "_This evaluation is fully private; only the evaluated person's CA can see it._\n"
+               "_This evaluation is fully private._\n"
                "_If at any point you want to cancel, type SOS in the thread._"),
+        "pt": ("_Lembrete: esta avaliação é opcional. Recomendamos que a realizes, mas não é obrigatória._\n"
+               "_Não é necessário avaliar todos os membros da equipa se não considerares necessário._\n"
+               "_Esta avaliação é totalmente privada._\n"
+               "_Se em algum momento quiseres cancelar, escreve SOS no tópico._"),
     },
     "bm.example_label": {"es": ":point_right: Ejemplo:", "en": ":point_right: Example:"},
     "bm.see_example": {"es": "Ver ejemplo", "en": "See example"},
@@ -186,7 +185,8 @@ TEXTOS: dict[str, dict[str, str]] = {
     "bp.opp_3": {"es": "*3.* Señalar limitaciones o aspectos relevantes respecto al cumplimiento de los criterios de evaluación", "en": "*3.* Point out limitations or relevant aspects regarding meeting the evaluation criteria"},
     "bp.btn_view_criteria": {"es": "📊 Ver criterios", "en": "📊 View criteria"},
     "bp.opp_4": {"es": "*4.* Si necesitas ayuda con algún tema o has tenido alguna dificultad que quieras comentar\n_El botón de urgencia notifica a tu CA por Slack. Si no lo pulsas, el problema no se notifica automáticamente y solo quedará registrado._", "en": "*4.* If you need help with anything or have had any difficulty you'd like to raise\n_The urgent button notifies your CA on Slack. If you don't press it, the issue isn't notified automatically and will only be recorded._"},
-    "bp.pending_intro": {"es": "📝 *Tienes opción de seguimiento personal pendiente*\n\n_Recordatorio: esta evaluación es opcional. Recomendamos realizarla, pero no es obligatoria._\n_Esta evaluación es totalmente privada, solo podrá verla tu CA._\n_Si en algún momento quieres cancelar, escribe SOS en el hilo._", "en": "📝 *You have a personal tracking option pending*\n\n_Reminder: this evaluation is optional. We recommend completing it, but it's not mandatory._\n_This evaluation is fully private; only your CA can see it._\n_If at any point you want to cancel, type SOS in the thread._"},
+    "bp.pending_header": {"es": "📝 *Tienes opción de seguimiento personal pendiente*", "en": "📝 *You have a personal tracking option pending*"},
+    "bp.pending_body": {"es": "_Recordatorio: esta evaluación es opcional. Recomendamos realizarla, pero no es obligatoria._\n_Esta evaluación es totalmente privada, solo podrá verla tu CA._\n_Si en algún momento quieres cancelar, escribe SOS en el hilo._", "en": "_Reminder: this evaluation is optional. We recommend completing it, but it's not mandatory._\n_This evaluation is fully private; only your CA can see it._\n_If at any point you want to cancel, type SOS in the thread._"},
     "bp.pending_fallback": {"es": "📝 Tienes opción de seguimiento personal pendiente", "en": "📝 You have a personal tracking option pending"},
     "bp.example_label": {"es": ":point_right: Ejemplo:", "en": ":point_right: Example:"},
     "bp.see_example": {"es": "Ver ejemplo", "en": "See example"},
@@ -399,12 +399,21 @@ def normalizar_idioma(idioma: str | None) -> str:
     return IDIOMA_POR_DEFECTO
 
 
-def boton_idioma_slack(idioma: str, action_id: str) -> dict:
-    """Botón de Slack tipo 'rueda': muestra el idioma AL QUE se cambiará al pulsarlo
-    (ES -> EN -> PT -> ES)."""
-    nxt = siguiente_idioma(normalizar_idioma(idioma))
-    label = f"🌐 {_ETIQUETA_IDIOMA.get(nxt, nxt.upper())}"
-    return {"type": "button", "text": {"type": "plain_text", "text": label, "emoji": True}, "action_id": action_id}
+def botones_idioma_slack(action_id_prefix: str) -> dict:
+    """Bloque 'actions' con un botón por idioma (bandera + código), para elegirlo
+    directamente en lugar de ir rotando. `action_id` de cada botón: '{prefix}_{es|en|pt}'."""
+    return {
+        "type": "actions",
+        "elements": [
+            {
+                "type": "button",
+                "text": {"type": "plain_text", "text": f"{_BANDERA_IDIOMA[code]} {_ETIQUETA_IDIOMA[code]}", "emoji": True},
+                "action_id": f"{action_id_prefix}_{code}",
+                "value": code,
+            }
+            for code in IDIOMAS_SOPORTADOS
+        ],
+    }
 
 
 def t(clave: str, idioma: str = IDIOMA_POR_DEFECTO, **kwargs) -> str:

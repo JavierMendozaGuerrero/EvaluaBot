@@ -56,6 +56,24 @@ from .state import (
 from .utils import normalizar_nombre
 
 
+def _editar_dm_inicial_mensual(user_id, idioma=None):
+    """Sustituye el mensaje inicial (raíz del hilo) de la evaluación mensual por el
+    resumen de 'completada'. Se llama al marcar la evaluación como completada."""
+    ts = evaluacion_dm_ts.get(user_id)
+    canal = evaluacion_dm_canal.get(user_id)
+    if not ts or not canal:
+        return
+    idioma = idioma or idioma_por_slack_id(user_id)
+    texto = t("bm.dm_completada", idioma)
+    try:
+        slack_app.client.chat_update(
+            channel=canal, ts=ts, text=texto,
+            blocks=[{"type": "section", "text": {"type": "mrkdwn", "text": texto}}],
+        )
+    except Exception:
+        logging.exception("No se pudo editar el DM inicial mensual de %s", user_id)
+
+
 def _bloques_dm_mensual(idioma, enlace_pendientes=None):
     """Bloques del DM inicial de la evaluación mensual, con botón de cambio de idioma en la cabecera."""
     bloques = [
@@ -563,6 +581,7 @@ def _handle_barbecho_entregar(ack, body, logger):
                 limpiar_historial(estado)
             quitar_pendiente("mensual", user_id)
             marcar_completada_por_slack_id(user_id, "mensual")
+            _editar_dm_inicial_mensual(user_id, _idi)
             slack_app.client.chat_postMessage(channel=dm_channel, thread_ts=thread_ts, text=t("bm.barbecho_saved", _idi))
         else:
             slack_app.client.chat_postMessage(channel=dm_channel, thread_ts=thread_ts, text=t("bm.err_save_notion", _idi))
@@ -1800,6 +1819,7 @@ def handle_message_events(event, logger):
                 limpiar_historial(estado)
             quitar_pendiente("mensual", user_id)
             marcar_completada_por_slack_id(user_id, "mensual")
+            _editar_dm_inicial_mensual(user_id, estado["idioma"])
             reply(t("bm.barbecho_saved", estado["idioma"]))
         else:
             reply(t("bm.err_save_notion", estado["idioma"]))
@@ -1896,6 +1916,7 @@ def handle_message_events(event, logger):
                 })
             quitar_pendiente("mensual", user_id)
             marcar_completada_por_slack_id(user_id, "mensual")
+            _editar_dm_inicial_mensual(user_id, estado.get("idioma", "es"))
             _enviar_mas_miembros(dm_channel, thread_ts, estado.get("idioma", "es"), estado=estado)
             return
         reply(t("bm.err_save_notion", estado.get("idioma", "es")))
@@ -2005,6 +2026,7 @@ def handle_proyecto_confirmar(ack, body, logger):
             })
         quitar_pendiente("mensual", user_id)
         marcar_completada_por_slack_id(user_id, "mensual")
+        _editar_dm_inicial_mensual(user_id, estado.get("idioma", "es"))
         _enviar_mas_miembros(dm_channel, thread_ts, estado.get("idioma", "es"), estado=estado)
         return
     reply(t("bm.err_save_notion", estado.get("idioma", "es")))

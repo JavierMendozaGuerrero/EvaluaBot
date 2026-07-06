@@ -761,6 +761,24 @@ def enviar_pregunta_inicial_ca() -> None:
         logging.exception("Error en enviar_pregunta_inicial_ca")
 
 
+def _editar_dm_inicial_ca(user_id, idioma=None):
+    """Sustituye el mensaje inicial (raíz del hilo) de la evaluación CA por el
+    resumen de 'completada'. Se llama al marcar la evaluación como completada."""
+    ts = ca_dm_ts.get(user_id)
+    canal = ca_dm_canal.get(user_id)
+    if not ts or not canal:
+        return
+    idioma = idioma or idioma_por_slack_id(user_id)
+    texto = t("bc.dm_completada", idioma)
+    try:
+        slack_app.client.chat_update(
+            channel=canal, ts=ts, text=texto,
+            blocks=[{"type": "section", "text": {"type": "mrkdwn", "text": texto}}],
+        )
+    except Exception:
+        logging.exception("No se pudo editar el DM inicial CA de %s", user_id)
+
+
 def _enviar_lista_advisees(user_id, channel, thread_ts, estado, idioma, logger, prefijo=""):
     """Muestra la lista de advisees pendientes con botones. Se usa tanto al avanzar
     normalmente como al reenviar esta pregunta tras pulsar 'Atrás'."""
@@ -776,6 +794,7 @@ def _enviar_lista_advisees(user_id, channel, thread_ts, estado, idioma, logger, 
                 conversaciones_ca[user_id]["modo"] = "terminado"
         quitar_pendiente("ca", user_id)
         marcar_completada_por_slack_id(user_id, "ca")
+        _editar_dm_inicial_ca(user_id, idioma)
         slack_app.client.chat_postMessage(
             channel=channel, thread_ts=thread_ts, text=prefijo + t("bc.all_advisees_done", idioma),
         )

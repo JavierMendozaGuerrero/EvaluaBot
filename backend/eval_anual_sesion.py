@@ -155,12 +155,13 @@ def _match_dim_label(etiqueta: str, criterios: dict) -> str | None:
     return mejor if mejor_score > 0 else None
 
 
-def _criterios_area(cargo: str, clave: str, etiqueta: str, idioma: str = "es") -> list[dict]:
+def _criterios_area(cargo: str, clave: str, etiqueta: str, idioma: str = "es", nombre: str = "") -> list[dict]:
     """Criterios de esa área para el cargo y superiores, DESDE NOTION (fallback hardcoded).
 
-    Devuelve [{"nivel": "Manager", "criterios": [...]}, ...].
+    El grupo (Negocio/Palantir/MiddleOffice) sale de la columna Área de Notion (por nombre);
+    si no consta, se infiere del cargo. Devuelve [{"nivel": "Manager", "criterios": [...]}, ...].
     """
-    grupo = sk._grupo_por_cargo(cargo)
+    grupo = sk._grupo_empleado(nombre, cargo)
     nivel = sk._nivel_cargo(cargo)
     try:
         crit_notion = obtener_criterios_evaluacion(grupo, idioma) or {}
@@ -330,7 +331,7 @@ def obtener_area(advisee: str, clave: str) -> dict:
     # Criterios del área (siempre, sin API). Se muestran ANTES de que el CA opine.
     # El DIAGNÓSTICO (nivel + gaps) NO se genera aquí: solo tras la opinión inicial del CA.
     if not area.get("criterios"):
-        area["criterios"] = _criterios_area(sesion.get("cargo", ""), clave, secciones[clave])
+        area["criterios"] = _criterios_area(sesion.get("cargo", ""), clave, secciones[clave], nombre=sesion.get("advisee", ""))
         if area["criterios"]:
             _guardar(slug, sesion)
 
@@ -452,7 +453,7 @@ def responder_area(advisee: str, clave: str, texto: str) -> dict:
     area = sesion.setdefault("areas", {}).setdefault(
         clave, {"conversacion": [], "propuesta": "", "confirmada": False})
     if "criterios" not in area:
-        area["criterios"] = _criterios_area(sesion.get("cargo", ""), clave, secciones[clave])
+        area["criterios"] = _criterios_area(sesion.get("cargo", ""), clave, secciones[clave], nombre=sesion.get("advisee", ""))
     # El DIAGNÓSTICO (nivel + gaps) se genera aquí: solo cuando el CA manda su opinión inicial.
     if "diagnostico" not in area:
         area["diagnostico"] = _generar_diagnostico(
@@ -491,6 +492,91 @@ def estado_sesion(advisee: str) -> dict:
     if not sesion:
         raise ValueError("No hay sesión iniciada.")
     return _resumen_estado(sesion)
+
+
+# ── Plan de acción sugerido (paso final) ──────────────────────────────────────
+
+def _generar_plan_accion(sesion: dict, instruccion: str = "", plan_previo: str = "") -> str:
+    """Claude propone un plan de acción para el año que viene a partir de la evaluación acordada."""
+    if not anthropic_client:
+        return plan_previo or ""
+    secciones = _secciones(sesion.get("cargo", ""))
+    areas = sesion.get("areas", {})
+    bloques = []
+    for clave, etiqueta in secciones:
+        a = areas.get(clave, {})
+        final = a.get("texto_final") or a.get("propuesta") or ""
+        diag = a.get("diagnostico") or ""
+        if final or diag:
+            bloques.append(f"### {etiqueta}\nVALORACIÓN ACORDADA: {final or '—'}\nDIAGNÓSTICO/GAPS: {diag or '—'}")
+    resumen = "\n\n".join(bloques) or "(sin datos por área)"
+    system = (
+        "Eres el director de RRHH de IGENERIS. A partir de la evaluación anual YA ACORDADA (valoración y "
+        "gaps por área) y del cargo de la persona, propón un PLAN DE ACCIÓN SUGERIDO para el año que viene: "
+        "entre 3 y 5 objetivos concretos y accionables. Para cada objetivo: un título breve + qué hacer / "
+        "cómo lograrlo, atado a los GAPS detectados y a la ruta de crecimiento (consolidar su nivel o subir "
+        "al siguiente). Realista, específico y medible cuando se pueda. Es una SUGERENCIA para el CA. "
+        "Devuelve texto plano como lista numerada (1., 2., …), sin preámbulos."
+    )
+    user = f"CARGO: {sesion.get('cargo') or 'no especificado'}\n\nEVALUACIÓN POR ÁREA:\n{resumen}"
+    if plan_previo and instruccion:
+        user += f"\n\nPLAN ACTUAL:\n{plan_previo}\n\nAJUSTE QUE PIDE EL CA: {instruccion}"
+    try:
+        resp = anthropic_client.messages.create(
+            model="claude-sonnet-4-6", max_tokens=1200, temperature=0.3, system=system,
+            messages=[{"role": "user", "content": user}],
+        )
+        return "".join(b.text for b in resp.content if b.type == "text").strip()
+    except Exception:
+        logging.exception("Fallo generando el plan de acción")
+        return plan_previo or ""
+
+
+def obtener_plan_accion(advisee: str) -> dict:
+    """Genera (lazy) y devuelve el plan de acción sugerido."""
+    slug = slug_archivo(advisee)
+    sesion = _leer(slug)
+    if not sesion:
+        raise ValueError("No hay sesión iniciada.")
+    if not sesion.get("plan_accion"):
+        sesion["plan_accion"] = _generar_plan_accion(sesion)
+        _guardar(slug, sesion)
+    return {"plan": sesion.get("plan_accion", "")}
+
+
+def obtener_plan_guardado(advisee: str) -> dict:
+    """Devuelve el plan YA guardado SIN generarlo (para mostrarlo fuera del asistente). Cero API."""
+    slug = slug_archivo(advisee)
+    sesion = _leer(slug)
+    if not sesion:
+        return {"plan": "", "tieneSesion": False}
+    return {"plan": sesion.get("plan_accion", ""), "tieneSesion": True}
+
+
+def pedir_cambios_plan(advisee: str, instruccion: str) -> dict:
+    """El CA pide a la IA que ajuste el plan de acción."""
+    slug = slug_archivo(advisee)
+    sesion = _leer(slug)
+    if not sesion:
+        raise ValueError("No hay sesión iniciada.")
+    if not (instruccion or "").strip():
+        raise ValueError("Dime qué cambio quieres en el plan.")
+    nuevo = _generar_plan_accion(sesion, instruccion=instruccion.strip(),
+                                 plan_previo=sesion.get("plan_accion", ""))
+    sesion["plan_accion"] = nuevo
+    _guardar(slug, sesion)
+    return {"plan": nuevo}
+
+
+def guardar_plan_accion(advisee: str, texto: str) -> dict:
+    """Guarda el plan editado a mano por el CA."""
+    slug = slug_archivo(advisee)
+    sesion = _leer(slug)
+    if not sesion:
+        raise ValueError("No hay sesión iniciada.")
+    sesion["plan_accion"] = (texto or "").strip()
+    _guardar(slug, sesion)
+    return {"ok": True}
 
 
 def finalizar_sesion(advisee: str) -> dict:

@@ -532,11 +532,10 @@ def _handle_personal_ver_objetivos(ack, body, logger):
         if objetivos:
             lineas = []
             for obj in objetivos:
+                # Solo titulo y KPIs (sin descripcion ni tipo).
                 linea = f"• *{obj['titulo']}*"
                 if obj.get("kpis"):
                     linea += f"\n  _KPIs:_ {obj['kpis']}"
-                if obj.get("descripcion"):
-                    linea += f"\n  {obj['descripcion']}"
                 lineas.append(linea)
             msg_obj = t("bp.current_goals_header", _idi) + "\n\n" + "\n\n".join(lineas)
         else:

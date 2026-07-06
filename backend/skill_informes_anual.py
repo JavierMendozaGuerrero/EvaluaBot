@@ -25,6 +25,7 @@ from .notion_service import (
     obtener_opiniones_ca_por_advisee,
     obtener_objetivos_persona,
     obtener_criterios_evaluacion,
+    obtener_grupo_empleado,
     obtener_comentarios_personales,
     obtener_barbecho_por_empleado,
     idioma_de_persona,
@@ -362,6 +363,7 @@ def _nivel_cargo(cargo: str) -> str | None:
 
 
 def _grupo_por_cargo(cargo: str) -> str:
+    """Fallback: infiere el grupo del TEXTO del cargo (poco fiable). Usa _grupo_empleado si tienes el nombre."""
     c = cargo.lower()
     if "palantir" in c:
         return "Palantir"
@@ -370,9 +372,22 @@ def _grupo_por_cargo(cargo: str) -> str:
     return "Negocio"
 
 
-def _criterios_para_prompt(cargo: str, idioma: str = "es") -> str:
+def _grupo_empleado(nombre: str, cargo: str) -> str:
+    """Grupo real (Negocio/Palantir/MiddleOffice) desde la columna Área de Notion.
+    Si no consta, cae a inferirlo del cargo."""
+    if nombre:
+        try:
+            grupo = obtener_grupo_empleado(nombre)
+            if grupo:
+                return grupo
+        except Exception:
+            logging.exception("No se pudo leer el grupo de '%s' desde Notion", nombre)
+    return _grupo_por_cargo(cargo)
+
+
+def _criterios_para_prompt(cargo: str, idioma: str = "es", nombre: str = "") -> str:
     nivel = _nivel_cargo(cargo)
-    grupo = _grupo_por_cargo(cargo)
+    grupo = _grupo_empleado(nombre, cargo)
 
     try:
         criterios_notion = obtener_criterios_evaluacion(grupo, idioma)
@@ -832,7 +847,7 @@ def interpretar_evaluaciones_anual(emp_data: dict, cargo: str = "", criterios: s
         dims += list(_DIMS_LIDERAZGO)
     dims_lista = ", ".join(f'"{c}"' for c, _ in dims)
 
-    criterios_bloque = _criterios_para_prompt(cargo, idioma) if criterios is None else criterios
+    criterios_bloque = _criterios_para_prompt(cargo, idioma, emp_data.get("empleado", "")) if criterios is None else criterios
     criterios_section = (
         f"\n\nCRITERIOS DTI DE EVALUACIÓN (úsalos para calibrar el feedback según el cargo):\n{criterios_bloque}"
         if criterios_bloque else ""
@@ -1601,7 +1616,7 @@ def generar_informe_anual(evaluado: str, cargo: str = "") -> str:
     slug = slug_archivo(evaluado)
     idioma = idioma_de_persona(evaluado)
     # Se computa una sola vez: alimenta la huella de caché y el prompt (evita doble lectura de Notion).
-    criterios = _criterios_para_prompt(cargo)
+    criterios = _criterios_para_prompt(cargo, idioma, evaluado)
     huella = _huella_datos(emp_data, cargo=cargo, criterios=(criterios or "") + f"|lang={idioma}")
     ruta_docx = os.path.join(config.CARPETA_WEB, f"informe_anual_{slug}.docx")
     ruta_html = os.path.join(config.CARPETA_WEB, f"informe_anual_{slug}.html")

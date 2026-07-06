@@ -2195,6 +2195,23 @@ def buscar_empleado_y_cargo(nombre: str) -> tuple[str | None, str | None]:
     return None, None
 
 
+_GRUPO_DISPLAY = {"negocio": "Negocio", "palantir": "Palantir", "middleoffice": "MiddleOffice"}
+
+
+def obtener_grupo_empleado(nombre: str) -> str:
+    """Grupo del empleado (Negocio/Palantir/MiddleOffice) desde la columna Área de 'Lista de empleados'.
+
+    Devuelve '' si no consta (para que el que llama caiga a inferirlo del cargo).
+    """
+    objetivo = _normalizar_para_match(nombre)
+    if not objetivo:
+        return ""
+    for registro in _obtener_registros_empleados():
+        if objetivo == _normalizar_para_match(registro["nombre"]):
+            return _GRUPO_DISPLAY.get(registro.get("area", ""), "")
+    return ""
+
+
 def obtener_cargo_por_slack_id(user_id: str) -> str | None:
     """Devuelve el cargo del empleado cuyo ID_usuario coincide con user_id."""
     for registro in _obtener_registros_empleados():
@@ -2612,7 +2629,8 @@ def _extraer_url_foto(prop: dict) -> str:
 
 
 _cache_lista_ca: dict = {"db_id": None}
-_cache_advisees_por_ca: dict = {}
+_cache_advisees_por_ca: dict = {}  # ca_norm -> (advisees, ts)
+_ADVISEES_CACHE_TTL = 300  # 5 minutos: refleja cambios en 'Lista CA' sin reiniciar
 
 
 def obtener_advisees(ca_nombre: str, ca_aliases=None) -> list[str]:
@@ -2621,8 +2639,9 @@ def obtener_advisees(ca_nombre: str, ca_aliases=None) -> list[str]:
     ca_norm = sorted(ca_norms)[0] if ca_norms else ""
     logging.info(f"[advisees] Buscando advisees para CA: '{ca_nombre}' (aliases: {ca_norms})")
     with lock:
-        if ca_norm in _cache_advisees_por_ca:
-            return _cache_advisees_por_ca[ca_norm]
+        entry = _cache_advisees_por_ca.get(ca_norm)
+        if entry and (time.time() - entry[1]) < _ADVISEES_CACHE_TTL:
+            return entry[0]
     try:
         with lock:
             db_id = _cache_lista_ca["db_id"]
@@ -2684,13 +2703,13 @@ def obtener_advisees(ca_nombre: str, ca_aliases=None) -> list[str]:
                 pares.sort(key=lambda x: x[0])
                 advisees = [nombre for _, nombre in pares]
                 with lock:
-                    _cache_advisees_por_ca[ca_norm] = advisees
+                    _cache_advisees_por_ca[ca_norm] = (advisees, time.time())
                 return advisees
             if not resp.get("has_more"):
                 break
             cursor = resp.get("next_cursor")
         with lock:
-            _cache_advisees_por_ca[ca_norm] = []
+            _cache_advisees_por_ca[ca_norm] = ([], time.time())
         return []
     except Exception:
         logging.exception(f"Error obteniendo advisees de '{ca_nombre}'")

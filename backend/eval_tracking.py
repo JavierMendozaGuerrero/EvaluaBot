@@ -385,3 +385,27 @@ def detalle_por_persona(nombre: str) -> list:
     resultado = [{"ciclo": c, "tipos": t} for c, t in por_ciclo.items()]
     resultado.sort(key=lambda x: x["ciclo"], reverse=True)
     return resultado
+
+
+_SLACK_TIPOS = ("mensual", "personal", "ca")
+
+
+def pendientes_slack_de_persona(persona: str) -> list:
+    """Tipos de evaluacion de Slack (mensual/personal/ca) pendientes para `persona`
+    (filas con Completada=False). Devuelve tipos distintos, en orden estable."""
+    db_id = _obtener_o_crear_bbdd()
+    if not db_id or not persona:
+        return []
+    objetivo = normalizar_nombre(persona)
+    vistos = set()
+    try:
+        for fila in _iter_filas(db_id, filter={"property": "Completada", "checkbox": {"equals": False}}):
+            props = fila.get("properties", {})
+            if normalizar_nombre(_titulo(props, "Persona")) != objetivo:
+                continue
+            tipo = _select(props, "Tipo")
+            if tipo in _SLACK_TIPOS:
+                vistos.add(tipo)
+    except Exception:
+        logging.exception("Error leyendo pendientes de Slack de '%s'", persona)
+    return [tp for tp in _SLACK_TIPOS if tp in vistos]

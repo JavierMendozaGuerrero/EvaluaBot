@@ -1,184 +1,153 @@
-# Plan de implementación — Preguntas previas al CA (evaluación anual)
+# Evaluación anual asistida — informe final "con ayuda de Claude"
 
-> Estado: **propuesta para revisar** (no implementado). Documento de trabajo.
-> Objetivo: que el CA piense críticamente antes de aprobar el informe, sin que Claude le ancle el juicio,
-> manteniendo el control humano y dejando trazabilidad de su razonamiento.
-
----
-
-## 1. Principios (lo que NO se negocia)
-
-1. **Anti-anclaje**: el CA se compromete con su valoración de cada área **antes** de ver lo que escribió Claude.
-2. **CA siempre con el control**: Claude propone, el CA decide. Ninguna respuesta de Claude sobrescribe sin que el CA lo apruebe.
-3. **Rigor con evidencia**: el CA razona sobre el **dato en bruto** (las mismas fuentes citadas `[E/O/P/S/B#]`), no sobre un resumen.
-4. **Trazabilidad**: la valoración del CA y las divergencias con Claude quedan registradas (log de auditoría interno).
-5. **Fricción mínima**: 1-2 preguntas por área, guardar progreso, poder reanudar. Si cansa, se rellena a lo loco y se pierde el sentido.
+> Estado: **implementado**. Este documento describe el comportamiento real del código
+> (`backend/eval_anual_sesion.py`, endpoints en `backend/api_server.py`, wizard en `frontend/src/main.jsx`).
+> Objetivo: que el CA co-redacte el informe anual debatiendo con la IA, apoyado en criterios y evidencia,
+> manteniendo el control humano.
 
 ---
 
-## 2. Flujo UX (asistente paso a paso en el dashboard)
+## 1. Principios
+
+1. **CA con el control**: Claude propone, el CA decide y confirma cada área. Nada se cierra sin su OK.
+2. **Todo con evidencia**: cada afirmación lleva su cita `[E/O/P/S/B#]` a la fuente real; nada inventado.
+3. **Baremo objetivo**: se juzga contra los **criterios del cargo** (de Notion), no contra opiniones sueltas.
+4. **Debate crítico**: la IA es un sparring exigente (defiende con datos, cuestiona sesgos, no cede por complacer).
+5. **Barato en API**: generación inicial cacheada en la sesión; contexto estático del debate con *prompt caching*.
+
+---
+
+## 2. Flujo real (wizard `EvaluacionAnualWizard`)
 
 ```
-[0] Confirmación de identidad
-    "Vas a evaluar a {nombre} — proyectos del año: AF, Patio. ¿Correcto?"  → 1 clic
+[0] Identidad — "¿Es esta la persona que vas a evaluar?" (nombre + proyectos) → 1 clic
         ↓
-[1] Lectura de evidencia POCO A POCO   ← opción C, sin sobrecargar
-    La evidencia en bruto NO se muestra toda de golpe: se revela por
-    bloques cronológicos (p. ej. cuatrimestre a cuatrimestre: ene-abr,
-    may-ago, sep-dic), avanzando con "continuar". Sin filtrar ni curar
-    (el CA ve todo), pero digerido y, de paso, reforzando la lectura de
-    la EVOLUCIÓN del año (febrero ≠ noviembre).
+[1] Loop por área — TODAS: las 5 de proyecto + liderazgo (si el cargo lo requiere)
+    + contribution to the firm + resultado global
+    Por cada área:
+      1a. Panel "Criterios y nivel · {cargo}":
+            - ANTES de opinar → SOLO los criterios de esa área (de Notion, según el cargo).
+            - Evidencia que la IA consideró (las fuentes que citó), plegable.
+      1b. El CA escribe sus puntos / su opinión (pregunta abierta).
+      1c. Al enviar → aparece el DIAGNÓSTICO (a qué nivel está y qué le falta para subir, con citas)
+          y la IA responde conversacionalmente (defiende/reta con criterios + evidencia).
+          - Debate libre: se puede seguir hablando ("¿por qué X, no Y?").
+          - Referencias al momento: las citas [E3] de los mensajes son CLICABLES (ficha inline),
+            y también se puede preguntar "referencia de E3" y la IA responde con el texto literal.
+      1d. "Confirmar área y continuar" → fija el texto acordado (la propuesta de la IA).
         ↓
-[2] Loop por dimensión — TODAS: gestión, calidad, equipo, comunicación,
-    cliente, liderazgo (si aplica) y contribution to the firm
-    Para cada dimensión:
-      2a. Se muestran los CRITERIOS DTI de esa área (la lente) + recordatorio de la evidencia.
-      2b. 1-2 preguntas → el CA escribe su valoración.   [SE BLOQUEA al guardar]
-      2c. SOLO entonces se revela lo que redactó Claude para esa dimensión (con sus citas).
-      2d. ¿Coinciden? → siguiente.
-          ¿Divergen?   → se muestran lado a lado con citas; el CA decide:
-                          [la mía] · [la de Claude] · [fusión editada]   → queda registrado.
+[2] Plan de acción sugerido (año que viene)
+    - La IA propone 3-5 objetivos accionables a partir de la evaluación acordada + los gaps.
+    - Editable a mano + "pedir cambios a la IA" (regenera con tu instrucción).
+    - Es SOLO una sugerencia en pantalla: NO se mete en el Word.
         ↓
-[3] Contribution to the firm + Resultado (mismo patrón)
-        ↓
-[4] Objetivos '26 (el CA los rellena)
-        ↓
-[5] Vista final del borrador → el CA publica (informe_final) cuando está conforme
+[3] "Generar borrador" → informe_anual_{slug}.docx/html con lo acordado por área
+    (huecos de notas/retribución en blanco). El CA lo revisa, rellena y lo sube como informe final.
 ```
 
-**Clave de orden**: el paso 2c (revelar a Claude) nunca ocurre antes del 2b (bloquear respuesta del CA).
+**Nota de orden**: los criterios se ven antes de opinar (lente objetiva), pero el **diagnóstico** (juicio de
+nivel) solo aparece **tras enviar tu opinión** — para no anclarte, y de paso ahorrar API (se genera solo entonces).
 
 ---
 
-## 3. Modelo de datos
-
-Una "sesión de evaluación" por (CA, advisee, año):
+## 3. Modelo de datos — `sesion_anual_{slug}.json` (JSON local en `config.CARPETA_WEB`)
 
 ```jsonc
 {
   "advisee": "Alonso Ballesteros",
   "ca": "María Paniagua",
+  "cargo": "Manager",            // leído de Notion (Lista de empleados → columna Cargo)
   "anio": 2025,
   "estado": "en_progreso | completada",
   "identidad_confirmada": true,
-  "respuestas_ca": {
-    "gestion_proyecto": { "texto": "...", "bloqueada_en": "2026-03-01T10:00:00Z" },
-    "calidad_tecnica":  { ... }
-    // ...
-  },
-  "divergencias": [
-    {
-      "dimension": "calidad_tecnica",
-      "valoracion_ca": "Veo calidad media...",
-      "valoracion_claude": "Calidad alta [E3]",
-      "decision": "fusion",          // mia | claude | fusion
+  "emp_data": { ... },           // las 5 fuentes + objetivos (obtener_datos_empleado_anual)
+  "comentarios": { ... },        // interpretar_evaluaciones_anual (cacheado, 1 sola vez)
+  "areas": {
+    "gestion_proyecto": {
+      "conversacion": [{ "rol": "ca|ia", "texto": "..." }],
+      "propuesta": "bullets con citas",
+      "confirmada": true,
       "texto_final": "...",
-      "resuelta_en": "2026-03-01T10:05:00Z"
+      "criterios": [{ "nivel": "Manager", "criterios": ["..."] }],  // de Notion
+      "diagnostico": "está a nivel X porque [E2]; le falta Y/Z para subir"
     }
-  ]
+    // ... una entrada por área
+  },
+  "plan_accion": "1. …\n2. …",   // sugerencia del año que viene (solo se muestra)
+  "creada_en": "...", "actualizada_en": "...", "completada_en": "..."
 }
 ```
 
-- `respuestas_ca` → **input** que se inyecta en la reconciliación + **registro** del juicio humano.
-- `divergencias` → **log de auditoría interno** (lo ven CA/admin, NO el advisee).
+---
 
-**Persistencia**: propongo una BD nueva en Notion `Sesiones evaluación anual` (consistente con el resto del sistema) **o** un JSON local junto al informe (`sesion_anual_{slug}.json`). Decisión abierta (ver §8).
+## 4. Backend — `backend/eval_anual_sesion.py`
+
+| Función | Qué hace |
+|---------|----------|
+| `iniciar_sesion` | Crea/recupera la sesión; coge el **cargo real de Notion** (`_cargo_de` → `buscar_empleado_y_cargo`). No llama a Claude aún. |
+| `confirmar_identidad` | Marca la identidad confirmada. |
+| `obtener_area` | Evidencia citada + **criterios de Notion** (`_criterios_area`) + pregunta. El **diagnóstico** solo si ya existe (tras opinar). |
+| `responder_area` | Guarda el turno del CA; genera el diagnóstico en la 1ª opinión; llama a la IA (`_claude_conversa_area`) y devuelve mensaje + propuesta + diagnóstico. |
+| `confirmar_area` | Fija `texto_final` = propuesta acordada; marca el área confirmada. |
+| `obtener_plan_accion` / `pedir_cambios_plan` / `guardar_plan_accion` | Plan de acción sugerido: genera (lazy), ajusta por instrucción del CA, o guarda la edición manual. |
+| `finalizar_sesion` | Exige todas las áreas confirmadas; genera el borrador con lo acordado (huecos en blanco); log de auditoría en Notion (best-effort). |
+| `estado_sesion` / `eliminar_sesion` | Progreso (para reanudar) / borrar la sesión y sus borradores. |
+
+Helpers clave: `_criterios_area` (criterios por área **desde Notion** `obtener_criterios_evaluacion(grupo)`,
+con emparejamiento de dimensión `_match_dim_label` y fallback al diccionario hardcodeado), `_generar_diagnostico`
+(nivel + gaps), `_claude_conversa_area` (debate, con **prompt caching** del bloque estático), `_generar_plan_accion`.
+
+**Reaprovecha del skill**: `obtener_datos_empleado_anual`, `_formatear_contexto` (fuentes), `interpretar_evaluaciones_anual`,
+`guardar_informe_anual_word/html`, `_grupo_por_cargo`, `_nivel_cargo`, `_CRITERIOS_DTI`.
 
 ---
 
-## 4. Backend (api_server.py — nuevos endpoints)
+## 5. Endpoints — `backend/api_server.py` (`/api/eval-anual/*`)
 
-Todos protegidos por sesión y verificando que el advisee es del CA (como `servir_archivo_protegido`).
+Todos exigen sesión y que el advisee sea del CA (o admin) vía `_exigir_acceso_advisee`.
 
-| Endpoint | Método | Qué hace |
-|----------|--------|----------|
-| `/api/eval-anual/iniciar` | POST | Crea/recupera la sesión. Devuelve identidad (nombre, proyectos). Dispara la generación de Claude en background (cacheada) pero **no** la devuelve. |
-| `/api/eval-anual/evidencia` | GET | Devuelve la evidencia en bruto **por bloques** (`?bloque=1`, p. ej. cuatrimestre), para mostrarla poco a poco sin sobrecargar. |
-| `/api/eval-anual/dimension` | GET | Para una dimensión: devuelve criterios DTI + (si ya está bloqueada la respuesta del CA) los bullets de Claude. |
-| `/api/eval-anual/responder` | POST | Guarda y **bloquea** la respuesta del CA para una dimensión. A partir de aquí ya puede pedir la de Claude. |
-| `/api/eval-anual/resolver` | POST | Registra la decisión sobre una divergencia (mía/claude/fusión + texto final). |
-| `/api/eval-anual/estado` | GET | Progreso de la sesión (para reanudar). |
-| `/api/eval-anual/finalizar` | POST | Marca completada y regenera el informe final incorporando las decisiones del CA. |
-
-**Reaprovecha**: `obtener_datos_empleado_anual`, `_formatear_contexto` (las `fuentes`), `_criterios_para_prompt` (por dimensión), `interpretar_evaluaciones_anual`.
-
----
-
-## 5. Frontend (React — dashboard)
-
-Un componente `EvaluacionAnualWizard` con estado de pasos. Pantallas:
-
-1. **Confirmar identidad** — tarjeta con nombre/proyectos + botón "Sí, es correcto".
-2. **Evidencia** — lista de fichas (reutiliza el estilo del anexo de Fuentes).
-3. **Dimensión** (repetida) — criterios + textarea de respuesta + botón "Guardar y continuar" (bloquea). Tras bloquear, aparece el bloque de Claude y, si difiere, la vista comparativa con los 3 botones.
-4. **Resumen** — borrador completo + "Publicar informe final".
-
-Estado guardado en backend tras cada paso → se puede cerrar y reanudar. Barra de progreso "3/7 áreas".
+| Método | Ruta | Función |
+|--------|------|---------|
+| GET  | `/estado` | `estado_sesion` |
+| GET  | `/area?clave=` | `obtener_area` |
+| GET  | `/plan` | `obtener_plan_accion` |
+| POST | `/iniciar` | `iniciar_sesion` |
+| POST | `/confirmar-identidad` | `confirmar_identidad` |
+| POST | `/responder-area` | `responder_area` |
+| POST | `/confirmar-area` | `confirmar_area` |
+| POST | `/plan-cambios` | `pedir_cambios_plan` |
+| POST | `/plan-guardar` | `guardar_plan_accion` |
+| POST | `/finalizar` | `finalizar_sesion` (+ urls del borrador) |
+| POST | `/eliminar` | `eliminar_sesion` |
 
 ---
 
-## 6. Reconciliación con Claude
+## 6. Frontend — `frontend/src/main.jsx`
 
-- Claude genera el borrador **una vez** (ya cacheado). Sus bullets por dimensión son la "propuesta".
-- La respuesta del CA es la "tesis humana" comprometida antes de ver la propuesta.
-- En `finalizar`, el texto final de cada dimensión = lo que el CA aprobó (su decisión en 2d).
-  - Opción ligera: la decisión es manual (el CA elige/edita).
-  - Opción asistida (fase 2): una llamada extra a Claude que **fusiona** respetando lo que el CA marcó, sin inventar (mismas reglas de cita).
-
----
-
-## 7. Dónde encaja con lo ya construido
-
-- El **borrador** (`informe_anual_*`) y el **anexo de Fuentes** ya existen → la evidencia del paso [1] es justo ese anexo.
-- El **panel de revisión** (avisos del verificador) sigue apareciendo en el borrador.
-- El estado **borrador → publicado** ya existe (`/api/subir-informe-final`). `finalizar` puede reutilizarlo.
-- Las **citas internas** ya no dependen de Notion → la evidencia es accesible para el CA sin permisos extra.
+- **`EvaluacionAnualWizard`** con pasos `identidad → loop → resumen(+plan) → hecho`. Textos vía i18n (`eaw.*`).
+  - Panel "Criterios y nivel" (criterios siempre; diagnóstico tras opinar).
+  - Chat por área con **citas clicables** (ficha inline de la fuente) y pista de referencia.
+  - Paso final con el **plan de acción** editable + "pedir cambios a la IA".
+  - Botón **"Info completa"** (arriba, junto al nombre): descarga el PDF con todas las fuentes.
+- Se llega desde `AdviseeDetail` → "Realizar informe final" → "Con ayuda de Claude".
 
 ---
 
-## 8. Decisiones
+## 7. Coste / API
 
-1. **Persistencia de la sesión** → **JSON local en Fase 1** (rápido), migrar a **Notion en Fase 2**
-   (durable + auditable por admins). Pros/contras de cada uno valorados.
-2. **Reconciliación** → **manual en Fase 1** (CA elige/reescribe), **fusión asistida por Claude en Fase 2**.
-3. **Liderazgo / Contribution** → ✅ **también pasan por el loop** (todas las áreas, no solo las 5 de proyecto).
-4. **Guardar y reanudar** → ✅ se puede **guardar a medias y seguir más tarde**; **publicar exige completar** el loop.
-5. **Lectura de evidencia** → ✅ **poco a poco** (por bloques cronológicos), no toda de golpe.
-
----
-
-## 9. Fases de entrega
-
-- **Fase 1 (núcleo) — ✅ IMPLEMENTADA**: sesión + identidad + evidencia por bloques + loop por dimensión
-  con bloqueo + comparación manual + log de divergencias. Persistencia JSON local.
-- **Fase 2 (asistencia) — ✅ IMPLEMENTADA**: fusión asistida por Claude + log de auditoría persistido en
-  Notion (best-effort) + vista del log en la web.
-- **Fase 3 (refinos) — pendiente**: recordatorios, métricas agregadas de divergencia, panel admin.
-
-### Qué se construyó (para probar en vivo)
-
-**Backend**
-- `backend/eval_anual_sesion.py` — lógica de sesión (JSON local `sesion_anual_{slug}.json`).
-- `backend/notion_service.py` — `guardar_log_evaluacion_anual()` (+ BD "Log evaluacion anual asistida").
-- `backend/api_server.py` — endpoints:
-  - GET `/api/eval-anual/{estado,evidencia,dimension,log}`
-  - POST `/api/eval-anual/{iniciar,confirmar-identidad,responder,fusionar,decidir,finalizar}`
-  - Acceso: solo el CA del advisee o admin.
-
-**Frontend** (`frontend/src/main.jsx`)
-- `EvaluacionAnualWizard` — identidad → evidencia por periodos → loop (responder/bloquear → ver IA →
-  mía/IA/fusión, con "Sugerir fusión con IA") → resumen → publicar.
-- `EvalAnualLogPage` — vista del log de decisiones (CA vs IA).
-- Lanzadores en `AdviseeDetail` ("Evaluación anual asistida", "Ver log de decisiones").
-
-**Probado**: lógica del módulo end-to-end (con stub de Claude) y build del frontend (`vite build`).
-**Falta**: prueba en vivo (servidor + Notion + Claude reales).
+- La generación inicial (`interpretar_evaluaciones_anual`) se hace **una vez** y se cachea en la sesión.
+- El **diagnóstico** por área se genera **una vez**, y solo **tras la primera opinión** del CA.
+- El debate usa **prompt caching**: instrucciones + criterios + diagnóstico + evidencia + valoración van en un
+  bloque `cache_control` (estático por área) → los turnos siguientes casi no pagan esos tokens. Fallback sin caché
+  si el modelo/SDK no lo soportara.
+- El **plan de acción** es 1 llamada al final (+1 por cada "pedir cambios").
 
 ---
 
-## 10. Riesgos
+## 8. Notas / pendiente
 
-- **Fatiga del CA** (cobertura total): mitigar con 1-2 preguntas/área y guardado incremental.
-- **Automation bias** en el paso 2c: mitigado por el bloqueo previo (2b).
-- **Coste/latencia**: la generación de Claude es 1 vez (cacheada); la fusión asistida (fase 2) añade 1 llamada.
-- **Evidencia sin clasificar por dimensión**: resuelto con opción C (evidencia completa una vez + lente de criterios por área).
+- **Ejemplos de guía**: aún no hay en Notion → el diagnóstico usa solo criterios (sin ejemplos).
+- **Emparejamiento criterio↔área**: por solape de palabras; si en Notion las dimensiones tienen nombres muy
+  distintos a las etiquetas del informe, puede fallar (afinar `_match_dim_label`).
+- **Verificación en vivo**: la calidad real (criterios de Notion, diagnóstico y debate de Claude) se confirma
+  con servidor + Notion + Claude reales. La lógica está probada con stubs y los builds pasan.

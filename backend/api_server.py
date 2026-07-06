@@ -22,7 +22,6 @@ from .notion_service import (
     obtener_advisees,
     obtener_datos_empleados_por_nombres,
     obtener_opiniones_ca_por_advisee,
-    listar_advisees_con_opiniones_ca,
     guardar_objetivo_persona,
     obtener_objetivos_persona,
     eliminar_objetivo_persona,
@@ -81,7 +80,23 @@ from .evaluaciones_extra import (
     obtener_evaluaciones_extra_por_evaluado,
 )
 from .ca_reviews import guardar_nota_ca_web, notificar_acceso_informe_final_web, obtener_resumen_advisee_para_ca
-from .eval_tracking import resumen_ciclo_actual, detalle_por_persona
+from .eval_tracking import resumen_ciclo_actual, detalle_por_persona, pendientes_slack_de_persona
+
+
+_slack_deeplink_cache = {"url": None}
+
+
+def _slack_deeplink() -> str:
+    """Deep-link que abre el DM con el bot en la app de Slack (no el chat web). Cacheado."""
+    if _slack_deeplink_cache["url"] is None:
+        try:
+            from .clients import slack_app
+            a = slack_app.client.auth_test()
+            _slack_deeplink_cache["url"] = f"slack://user?team={a['team_id']}&id={a['user_id']}"
+        except Exception:
+            logging.exception("No se pudo obtener el deep-link de Slack")
+            _slack_deeplink_cache["url"] = "slack://open"
+    return _slack_deeplink_cache["url"]
 from .personal_eval import notificar_urgencia_personal_web
 from .reports import generar_archivo_trayectoria, generar_archivos_informe
 from .skill_informes_anual import generar_informe_anual, obtener_empleados_evaluacion_anual
@@ -231,10 +246,9 @@ class ApiHandler(BaseHTTPRequestHandler):
                     raise PermissionError("Inicia sesión para acceder.")
                 ca_nombre = sesion.get("persona", "")
                 ca_aliases = [sesion.get("username", ""), sesion.get("email", "")]
-                advisee_nombres = [
-                    *obtener_advisees(ca_nombre, ca_aliases=ca_aliases),
-                    *listar_advisees_con_opiniones_ca(ca_nombre, ca_aliases=ca_aliases),
-                ]
+                # Fuente de verdad única: "Lista CA". Si quitas un advisee de esa lista en
+                # Notion, deja de aparecer aquí (aunque tenga opiniones históricas).
+                advisee_nombres = obtener_advisees(ca_nombre, ca_aliases=ca_aliases)
                 vistos = set()
                 advisee_nombres = [
                     nombre for nombre in advisee_nombres
@@ -350,6 +364,16 @@ class ApiHandler(BaseHTTPRequestHandler):
                 nombre = query_params.get("nombre", [""])[0]
                 objetivos = obtener_objetivos_persona(nombre)
                 self.responder_json({"objetivos": objetivos})
+                return
+            if ruta == "/api/tareas-slack":
+                sesion = self.sesion_actual()
+                if not sesion:
+                    raise PermissionError("Inicia sesión para acceder.")
+                persona = sesion.get("persona", "")
+                self.responder_json({
+                    "pendientes": pendientes_slack_de_persona(persona),
+                    "slackUrl": _slack_deeplink(),
+                })
                 return
             if ruta == "/api/evaluados-anual":
                 sesion = self.sesion_actual()
@@ -546,6 +570,12 @@ class ApiHandler(BaseHTTPRequestHandler):
                     clave = qp.get("clave", [""])[0].strip()
                     self.responder_json(eval_sesion.obtener_area(evaluado, clave))
                     return
+                if ruta == "/api/eval-anual/plan":
+                    self.responder_json(eval_sesion.obtener_plan_accion(evaluado))
+                    return
+                if ruta == "/api/eval-anual/plan-guardado":
+                    self.responder_json(eval_sesion.obtener_plan_guardado(evaluado))
+                    return
                 self.responder_json({"error": "Ruta no encontrada."}, 404)
                 return
             if ruta == "/api/anonimato-evaluadores":
@@ -658,10 +688,8 @@ class ApiHandler(BaseHTTPRequestHandler):
                     return
                 ca_nombre = sesion.get("persona", "")
                 ca_aliases = [sesion.get("username", ""), sesion.get("email", "")]
-                advisees_ca = list({
-                    *obtener_advisees(ca_nombre, ca_aliases=ca_aliases),
-                    *listar_advisees_con_opiniones_ca(ca_nombre, ca_aliases=ca_aliases),
-                })
+                # Acceso basado solo en "Lista CA" (coherente con /api/mis-advisees).
+                advisees_ca = obtener_advisees(ca_nombre, ca_aliases=ca_aliases)
                 if normalizar_nombre(advisee) not in [normalizar_nombre(a) for a in advisees_ca]:
                     raise PermissionError("No tienes acceso a las evaluaciones de este advisee.")
                 resumen, sin_novedades = obtener_resumen_advisee_para_ca(ca_nombre, advisee)
@@ -881,6 +909,14 @@ class ApiHandler(BaseHTTPRequestHandler):
                 if ruta == "/api/eval-anual/confirmar-area":
                     self.responder_json(eval_sesion.confirmar_area(
                         evaluado, datos.get("clave", "").strip()))
+                    return
+                if ruta == "/api/eval-anual/plan-cambios":
+                    self.responder_json(eval_sesion.pedir_cambios_plan(
+                        evaluado, datos.get("instruccion", "")))
+                    return
+                if ruta == "/api/eval-anual/plan-guardar":
+                    self.responder_json(eval_sesion.guardar_plan_accion(
+                        evaluado, datos.get("texto", "")))
                     return
                 if ruta == "/api/eval-anual/finalizar":
                     res = eval_sesion.finalizar_sesion(evaluado)

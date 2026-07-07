@@ -71,6 +71,7 @@ export function t(clave, vars) {
 export const STRINGS = {
   // --- Comunes / reutilizados ---
   "common.back": { es: "← Volver", en: "← Back" },
+  "common.home": { es: "Inicio", en: "Home" },
   "common.logout": { es: "Cerrar sesión", en: "Log out" },
   "common.close": { es: "Cerrar", en: "Close" },
   "common.cancel": { es: "Cancelar", en: "Cancel" },
@@ -267,8 +268,11 @@ export const STRINGS = {
   "dash.err_download_file": { es: "Error al descargar el archivo.", en: "Error downloading the file." },
   "dash.downloading": { es: "Descargando archivo...", en: "Downloading file..." },
   "dash.file_ready": { es: "Archivo listo.", en: "File ready." },
+  "dash.todo_general": { es: "General", en: "General" },
+  "dash.todo_project_lead": { es: "Responsable de proyecto", en: "Project lead" },
   "dash.nav_activate_proj": { es: "Activar evaluaciones de proyecto", en: "Activate project evaluations" },
   "dash.nav_proj_evals": { es: "Evaluaciones por proyectos", en: "Evaluations by project" },
+  "dash.nav_do_proj_evals": { es: "Realizar evaluaciones de proyecto", en: "Do project evaluations" },
   "dash.proj_evals_pending": { es: "evaluaciones por completar", en: "evaluations left" },
   "dash.proj_evals_complete_label": { es: "Completado", en: "Completed" },
   "dash.proj_evals_unfinished": { es: "No terminado", en: "Not finished" },

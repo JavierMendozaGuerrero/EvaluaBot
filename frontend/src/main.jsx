@@ -417,6 +417,37 @@ function LegalContent({ texto }) {
   );
 }
 
+// Contexto para navegar a la página inicial desde cualquier página anidada.
+const GoHomeContext = React.createContext(null);
+
+// Bloque de navegación de la esquina superior derecha: flecha de "Volver" y,
+// justo debajo, un botón de "Inicio" (casita) que lleva a la página inicial.
+// El botón de inicio solo aparece si hay un handler disponible en el contexto.
+function NavBack({ onBack, style }) {
+  const goHome = React.useContext(GoHomeContext);
+  return (
+    <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 6, ...style }}>
+      <button className="link-button" onClick={onBack}>{t("common.back")}</button>
+      {goHome && (
+        <button
+          type="button"
+          className="link-button"
+          onClick={goHome}
+          title={t("common.home")}
+          aria-label={t("common.home")}
+          style={{ display: "inline-flex", alignItems: "center", justifyContent: "flex-end", gap: 5, padding: 0 }}
+        >
+          <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round">
+            <path d="M4 11 12 4l8 7" />
+            <path d="M6 9.6V19h5v-5h2v5h5V9.6" />
+          </svg>
+          <span>{t("common.home")}</span>
+        </button>
+      )}
+    </div>
+  );
+}
+
 function LegalPage({ doc, onBack }) {
   const data = LEGAL_DOCS[doc];
   useEffect(() => { window.scrollTo(0, 0); }, [doc]);
@@ -424,7 +455,7 @@ function LegalPage({ doc, onBack }) {
     <main className="page">
       <nav className="nav">
         <a className="brand" href="/"><img src="/src/logo.png" alt="igeneris" className="brand-logo" /></a>
-        <button className="link-button" onClick={onBack}>{t("common.back")}</button>
+        <NavBack onBack={onBack} />
       </nav>
       <div className="legal-wrap">
         {data ? <LegalContent texto={data.texto} /> : <p>{t("legal.unavailable")}</p>}
@@ -891,7 +922,7 @@ function MisObjetivosPage({ token, persona, onBack }) {
     <main className="page">
       <nav className="nav">
         <a className="brand" href="/"><img src="/src/logo.png" alt="igeneris" className="brand-logo" /></a>
-        <button className="link-button" onClick={onBack}>{t("common.back")}</button>
+        <NavBack onBack={onBack} />
       </nav>
       <section className="hero dashboard-hero">
         <div>
@@ -1024,7 +1055,7 @@ function ObjetivosPage({ token, advisee, caName, onBack }) {
     <main className="page">
       <nav className="nav">
         <a className="brand" href="/"><img src="/src/logo.png" alt="igeneris" className="brand-logo" /></a>
-        <button className="link-button" onClick={onBack}>{t("common.back")}</button>
+        <NavBack onBack={onBack} />
       </nav>
       <section className="hero dashboard-hero">
         <div>
@@ -2260,7 +2291,7 @@ function HistorialEvaluacionesPage({ token, evaluado, evaluador, proyecto, onBac
     <main className="page">
       <nav className="nav">
         <a className="brand" href="/"><img src="/src/logo.png" alt="igeneris" className="brand-logo" /></a>
-        <button className="link-button" onClick={onBack}>{t("common.back")}</button>
+        <NavBack onBack={onBack} />
       </nav>
       <div className="historial-page">
         <p className="kicker">{t("hist.title")}</p>
@@ -2793,8 +2824,70 @@ function Dashboard({ token, user, onLogout, onNavigate, onBackToRoleSelect = nul
             </p>
             <hr style={{ ...DASH_DIVIDER, margin: 0 }} />
             <nav style={{ display: "flex", flexDirection: "column" }}>
-              {!isAdmin && (
-                <DashNavItem label={t("dash.nav_activate_proj")} onClick={() => onNavigate({ type: "activar-evaluaciones-proyecto" })} external />
+              {/* ── GENERAL ── */}
+              <p className="eyebrow" style={{ margin: "0 0 2px", flexShrink: 0, fontSize: "0.7rem" }}>{t("dash.todo_general")}</p>
+              {!isAdmin && proyectosPendientes.length > 0 && (
+                <div>
+                  <div
+                    role="button"
+                    tabIndex={0}
+                    onClick={() => setProjOpen((v) => !v)}
+                    style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "6px 0", fontSize: 14, fontWeight: 400, cursor: "pointer", color: "#000", userSelect: "none" }}
+                  >
+                    <span><span className="dash-dot" />{t("dash.nav_do_proj_evals")}</span>
+                    <span style={{ display: "inline-flex", alignItems: "center", gap: 8, flexShrink: 0 }}>
+                      <span style={{ fontSize: 11, fontWeight: 500, color: "var(--accent)", whiteSpace: "nowrap" }}>
+                        {t("dash.proj_evals_unfinished")}
+                      </span>
+                      <svg viewBox="0 0 24 24" fill="none" stroke="rgba(0,0,0,.3)" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"
+                        style={{ width: 11, height: 11, flexShrink: 0, transform: projOpen ? "rotate(180deg)" : "rotate(0deg)", transition: "transform .25s" }}>
+                        <polyline points="18 15 12 9 6 15" />
+                      </svg>
+                    </span>
+                  </div>
+                  {projOpen && (
+                    <div style={{ display: "flex", flexDirection: "column", gap: 6, paddingBottom: 12 }}>
+                      {proyectosPendientes.map((p) => {
+                        const prog = proyectosProgreso[p.nombre_proyecto];
+                        return (
+                          <div
+                            key={p.nombre_proyecto}
+                            onClick={() => onNavigate({ type: "evaluaciones-proyecto", proyectos: proyectosActivos, initialProyecto: p.nombre_proyecto })}
+                            style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8, fontSize: 13, color: "#000", cursor: "pointer", padding: "5px 0", paddingLeft: 4 }}
+                          >
+                            <span>{p.nombre_proyecto}</span>
+                            {prog && (
+                              <span style={{ display: "inline-flex", alignItems: "center", gap: 6, flexShrink: 0 }}>
+                                <span style={{ fontSize: 11, fontWeight: 400, color: "#000", opacity: 0.65, whiteSpace: "nowrap" }}>
+                                  {t("dash.proj_evals_complete_label")}
+                                </span>
+                                <span
+                                  style={{
+                                    display: "inline-flex",
+                                    alignItems: "center",
+                                    justifyContent: "center",
+                                    minWidth: 26,
+                                    height: 20,
+                                    padding: "0 5px",
+                                    borderRadius: 4,
+                                    background: "rgba(22,163,74,.12)",
+                                    color: "#16A34A",
+                                    opacity: 1,
+                                    fontWeight: 500,
+                                    fontSize: 11,
+                                    whiteSpace: "nowrap",
+                                  }}
+                                >
+                                  {prog.done}/{prog.total}
+                                </span>
+                              </span>
+                            )}
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
+                </div>
               )}
               <div>
                 <div
@@ -2850,74 +2943,18 @@ function Dashboard({ token, user, onLogout, onNavigate, onBackToRoleSelect = nul
                   </div>
                 )}
               </div>
-              {!isAdmin && proyectosPendientes.length > 0 && (
-                <div>
-                  <div
-                    role="button"
-                    tabIndex={0}
-                    onClick={() => setProjOpen((v) => !v)}
-                    style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "6px 0", fontSize: 14, fontWeight: 400, cursor: "pointer", color: "#000", userSelect: "none" }}
-                  >
-                    <span><span className="dash-dot" />{t("dash.nav_proj_evals")}</span>
-                    <span style={{ display: "inline-flex", alignItems: "center", gap: 8, flexShrink: 0 }}>
-                      <span style={{ fontSize: 11, fontWeight: 500, color: "var(--accent)", whiteSpace: "nowrap" }}>
-                        {t("dash.proj_evals_unfinished")}
-                      </span>
-                      <svg viewBox="0 0 24 24" fill="none" stroke="rgba(0,0,0,.3)" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"
-                        style={{ width: 11, height: 11, flexShrink: 0, transform: projOpen ? "rotate(180deg)" : "rotate(0deg)", transition: "transform .25s" }}>
-                        <polyline points="18 15 12 9 6 15" />
-                      </svg>
-                    </span>
-                  </div>
-                  {projOpen && (
-                    <div style={{ display: "flex", flexDirection: "column", gap: 6, paddingBottom: 12 }}>
-                      {proyectosPendientes.map((p) => {
-                        const prog = proyectosProgreso[p.nombre_proyecto];
-                        return (
-                          <div
-                            key={p.nombre_proyecto}
-                            onClick={() => onNavigate({ type: "evaluaciones-proyecto", proyectos: proyectosActivos, initialProyecto: p.nombre_proyecto })}
-                            style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8, fontSize: 13, color: "#000", cursor: "pointer", padding: "5px 0", paddingLeft: 4 }}
-                          >
-                            <span>{p.nombre_proyecto}</span>
-                            {prog && (
-                              <span style={{ display: "inline-flex", alignItems: "center", gap: 6, flexShrink: 0 }}>
-                                <span style={{ fontSize: 11, fontWeight: 400, color: "#000", opacity: 0.65, whiteSpace: "nowrap" }}>
-                                  {t("dash.proj_evals_complete_label")}
-                                </span>
-                                <span
-                                  style={{
-                                    display: "inline-flex",
-                                    alignItems: "center",
-                                    justifyContent: "center",
-                                    minWidth: 26,
-                                    height: 20,
-                                    padding: "0 5px",
-                                    borderRadius: 4,
-                                    background: "rgba(22,163,74,.12)",
-                                    color: "#16A34A",
-                                    opacity: 1,
-                                    fontWeight: 500,
-                                    fontSize: 11,
-                                    whiteSpace: "nowrap",
-                                  }}
-                                >
-                                  {prog.done}/{prog.total}
-                                </span>
-                              </span>
-                            )}
-                          </div>
-                        );
-                      })}
-                    </div>
-                  )}
-                </div>
-              )}
               {advisees.length > 0 && (
                 <DashNavItem label={t("dash.nav_my_advisees")} onClick={() => onNavigate({ type: "advisees-list", advisees })} external />
               )}
-              {!isAdmin && proyectosManager?.length > 0 && (
-                <DashNavItem label={t("dash.nav_manage_projects")} onClick={() => onNavigate({ type: "mis-proyectos-activos" })} external />
+              {/* ── RESPONSABLE DE PROYECTO ── */}
+              {!isAdmin && (
+                <>
+                  <p className="eyebrow" style={{ margin: "14px 0 2px", flexShrink: 0, fontSize: "0.7rem" }}>{t("dash.todo_project_lead")}</p>
+                  <DashNavItem label={t("dash.nav_activate_proj")} onClick={() => onNavigate({ type: "activar-evaluaciones-proyecto" })} external />
+                  {proyectosManager?.length > 0 && (
+                    <DashNavItem label={t("dash.nav_manage_projects")} onClick={() => onNavigate({ type: "mis-proyectos-activos" })} external />
+                  )}
+                </>
               )}
               {isAdmin && !onBackToRoleSelect && (
                 <DashNavItem label={t("dash.nav_admin_panel")} onClick={() => setSeccionActiva((v) => v === "admin" ? null : "admin")} />
@@ -3234,7 +3271,7 @@ function SubirInformePage({ token, advisee, onBack }) {
     <main className="page">
       <nav className="nav">
         <a className="brand" href="/"><img src="/src/logo.png" alt="igeneris" className="brand-logo" /></a>
-        <button className="link-button" onClick={onBack}>{t("common.back")}</button>
+        <NavBack onBack={onBack} />
       </nav>
       <section className="hero dashboard-hero">
         <div>
@@ -3292,7 +3329,7 @@ function AdviseesList({ token, advisees, onBack, onNavigate }) {
     <main className="page">
       <nav className="nav">
         <a className="brand" href="/"><img src="/src/logo.png" alt="igeneris" className="brand-logo" /></a>
-        <button className="link-button" onClick={onBack}>{t("common.back")}</button>
+        <NavBack onBack={onBack} />
       </nav>
       <div className="advisees-page-wrap">
         <p className="kicker">Career Advisor</p>
@@ -3861,7 +3898,7 @@ function MisProyectosActivosPage({ token, user, onBack }) {
     <main className="page">
       <nav className="nav">
         <a className="brand" href="/"><img src="/src/logo.png" alt="igeneris" className="brand-logo" /></a>
-        <button className="link-button" onClick={onBack}>{t("common.back")}</button>
+        <NavBack onBack={onBack} />
       </nav>
 
       <div style={{ flex: 1, width: "100%", paddingTop: "clamp(44px, 6vw, 68px)", paddingBottom: 48 }}>
@@ -4082,7 +4119,7 @@ function ActivarEvaluacionesProyectoPage({ token, user, onBack, onActivado }) {
     <main className="page">
       <nav className="nav">
         <a className="brand" href="/"><img src="/src/logo.png" alt="igeneris" className="brand-logo" /></a>
-        <button className="link-button" onClick={onBack}>{t("common.back")}</button>
+        <NavBack onBack={onBack} />
       </nav>
 
       <div style={{ flex: 1, width: "100%", paddingTop: "clamp(44px, 6vw, 68px)", paddingBottom: 48 }}>
@@ -4280,7 +4317,16 @@ function EvaluacionesProyectoPage({ token, user, proyectos, onBack, onNavigate, 
         style={{ cursor: it.completado ? "default" : "pointer", flex: 1, minWidth: 0 }}
         title={it.completado ? "" : t("ep.fill_eval")}
       >
-        <p style={{ fontSize: 14, fontWeight: 400, color: "#000" }}>{it.evaluado}</p>
+        <p style={{ fontSize: 14, fontWeight: 400, color: "#000", display: "flex", alignItems: "center", gap: 6 }}>
+          {it.evaluado}
+          {!it.completado && (
+            <svg viewBox="0 0 24 24" fill="none" stroke="var(--accent)" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ width: 13, height: 13, flexShrink: 0 }}>
+              <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6" />
+              <polyline points="15 3 21 3 21 9" />
+              <line x1="10" y1="14" x2="21" y2="3" />
+            </svg>
+          )}
+        </p>
         <p style={{ fontSize: 12, fontWeight: 200, color: it.completado ? "rgba(0,0,0,.4)" : "var(--accent)" }}>
           {it.completado ? t("ep.completed") : t("ep.pending")}
         </p>
@@ -4302,7 +4348,7 @@ function EvaluacionesProyectoPage({ token, user, proyectos, onBack, onNavigate, 
     <main className="page">
       <nav className="nav">
         <a className="brand" href="/"><img src="/src/logo.png" alt="igeneris" className="brand-logo" /></a>
-        <button className="link-button" onClick={onBack}>{t("common.back")}</button>
+        <NavBack onBack={onBack} />
       </nav>
 
       <div style={{ flex: 1, width: "100%", paddingTop: "clamp(44px, 6vw, 68px)", paddingBottom: 48 }}>
@@ -4489,7 +4535,7 @@ function FormularioEvaluacionProyecto({ token, user, proyecto, tipo, manager, ev
       <main className="page">
         <nav className="nav">
           <a className="brand" href="/"><img src="/src/logo.png" alt="igeneris" className="brand-logo" /></a>
-          <button className="link-button" onClick={onBack}>{t("common.back")}</button>
+          <NavBack onBack={onBack} />
         </nav>
         <div style={{ padding: "40px", maxWidth: 820, margin: "0 auto", width: "100%" }}>
           <SkeletonForm rows={4} />
@@ -4502,7 +4548,7 @@ function FormularioEvaluacionProyecto({ token, user, proyecto, tipo, manager, ev
     <main className="page">
       <nav className="nav">
         <a className="brand" href="/"><img src="/src/logo.png" alt="igeneris" className="brand-logo" /></a>
-        <button className="link-button" onClick={onBack}>{t("common.back")}</button>
+        <NavBack onBack={onBack} />
       </nav>
       <section className="hero">
         <div>
@@ -4515,9 +4561,6 @@ function FormularioEvaluacionProyecto({ token, user, proyecto, tipo, manager, ev
         <section className="panel" style={{ marginTop: "32px" }}>
           <SavedOk text={t("fep.saved_ok")} />
           <div className="actions">
-            <button onClick={() => { setEnviado(false); setRespuestas({}); setEvaluado(""); setStatus(""); }}>
-              {t("fep.new_eval")}
-            </button>
             <button className="secondary" onClick={onBack}>{t("auth.back_word")}</button>
           </div>
         </section>
@@ -4743,7 +4786,7 @@ function SolicitarEvaluacionExtraPage({ token, user, onBack }) {
     <main className="page">
       <nav className="nav">
         <a className="brand" href="/"><img src="/src/logo.png" alt="igeneris" className="brand-logo" /></a>
-        <button className="link-button" onClick={onBack}>{t("common.back")}</button>
+        <NavBack onBack={onBack} />
       </nav>
 
       <div style={{ flex: 1, width: "100%", paddingTop: "clamp(44px, 6vw, 68px)", paddingBottom: 48 }}>
@@ -4879,7 +4922,7 @@ function FormularioEvaluacionExtra({ token, evaluado, contexto, solicitudPageId,
     <main className="page">
       <nav className="nav">
         <a className="brand" href="/"><img src="/src/logo.png" alt="igeneris" className="brand-logo" /></a>
-        <button className="link-button" onClick={onBack}>{t("common.back")}</button>
+        <NavBack onBack={onBack} />
       </nav>
       <section className="hero">
         <div>
@@ -4957,7 +5000,7 @@ function EvaluacionesSlackPage({ token, user, advisees, onBack, onNavigate, comp
     <main className="page">
       <nav className="nav">
         <a className="brand" href="/"><img src="/src/logo.png" alt="igeneris" className="brand-logo" /></a>
-        <button className="link-button" onClick={onBack}>{t("common.back")}</button>
+        <NavBack onBack={onBack} />
       </nav>
       <div style={{ paddingTop: "clamp(44px, 6vw, 68px)" }}>
         <p className="kicker">{t("ess.page_kicker")}</p>
@@ -5184,7 +5227,7 @@ function EvaluacionAnualWizard({ token, advisee, onBack }) {
     <main className="page">
       <nav className="nav">
         <a className="brand" href="/"><img src="/src/logo.png" alt="igeneris" className="brand-logo" /></a>
-        <button className="link-button" onClick={onBack}>{t("common.back")}</button>
+        <NavBack onBack={onBack} />
       </nav>
       <div style={{ flex: 1, paddingTop: "clamp(44px, 6vw, 68px)", paddingBottom: 48, maxWidth: 820, margin: "0 auto", width: "100%" }}>
         <p className="eyebrow">{t("eaw.eyebrow")}</p>
@@ -5484,11 +5527,11 @@ function App() {
     return <AdminPanel token={token} onBack={() => navigate(null, null)} />;
   }
 
+  let content;
   if (page?.type === "advisees-list") {
-    return <AdviseesList token={token} advisees={page.advisees} onBack={() => navigate(null)} onNavigate={navigate} />;
-  }
-  if (page?.type === "advisee-detail") {
-    return (
+    content = <AdviseesList token={token} advisees={page.advisees} onBack={() => navigate(null)} onNavigate={navigate} />;
+  } else if (page?.type === "advisee-detail") {
+    content = (
       <AdviseeDetail
         token={token}
         advisee={page.advisee}
@@ -5497,27 +5540,20 @@ function App() {
         onNavigate={navigate}
       />
     );
-  }
-  if (page?.type === "mis-objetivos") {
-    return <MisObjetivosPage token={token} persona={user?.persona || user?.username || ""} onBack={() => navigate(null)} />;
-  }
-  if (page?.type === "objetivos") {
-    return <ObjetivosPage token={token} advisee={page.advisee} caName={user?.persona || ""} onBack={backTo(page)} />;
-  }
-  if (page?.type === "subir-informe") {
-    return <SubirInformePage token={token} advisee={page.advisee} onBack={backTo(page)} />;
-  }
-  if (page?.type === "eval-anual") {
-    return <EvaluacionAnualWizard token={token} advisee={page.advisee} onBack={backTo(page)} />;
-  }
-  if (page?.type === "activar-evaluaciones-proyecto") {
-    return <ActivarEvaluacionesProyectoPage token={token} user={user} onBack={() => navigate(null)} onActivado={() => setProyectosVersion((v) => v + 1)} />;
-  }
-  if (page?.type === "mis-proyectos-activos") {
-    return <MisProyectosActivosPage token={token} user={user} onBack={() => navigate(null)} />;
-  }
-  if (page?.type === "evaluaciones-proyecto") {
-    return (
+  } else if (page?.type === "mis-objetivos") {
+    content = <MisObjetivosPage token={token} persona={user?.persona || user?.username || ""} onBack={() => navigate(null)} />;
+  } else if (page?.type === "objetivos") {
+    content = <ObjetivosPage token={token} advisee={page.advisee} caName={user?.persona || ""} onBack={backTo(page)} />;
+  } else if (page?.type === "subir-informe") {
+    content = <SubirInformePage token={token} advisee={page.advisee} onBack={backTo(page)} />;
+  } else if (page?.type === "eval-anual") {
+    content = <EvaluacionAnualWizard token={token} advisee={page.advisee} onBack={backTo(page)} />;
+  } else if (page?.type === "activar-evaluaciones-proyecto") {
+    content = <ActivarEvaluacionesProyectoPage token={token} user={user} onBack={() => navigate(null)} onActivado={() => setProyectosVersion((v) => v + 1)} />;
+  } else if (page?.type === "mis-proyectos-activos") {
+    content = <MisProyectosActivosPage token={token} user={user} onBack={() => navigate(null)} />;
+  } else if (page?.type === "evaluaciones-proyecto") {
+    content = (
       <EvaluacionesProyectoPage
         token={token}
         user={user}
@@ -5528,12 +5564,10 @@ function App() {
         initialProyecto={page.initialProyecto}
       />
     );
-  }
-  if (page?.type === "solicitar-evaluacion-extra") {
-    return <SolicitarEvaluacionExtraPage token={token} user={user} onBack={() => navigate(null)} />;
-  }
-  if (page?.type === "formulario-evaluacion-extra") {
-    return (
+  } else if (page?.type === "solicitar-evaluacion-extra") {
+    content = <SolicitarEvaluacionExtraPage token={token} user={user} onBack={() => navigate(null)} />;
+  } else if (page?.type === "formulario-evaluacion-extra") {
+    content = (
       <FormularioEvaluacionExtra
         token={token}
         evaluado={page.evaluado}
@@ -5542,9 +5576,8 @@ function App() {
         onBack={() => navigate(null)}
       />
     );
-  }
-  if (page?.type === "evaluaciones-slack") {
-    return (
+  } else if (page?.type === "evaluaciones-slack") {
+    content = (
       <EvaluacionesSlackPage
         token={token}
         user={user}
@@ -5555,12 +5588,11 @@ function App() {
         onCompletada={(key) => setSlackEvalCompletadas(prev => ({ ...prev, [key]: true }))}
       />
     );
-  }
-  if (page?.type === "historial-evaluaciones") {
+  } else if (page?.type === "historial-evaluaciones") {
     const backFromHistorial = page.from === "evaluaciones-proyecto"
       ? () => navigate({ type: "evaluaciones-proyecto", proyectos: page.proyectos || [], initialProyecto: page.proyecto })
       : () => navigate({ type: "evaluaciones-slack" });
-    return (
+    content = (
       <HistorialEvaluacionesPage
         token={token}
         evaluado={page.evaluado}
@@ -5569,9 +5601,8 @@ function App() {
         onBack={backFromHistorial}
       />
     );
-  }
-  if (page?.type === "formulario-evaluacion-proyecto") {
-    return (
+  } else if (page?.type === "formulario-evaluacion-proyecto") {
+    content = (
       <FormularioEvaluacionProyecto
         token={token}
         user={user}
@@ -5588,15 +5619,22 @@ function App() {
         })}
       />
     );
+  } else {
+    content = (
+      <Dashboard
+        token={token}
+        user={user}
+        onLogout={handleLogout}
+        onNavigate={navigate}
+        onBackToRoleSelect={isAdmin && adminMode === "personal" ? () => navigate(null, null) : null}
+      />
+    );
   }
+
   return (
-    <Dashboard
-      token={token}
-      user={user}
-      onLogout={handleLogout}
-      onNavigate={navigate}
-      onBackToRoleSelect={isAdmin && adminMode === "personal" ? () => navigate(null, null) : null}
-    />
+    <GoHomeContext.Provider value={() => navigate(null)}>
+      {content}
+    </GoHomeContext.Provider>
   );
 }
 

@@ -836,8 +836,8 @@ def _parece_saludo(texto):
     return normalizar_nombre(texto).strip(" ?!¡¿.") in {"hola", "buenas", "hey", "ei"}
 
 
-def _mensaje_empleado_no_encontrado(texto, idioma="es"):
-    sugerencias = sugerir_empleados_parecidos(texto)
+def _mensaje_empleado_no_encontrado(texto, idioma="es", excluir=None):
+    sugerencias = sugerir_empleados_parecidos(texto, excluir=excluir)
     if sugerencias:
         return t("bm.not_found_suggest", idioma, nombre=texto), sugerencias
     return t("bm.not_found", idioma, nombre=texto), []
@@ -1319,6 +1319,7 @@ def handle_message_events(event, logger):
     _invalido_pre = None
     _mo_evaluados = []
     _mo_invalido = False
+    _autoevaluacion_pre = False
 
     _necesita_busqueda = (
         (_modo_peek == "esperando_persona" and texto and not _parece_saludo(texto))
@@ -1336,11 +1337,17 @@ def handle_message_events(event, logger):
                     if 0 <= idx < len(_sugerencias_actuales):
                         texto_busqueda = _sugerencias_actuales[idx]
 
+                _nombre_evaluador = obtener_nombre_por_id_usuario(user_id)
                 if _area_peek == "middleoffice":
-                    _nombre_ev = obtener_nombre_por_id_usuario(user_id)
-                    _mo_evaluados = obtener_evaluados_middleoffice(_nombre_ev or "") if _nombre_ev else []
+                    _mo_evaluados = obtener_evaluados_middleoffice(_nombre_evaluador or "") if _nombre_evaluador else []
                 _empleado_pre, _cargo_pre = buscar_empleado_y_cargo(texto_busqueda)
-                if _empleado_pre:
+                if _empleado_pre and _nombre_evaluador and normalizar_nombre(_empleado_pre) == normalizar_nombre(_nombre_evaluador):
+                    # No permitir que el evaluador se evalúe a sí mismo.
+                    _autoevaluacion_pre = True
+                    _empleado_pre = None
+                    _cargo_pre = None
+                    _sugerencias_por_usuario.pop(user_id, None)
+                elif _empleado_pre:
                     _sugerencias_por_usuario.pop(user_id, None)
                     if _area_peek == "middleoffice":
                         _preguntas_area_pre = obtener_preguntas_mo(idioma_por_slack_id(user_id))
@@ -1364,7 +1371,7 @@ def handle_message_events(event, logger):
                     if _area_peek == "middleoffice":
                         _mo_invalido = True
                     else:
-                        _invalido_pre, _nuevas_sugerencias = _mensaje_empleado_no_encontrado(texto_busqueda, idioma_por_slack_id(user_id))
+                        _invalido_pre, _nuevas_sugerencias = _mensaje_empleado_no_encontrado(texto_busqueda, idioma_por_slack_id(user_id), excluir=_nombre_evaluador)
                         _sugerencias_por_usuario[user_id] = _nuevas_sugerencias
             except Exception:
                 logger.exception("Error en Notion al buscar empleado")
@@ -1509,6 +1516,9 @@ def handle_message_events(event, logger):
                     else:
                         accion = "pedir_persona"
                         pregunta = t("bm.still_here", estado["idioma"])
+                elif _autoevaluacion_pre:
+                    accion = "pedir_persona"
+                    pregunta = t("bm.self_eval", estado["idioma"])
                 elif _mo_invalido:
                     accion = "pedir_persona_mo"
                 elif _empleado_pre:
@@ -1625,7 +1635,7 @@ def handle_message_events(event, logger):
                 if campo == "evaluado":
                     if not _empleado_pre:
                         accion = "pedir_valor_modificacion"
-                        pregunta = _invalido_pre
+                        pregunta = t("bm.self_eval", estado["idioma"]) if _autoevaluacion_pre else _invalido_pre
                     else:
                         if _cargo_evaluador_pre and _cargo_evaluador_pre != _cargo_ev_peek:
                             estado["cargo_evaluador"] = _cargo_evaluador_pre

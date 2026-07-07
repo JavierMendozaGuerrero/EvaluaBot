@@ -2627,38 +2627,30 @@ function Dashboard({ token, user, onLogout, onNavigate, onBackToRoleSelect = nul
     if (isAdmin || !proyectosActivos.length) { setProyectosProgreso({}); setTareasProyecto([]); return; }
     const persona = user?.persona || user?.username || "";
     let cancelado = false;
-    Promise.all(
-      proyectosActivos.map((p) =>
-        Promise.all([
-          apiRequest(`/api/equipo-proyecto?proyecto=${encodeURIComponent(p.nombre_proyecto)}`, { token }),
-          apiRequest(`/api/evaluaciones-proyecto-completadas?proyecto=${encodeURIComponent(p.nombre_proyecto)}`, { token }),
-        ])
-          .then(([equipoData, completadasData]) => {
-            const equipo = equipoData.empleados || [];
-            // Normaliza el nombre (minúsculas, sin acentos, sin espacios extra) para que
-            // el emparejamiento no falle por variaciones entre lo guardado y el equipo.
-            const norm = (s) => (s || "").normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase().trim();
-            const completadasKeys = (completadasData.completadas || []).map((c) => `${c.tipo}:${norm(c.evaluado)}`);
-            const lista = construirEvaluacionesProyectoAHacer(persona, p.activado_por || "", equipo);
-            const pendientes = lista
-              .filter((it) => !completadasKeys.includes(`${it.tipo}:${norm(it.evaluado)}`))
-              .map((it) => ({ proyecto: p.nombre_proyecto, tipo: it.tipo, evaluado: it.evaluado, label: it.label }));
-            return { proyecto: p.nombre_proyecto, done: lista.length - pendientes.length, total: lista.length, pendientes };
-          })
-          .catch(() => null)
-      )
-    ).then((resultados) => {
-      if (cancelado) return;
-      const progreso = {};
-      const tareas = [];
-      resultados.forEach((r) => {
-        if (!r) return;
-        progreso[r.proyecto] = { done: r.done, total: r.total };
-        r.pendientes.forEach((it) => tareas.push(it));
-      });
-      setProyectosProgreso(progreso);
-      setTareasProyecto(tareas);
-    });
+    // Una sola petición: el servidor devuelve equipo + evals completadas de cada proyecto
+    // activo (antes eran 1 + 2N peticiones en cascada desde el navegador).
+    apiRequest("/api/proyectos-progreso", { token })
+      .then((data) => {
+        if (cancelado) return;
+        // Normaliza el nombre (minúsculas, sin acentos, sin espacios extra) para que
+        // el emparejamiento no falle por variaciones entre lo guardado y el equipo.
+        const norm = (s) => (s || "").normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase().trim();
+        const progreso = {};
+        const tareas = [];
+        (data.proyectos || []).forEach((p) => {
+          const equipo = p.equipo || [];
+          const completadasKeys = (p.completadas || []).map((c) => `${c.tipo}:${norm(c.evaluado)}`);
+          const lista = construirEvaluacionesProyectoAHacer(persona, p.activado_por || "", equipo);
+          const pendientes = lista
+            .filter((it) => !completadasKeys.includes(`${it.tipo}:${norm(it.evaluado)}`))
+            .map((it) => ({ proyecto: p.nombre_proyecto, tipo: it.tipo, evaluado: it.evaluado, label: it.label }));
+          progreso[p.nombre_proyecto] = { done: lista.length - pendientes.length, total: lista.length };
+          pendientes.forEach((it) => tareas.push(it));
+        });
+        setProyectosProgreso(progreso);
+        setTareasProyecto(tareas);
+      })
+      .catch(() => {});
     return () => { cancelado = true; };
   }, [token, isAdmin, proyectosActivos, user?.persona, user?.username]);
 

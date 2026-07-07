@@ -61,6 +61,7 @@ from .notion_service import (
 from .hierarchy import comparar_jerarquia, tipo_relacion
 from .project_evals import (
     obtener_proyectos_activos_empleado,
+    obtener_progreso_proyectos_empleado,
     obtener_equipo_proyecto,
     obtener_preguntas_tipo,
     activar_evaluaciones_empleados,
@@ -456,6 +457,17 @@ class ApiHandler(BaseHTTPRequestHandler):
                 persona = sesion.get("persona", "")
                 proyectos = obtener_proyectos_activos_empleado(persona)
                 self.responder_json({"proyectos": proyectos})
+                return
+            if ruta == "/api/proyectos-progreso":
+                # Devuelve, en UNA sola respuesta, equipo + evals completadas de cada
+                # proyecto activo de la persona. Sustituye el waterfall de 1 + 2N
+                # peticiones que hacía el dashboard (activaciones cacheadas, completadas
+                # en paralelo en el servidor).
+                sesion = self.sesion_actual()
+                if not sesion:
+                    raise PermissionError("Inicia sesión para acceder.")
+                persona = sesion.get("persona", "")
+                self.responder_json({"proyectos": obtener_progreso_proyectos_empleado(persona)})
                 return
             if ruta == "/api/evaluaciones-proyecto-completadas":
                 sesion = self.sesion_actual()

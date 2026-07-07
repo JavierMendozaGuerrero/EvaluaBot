@@ -19,6 +19,7 @@ Estructura en Notion:
 import logging
 import threading
 import time
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 
 from . import config
@@ -583,55 +584,145 @@ def obtener_preguntas_tipo(tipo_clave: str, idioma: str = "es") -> list:
 # Activación de evaluaciones
 # ---------------------------------------------------------------------------
 
+# ── Caches de DATOS con TTL (no solo IDs) ─────────────────────────────────────
+# Las lecturas del dashboard (proyectos activos, equipo, evals completadas) pegaban a
+# Notion en CADA request y eran el cuello de botella de la carga. Cacheamos los datos
+# unos segundos: cambian despacio y el TTL corto mantiene la frescura; además se
+# invalidan al escribir (activar/añadir/eliminar/guardar eval) para no mostrar datos
+# obsoletos justo tras una acción.
+_TTL_DATOS = 60  # segundos
+
+_lock_activaciones_datos = threading.Lock()
+# rows = [{empleado, proyecto, activado_por}] de TODAS las filas activas (una sola query).
+_cache_activaciones_datos: dict = {"t": 0.0, "rows": None}
+
+_lock_completadas = threading.Lock()
+# proyecto_norm -> {"t": float, "rows": [{tipo, evaluado, evaluador_norm}]}
+_cache_completadas: dict = {}
+
+
+def _invalidar_cache_activaciones() -> None:
+    with _lock_activaciones_datos:
+        _cache_activaciones_datos["rows"] = None
+
+
+def _invalidar_cache_completadas(proyecto: str = "") -> None:
+    clave = normalizar_nombre(proyecto)
+    with _lock_completadas:
+        if clave:
+            _cache_completadas.pop(clave, None)
+        else:
+            _cache_completadas.clear()
+
+
+def _leer_activaciones_activas() -> list:
+    """Filas activas de la BD de activaciones (una sola query, cacheada TTL corto).
+
+    De aquí se derivan proyectos activos por empleado, equipo por proyecto y proyectos
+    por manager sin repetir la consulta a Notion en cada endpoint.
+    """
+    ahora = time.time()
+    with _lock_activaciones_datos:
+        rows = _cache_activaciones_datos["rows"]
+        if rows is not None and (ahora - _cache_activaciones_datos["t"]) < _TTL_DATOS:
+            return rows
+    db_id = _obtener_o_crear_bbdd_activaciones()
+    filas: list = []
+    if db_id:
+        try:
+            cursor = None
+            while True:
+                kwargs: dict = {"page_size": 100, "filter": {"property": "Activo", "checkbox": {"equals": True}}}
+                if cursor:
+                    kwargs["start_cursor"] = cursor
+                resp = _query_bbdd(db_id, **kwargs)
+                for pag in resp.get("results", []):
+                    props = pag.get("properties", {})
+                    filas.append({
+                        "empleado": "".join(t.get("plain_text", "") for t in (props.get("Empleado") or {}).get("title", [])),
+                        "proyecto": "".join(t.get("plain_text", "") for t in (props.get("Proyecto") or {}).get("rich_text", [])),
+                        "activado_por": "".join(t.get("plain_text", "") for t in (props.get("Activado_por") or {}).get("rich_text", [])),
+                    })
+                if not resp.get("has_more"):
+                    break
+                cursor = resp.get("next_cursor")
+        except Exception:
+            logging.exception("Error leyendo activaciones activas")
+            filas = []
+    with _lock_activaciones_datos:
+        _cache_activaciones_datos["rows"] = filas
+        _cache_activaciones_datos["t"] = ahora
+    return filas
+
+
+def _leer_completadas_proyecto(proyecto: str) -> list:
+    """TODAS las filas de evaluaciones enviadas de un proyecto (cacheadas TTL corto).
+
+    Devuelve [{tipo, evaluado, evaluador_norm}]; el filtrado por evaluador se hace en
+    Python, así la cache se comparte entre los distintos evaluadores del proyecto.
+    """
+    clave = normalizar_nombre(proyecto)
+    ahora = time.time()
+    with _lock_completadas:
+        entrada = _cache_completadas.get(clave)
+        if entrada and (ahora - entrada["t"]) < _TTL_DATOS:
+            return entrada["rows"]
+    db_id = _obtener_o_crear_bbdd_evals_proyecto(proyecto)
+    filas: list = []
+    if db_id:
+        label_to_tipo = {v: k for k, v in LABELS_TIPOS.items()}
+        try:
+            cursor = None
+            while True:
+                kwargs = {"page_size": 100}
+                if cursor:
+                    kwargs["start_cursor"] = cursor
+                resp = _query_bbdd(db_id, **kwargs)
+                for row in resp.get("results", []):
+                    props = row.get("properties", {})
+                    evaluador_fila = "".join(
+                        p.get("plain_text", "") for p in (props.get("Evaluador") or {}).get("rich_text", [])
+                    ).strip()
+                    evaluado = "".join(
+                        p.get("plain_text", "") for p in (props.get("Evaluado") or {}).get("rich_text", [])
+                    ).strip()
+                    tipo_label = (props.get("Tipo") or {}).get("select", {}).get("name", "")
+                    tipo_key = label_to_tipo.get(tipo_label)
+                    if tipo_key and evaluado:
+                        filas.append({"tipo": tipo_key, "evaluado": evaluado, "evaluador_norm": normalizar_nombre(evaluador_fila)})
+                if not resp.get("has_more"):
+                    break
+                cursor = resp.get("next_cursor")
+        except Exception:
+            logging.exception("Error obteniendo evals completadas del proyecto '%s'", proyecto)
+            filas = []
+    with _lock_completadas:
+        _cache_completadas[clave] = {"t": ahora, "rows": filas}
+    return filas
+
+
 def obtener_proyectos_activos_empleado(nombre_empleado: str) -> list:
     """Devuelve [{nombre_proyecto, activado_por}] para el empleado dado."""
-    db_id = _obtener_o_crear_bbdd_activaciones()
-    if not db_id:
-        return []
     objetivo = normalizar_nombre(nombre_empleado)
-    try:
-        resp = _query_bbdd(db_id, filter={
-            "and": [
-                {"property": "Activo", "checkbox": {"equals": True}},
-            ]
-        })
-        proyectos = []
-        for pag in resp.get("results", []):
-            props = pag.get("properties", {})
-            empleado_titulo = "".join(t.get("plain_text", "") for t in (props.get("Empleado") or {}).get("title", []))
-            if normalizar_nombre(empleado_titulo) != objetivo:
-                continue
-            proyecto = "".join(t.get("plain_text", "") for t in (props.get("Proyecto") or {}).get("rich_text", []))
-            activado_por = "".join(t.get("plain_text", "") for t in (props.get("Activado_por") or {}).get("rich_text", []))
-            if proyecto:
-                proyectos.append({"nombre_proyecto": proyecto, "activado_por": activado_por})
-        return proyectos
-    except Exception:
-        logging.exception("Error obteniendo proyectos activos para '%s'", nombre_empleado)
-        return []
+    proyectos = []
+    for r in _leer_activaciones_activas():
+        if normalizar_nombre(r["empleado"]) != objetivo:
+            continue
+        if r["proyecto"]:
+            proyectos.append({"nombre_proyecto": r["proyecto"], "activado_por": r["activado_por"]})
+    return proyectos
 
 
 def obtener_equipo_proyecto(nombre_proyecto: str) -> list:
     """Devuelve la lista de empleados activados para un proyecto."""
-    db_id = _obtener_o_crear_bbdd_activaciones()
-    if not db_id:
-        return []
     objetivo = normalizar_nombre(nombre_proyecto)
-    try:
-        resp = _query_bbdd(db_id, filter={"property": "Activo", "checkbox": {"equals": True}})
-        empleados = []
-        for pag in resp.get("results", []):
-            props = pag.get("properties", {})
-            proyecto = "".join(t.get("plain_text", "") for t in (props.get("Proyecto") or {}).get("rich_text", []))
-            if normalizar_nombre(proyecto) != objetivo:
-                continue
-            empleado = "".join(t.get("plain_text", "") for t in (props.get("Empleado") or {}).get("title", []))
-            if empleado:
-                empleados.append(empleado)
-        return empleados
-    except Exception:
-        logging.exception("Error obteniendo equipo del proyecto '%s'", nombre_proyecto)
-        return []
+    empleados = []
+    for r in _leer_activaciones_activas():
+        if normalizar_nombre(r["proyecto"]) != objetivo:
+            continue
+        if r["empleado"]:
+            empleados.append(r["empleado"])
+    return empleados
 
 
 def activar_evaluaciones_empleados(manager: str, proyecto: str, empleados: list, idioma: str = "es") -> dict:
@@ -689,6 +780,7 @@ def activar_evaluaciones_empleados(manager: str, proyecto: str, empleados: list,
             logging.exception("Error activando evaluación para '%s' en proyecto '%s'", nombre_empleado, proyecto)
             errores.append(nombre_empleado)
 
+    _invalidar_cache_activaciones()
     return {"ok": True, "activados": activados, "errores": errores}
 
 
@@ -721,6 +813,7 @@ def añadir_miembro_proyecto(manager: str, proyecto: str, empleado: str, idioma:
                 break
         if slack_id:
             _notificar_evaluacion_activada(empleado, proyecto, slack_id)
+        _invalidar_cache_activaciones()
         return {"ok": True}
     except Exception:
         logging.exception("Error añadiendo miembro '%s' al proyecto '%s'", empleado, proyecto)
@@ -793,6 +886,8 @@ def eliminar_miembro_proyecto(proyecto: str, empleado: str, idioma: str = "es") 
             return {"ok": False, "error": t("pe.err_member_not_found", idioma)}
         notion.pages.update(page_id=existing[0]["id"], properties={"Activo": {"checkbox": False}})
         threading.Thread(target=_limpiar_registros_evaluacion_miembro, args=(proyecto, empleado), daemon=True).start()
+        _invalidar_cache_activaciones()
+        _invalidar_cache_completadas(proyecto)
         return {"ok": True}
     except Exception:
         logging.exception("Error eliminando miembro '%s' del proyecto '%s'", empleado, proyecto)
@@ -802,46 +897,15 @@ def eliminar_miembro_proyecto(proyecto: str, empleado: str, idioma: str = "es") 
 def obtener_evals_completadas_proyecto(evaluador: str, proyecto: str) -> list:
     """
     Devuelve [{tipo, evaluado}] de evaluaciones ya enviadas por evaluador en este proyecto.
-    Consulta la BD 'Evaluaciones' dentro de la subpágina del proyecto.
+    Lee de la cache TTL del proyecto (comparte lectura entre evaluadores) y filtra por
+    Evaluador NORMALIZADO, para que case aunque el nombre guardado varíe.
     """
-    db_id = _obtener_o_crear_bbdd_evals_proyecto(proyecto)
-    if not db_id:
-        return []
-
-    label_to_tipo = {v: k for k, v in LABELS_TIPOS.items()}
     evaluador_norm = normalizar_nombre(evaluador)
-    completadas = []
-    try:
-        # Sin filtro Notion 'equals' (exacto/sensible): traemos todas y comparamos el
-        # Evaluador NORMALIZADO, para que casen aunque el nombre guardado varíe
-        # (mayúsculas/acentos/espacios, o guardado desde el bot con otra forma).
-        cursor = None
-        while True:
-            kwargs = {"page_size": 100}
-            if cursor:
-                kwargs["start_cursor"] = cursor
-            resp = _query_bbdd(db_id, **kwargs)
-            for row in resp.get("results", []):
-                props = row.get("properties", {})
-                evaluador_fila = "".join(
-                    p.get("plain_text", "") for p in (props.get("Evaluador") or {}).get("rich_text", [])
-                ).strip()
-                if normalizar_nombre(evaluador_fila) != evaluador_norm:
-                    continue
-                evaluado = "".join(
-                    p.get("plain_text", "") for p in (props.get("Evaluado") or {}).get("rich_text", [])
-                ).strip()
-                tipo_label = (props.get("Tipo") or {}).get("select", {}).get("name", "")
-                tipo_key = label_to_tipo.get(tipo_label)
-                if tipo_key and evaluado:
-                    completadas.append({"tipo": tipo_key, "evaluado": evaluado})
-            if not resp.get("has_more"):
-                break
-            cursor = resp.get("next_cursor")
-    except Exception:
-        logging.exception("Error consultando completadas de '%s' en '%s'", evaluador, proyecto)
-
-    return completadas
+    return [
+        {"tipo": r["tipo"], "evaluado": r["evaluado"]}
+        for r in _leer_completadas_proyecto(proyecto)
+        if r["evaluador_norm"] == evaluador_norm
+    ]
 
 
 def obtener_evaluaciones_proyecto_por_evaluado(evaluado: str) -> list[dict]:
@@ -908,29 +972,48 @@ def obtener_evaluaciones_proyecto_por_evaluado(evaluado: str) -> list[dict]:
 
 def obtener_proyectos_manager(manager_nombre: str) -> list:
     """Proyectos activos activados por este manager, con su equipo."""
-    db_id = _obtener_o_crear_bbdd_activaciones()
-    if not db_id:
-        return []
     objetivo = normalizar_nombre(manager_nombre)
-    try:
-        resp = _query_bbdd(db_id, filter={"property": "Activo", "checkbox": {"equals": True}})
-        proyectos_map: dict = {}
-        for pag in resp.get("results", []):
-            props = pag.get("properties", {})
-            activado_por = "".join(t.get("plain_text", "") for t in (props.get("Activado_por") or {}).get("rich_text", []))
-            if normalizar_nombre(activado_por) != objetivo:
-                continue
-            proy = "".join(t.get("plain_text", "") for t in (props.get("Proyecto") or {}).get("rich_text", []))
-            empleado = "".join(t.get("plain_text", "") for t in (props.get("Empleado") or {}).get("title", []))
-            if proy:
-                if proy not in proyectos_map:
-                    proyectos_map[proy] = []
-                if empleado and empleado not in proyectos_map[proy]:
-                    proyectos_map[proy].append(empleado)
-        return [{"nombre_proyecto": p, "equipo": e} for p, e in proyectos_map.items()]
-    except Exception:
-        logging.exception("Error obteniendo proyectos del manager '%s'", manager_nombre)
+    proyectos_map: dict = {}
+    for r in _leer_activaciones_activas():
+        if normalizar_nombre(r["activado_por"]) != objetivo:
+            continue
+        proy = r["proyecto"]
+        if not proy:
+            continue
+        if proy not in proyectos_map:
+            proyectos_map[proy] = []
+        if r["empleado"] and r["empleado"] not in proyectos_map[proy]:
+            proyectos_map[proy].append(r["empleado"])
+    return [{"nombre_proyecto": p, "equipo": e} for p, e in proyectos_map.items()]
+
+
+def obtener_progreso_proyectos_empleado(persona: str) -> list:
+    """Equipo + evals completadas de `persona` para CADA uno de sus proyectos activos.
+
+    Reúne en UNA respuesta lo que el dashboard pedía con 1 + 2N peticiones (waterfall):
+    las activaciones se leen una vez (cache compartida) y las completadas de cada
+    proyecto se consultan EN PARALELO. Devuelve
+    [{nombre_proyecto, activado_por, equipo, completadas}].
+    """
+    activos = obtener_proyectos_activos_empleado(persona)
+    if not activos:
         return []
+    nombres = [p["nombre_proyecto"] for p in activos]
+    # completadas por proyecto, en paralelo (cada una es una query a la BD del proyecto).
+    completadas_por_proy: dict = {}
+    with ThreadPoolExecutor(max_workers=min(8, len(nombres))) as ex:
+        for nombre, comp in zip(nombres, ex.map(lambda p: obtener_evals_completadas_proyecto(persona, p), nombres)):
+            completadas_por_proy[nombre] = comp
+    salida = []
+    for p in activos:
+        nombre = p["nombre_proyecto"]
+        salida.append({
+            "nombre_proyecto": nombre,
+            "activado_por": p.get("activado_por", ""),
+            "equipo": obtener_equipo_proyecto(nombre),  # de la cache de activaciones ya caliente
+            "completadas": completadas_por_proy.get(nombre, []),
+        })
+    return salida
 
 
 def obtener_estado_evaluaciones_proyecto(proyecto: str) -> list:
@@ -1065,6 +1148,8 @@ def _desactivar_proyecto(proyecto: str) -> bool:
             cursor = resp.get("next_cursor")
     except Exception:
         logging.exception("Error desactivando proyecto '%s'", proyecto)
+    if desactivados:
+        _invalidar_cache_activaciones()
     return desactivados > 0
 
 
@@ -1174,6 +1259,7 @@ def guardar_evaluacion_proyecto(
         })
         from .eval_tracking import marcar_completada
         marcar_completada(evaluador, "proyecto")
+        _invalidar_cache_completadas(proyecto)
         threading.Thread(target=_verificar_y_cerrar_proyecto, args=(proyecto,), daemon=True).start()
         return True
     except Exception:

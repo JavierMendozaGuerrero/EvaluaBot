@@ -111,6 +111,13 @@ sesgo del resultado final. Guarda cada opinión en Notion.
 hacen en la web (no en Slack). Gestiona los distintos **tipos** (autoevaluación, a compañeros del mismo
 nivel, de miembros a manager, de manager a miembros), sus **escalas** (1–5, *Exceeds/Achieves/Expects more*,
 preguntas abiertas) y cómo se activan, guardan y consultan. (Ver [Los tipos de evaluación](#los-tipos-de-evaluación-explicados).)
+Para **acelerar la carga del dashboard**: las lecturas calientes de Notion (proyectos activos, equipo por
+proyecto, proyectos de manager) salen todas de **una sola consulta cacheada** de la tabla de activaciones
+(`_leer_activaciones_activas`, TTL 60s), y las evals completadas se cachean por proyecto
+(`_leer_completadas_proyecto`); ambas cachés **se invalidan al escribir** (activar/añadir/eliminar miembro,
+guardar eval). Además `obtener_progreso_proyectos_empleado` reúne equipo + completadas de todos los
+proyectos activos de la persona en **una respuesta** (completadas en paralelo), lo que el frontend pedía
+antes con 1 + 2N peticiones en cascada — servido por el endpoint `/api/proyectos-progreso`.
 
 ### Informes e IA (Claude)
 

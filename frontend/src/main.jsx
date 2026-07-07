@@ -5065,15 +5065,17 @@ function EvaluacionAnualWizard({ token, advisee, onBack }) {
     return () => { alive = false; };
   }, [token, nombre, reloadNonce]);
 
+  // Depende de la CLAVE del área actual (no de `est` entero): así, cuando enviar()
+  // actualiza `est` para reflejar que un área quedó desconfirmada, este efecto no
+  // se relanza y no pisa la conversación recién recibida con un refetch de más.
+  const claveActual = est?.secciones?.[secIdx]?.clave;
   useEffect(() => {
-    if (step !== "loop" || !est) return;
-    const sec = est.secciones[secIdx];
-    if (!sec) return;
+    if (step !== "loop" || !claveActual) return;
     setArea(null); setInput(""); setEvidOpen(true); setError(""); setCitaSel(null);
-    apiRequest(`/api/eval-anual/area?evaluado=${encodeURIComponent(nombre)}&clave=${encodeURIComponent(sec.clave)}`, { token })
+    apiRequest(`/api/eval-anual/area?evaluado=${encodeURIComponent(nombre)}&clave=${encodeURIComponent(claveActual)}`, { token })
       .then(setArea)
       .catch((e) => setError(e.message));
-  }, [step, secIdx, est, token, nombre]);
+  }, [step, claveActual, token, nombre]);
 
   async function confirmarIdentidad() {
     setBusy(true); setError("");
@@ -5090,6 +5092,12 @@ function EvaluacionAnualWizard({ token, advisee, onBack }) {
     try {
       const r = await apiRequest("/api/eval-anual/responder-area", { token, method: "POST", body: { evaluado: nombre, clave: area.clave, texto: input } });
       setArea((a) => ({ ...a, conversacion: r.conversacion, propuesta: r.propuesta, diagnostico: r.diagnostico ?? a.diagnostico }));
+      // El backend desconfirma el área si ya estaba confirmada (reabrir + editar la
+      // deja pendiente de volver a confirmar) -- reflejamos eso al momento en el stepper.
+      setEst((e) => e && ({
+        ...e,
+        secciones: e.secciones.map((s) => (s.clave === area.clave ? { ...s, confirmada: false } : s)),
+      }));
       setInput(""); setEvidOpen(false);
     } catch (e) { setError(e.message); } finally { setBusy(false); }
   }
@@ -5256,10 +5264,40 @@ function EvaluacionAnualWizard({ token, advisee, onBack }) {
       );
     });
     const citaFicha = citaSel ? evidMap[citaSel] : null;
+    const seccionActual = est.secciones[secIdx];
     return shell(
       <section className="panel">
         <p className="eyebrow">{t("eaw.area_n", { i: secIdx + 1, total: est.totalSecciones })}</p>
-        <h2 style={{ marginTop: 0 }}>{area.etiqueta}</h2>
+        <h2 style={{ marginTop: 0, display: "flex", alignItems: "center", gap: 10 }}>
+          {area.etiqueta}
+          {seccionActual?.confirmada && (
+            <span style={{ fontSize: 13, fontWeight: 700, color: "#166534" }}>{t("eaw.area_confirmed_badge")}</span>
+          )}
+        </h2>
+
+        <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginBottom: 16 }}>
+          {est.secciones.map((s, i) => (
+            <button
+              key={s.clave}
+              type="button"
+              onClick={() => { setSecIdx(i); }}
+              disabled={busy}
+              title={s.etiqueta}
+              style={{
+                minHeight: 30, height: 30, padding: "0 10px", borderRadius: 15, fontSize: 12,
+                border: i === secIdx ? "2px solid #101010" : "1px solid #d8d8d8",
+                background: s.confirmada ? "#e8f5e9" : "#fff",
+                color: "#101010", cursor: "pointer",
+              }}
+            >
+              {s.confirmada ? "✓ " : ""}{i + 1}
+            </button>
+          ))}
+        </div>
+
+        {seccionActual?.confirmada && (
+          <p className="fine" style={{ margin: "0 0 14px", color: "#92400e" }}>{t("eaw.reopened_notice")}</p>
+        )}
 
         <details open style={{ marginBottom: 16, background: "#f7f7f4", borderRadius: 8, padding: "10px 14px" }}>
           <summary style={{ cursor: "pointer", fontWeight: 700, fontSize: 14 }}>
@@ -5336,6 +5374,14 @@ function EvaluacionAnualWizard({ token, advisee, onBack }) {
             <button className="secondary" onClick={confirmarArea} disabled={busy}>{t("eaw.confirm_area")}</button>
           )}
         </div>
+        <div className="actions" style={{ marginTop: 10 }}>
+          <button className="secondary" onClick={() => setSecIdx((i) => i - 1)} disabled={busy || secIdx === 0}>
+            {t("eaw.prev_area")}
+          </button>
+          <button className="secondary" onClick={() => setSecIdx((i) => i + 1)} disabled={busy || secIdx >= est.totalSecciones - 1}>
+            {t("eaw.next_area")}
+          </button>
+        </div>
       </section>
     );
   }
@@ -5371,9 +5417,24 @@ function EvaluacionAnualWizard({ token, advisee, onBack }) {
           </>
         )}
 
+        <h3 style={{ marginBottom: 6 }}>{t("eaw.jump_to_area")}</h3>
+        <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginBottom: 16 }}>
+          {est.secciones.map((s, i) => (
+            <button
+              key={s.clave}
+              type="button"
+              onClick={() => { setSecIdx(i); setStep("loop"); }}
+              title={s.etiqueta}
+              className="secondary"
+              style={{ minHeight: 30, height: 30, padding: "0 10px", borderRadius: 15, fontSize: 12 }}
+            >
+              {s.confirmada ? "✓ " : ""}{s.etiqueta}
+            </button>
+          ))}
+        </div>
+
         <div className="actions" style={{ marginTop: 20 }}>
           <button onClick={finalizar} disabled={busy}>{busy ? t("eaw.generating") : t("eaw.gen_draft")}</button>
-          <button className="secondary" onClick={() => { setSecIdx(0); setStep("loop"); }}>{t("eaw.review_areas")}</button>
         </div>
       </section>
     );

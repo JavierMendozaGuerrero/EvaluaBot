@@ -11,12 +11,13 @@ from .i18n import t, botones_idioma_slack
 from .conversation_back import boton_atras, fila_atras, limpiar_historial, pop_historial, push_historial, tiene_historial
 from .slack_lists import añadir_pendiente, enlace_lista_pendientes, quitar_pendiente
 from .eval_tracking import registrar_envio_por_slack_id, marcar_completada_por_slack_id
-from .ca_reviews import ca_dm_activas, ca_dm_ts, manejar_mensaje_ca
+from .ca_reviews import ca_dm_activas, ca_dm_ts, ca_dm_ts_anterior, manejar_mensaje_ca
 from .personal_eval import (
     enviar_pregunta_inicial_personal,
     manejar_mensaje_personal,
     personal_dm_activas,
     personal_dm_ts,
+    personal_dm_ts_anterior,
 )
 from .clients import slack_app
 from .slack_carga import AnimacionCargando
@@ -47,6 +48,7 @@ from .state import (
     conversaciones,
     evaluacion_dm_canal,
     evaluacion_dm_ts,
+    evaluacion_dm_ts_anterior,
     evaluacion_hora,
     evaluacion_ultimo_recordatorio,
     evaluaciones_dm_activas,
@@ -134,6 +136,8 @@ def enviar_una_evaluacion():
                 with lock:
                     evaluaciones_dm_activas.add(user_id)
                     evaluacion_dm_canal[user_id] = dm_channel
+                    if evaluacion_dm_ts.get(user_id):
+                        evaluacion_dm_ts_anterior[user_id] = evaluacion_dm_ts[user_id]
                     evaluacion_dm_ts[user_id] = resp["ts"]
                     evaluacion_hora[user_id] = time.time()
                     conversaciones.pop(user_id, None)
@@ -1255,16 +1259,24 @@ def handle_message_events(event, logger):
         return
 
     if thread_ts != evaluacion_dm_ts.get(user_id):
-        # Si hay una evaluación activa en otro hilo, avisar que esta está caducada
-        if evaluacion_dm_ts.get(user_id) is not None:
-            with lock:
-                es_activo = user_id in evaluaciones_dm_activas
-            if es_activo:
-                slack_app.client.chat_postMessage(
-                    channel=channel,
-                    thread_ts=thread_ts,
-                    text=t("bm.thread_not_eval", idioma_por_slack_id(user_id)),
-                )
+        # El usuario ha escrito en un hilo que NO es su evaluación mensual activa.
+        # Los hilos anteriores de cualquiera de las 3 evaluaciones (mensual, personal
+        # o CA) caen aquí. Si tiene CUALQUIER evaluación activa, este hilo es una
+        # evaluación antigua → avisamos de que ha caducado.
+        with lock:
+            # Solo caduca si el hilo es la evaluación ANTERIOR de un tipo del que ya
+            # tienes una nueva ACTIVA (mismo tipo). No cruza tipos.
+            caducada = (
+                (thread_ts == evaluacion_dm_ts_anterior.get(user_id) and user_id in evaluaciones_dm_activas)
+                or (thread_ts == personal_dm_ts_anterior.get(user_id) and user_id in personal_dm_activas)
+                or (thread_ts == ca_dm_ts_anterior.get(user_id) and user_id in ca_dm_activas)
+            )
+        if caducada:
+            slack_app.client.chat_postMessage(
+                channel=channel,
+                thread_ts=thread_ts,
+                text=t("bm.thread_not_eval", idioma_por_slack_id(user_id)),
+            )
         return
 
     with lock:

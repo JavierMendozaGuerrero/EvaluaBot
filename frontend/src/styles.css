@@ -963,3 +963,6 @@ button, .button { min-height: 42px; padding: 0 22px; font-size: 15px; }
 /* Enlace 'Cambiar' (país) del dashboard: gris que pasa a naranja al pasar el ratón. */
 .dash-cambiar { color: var(--text-55); transition: color .15s; }
 .dash-cambiar:hover { color: var(--accent); }
+
+/* Segmentos de escala/opciones: anular el margen global de <label> (creaba una 'frente'). */
+.eval-seg { margin: 0; }

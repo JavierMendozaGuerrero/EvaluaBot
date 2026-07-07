@@ -189,7 +189,7 @@ TEXTOS_PT = {
     "bm.summary_satisfaccion": "- *Satisfação*: {v}",
     "bm.tap_area_button": "Por favor, clica no botão da área à qual pertences 😊",
     "bm.thanks_end": "Perfeito, muito obrigado/a pelo teu tempo ❤️. Já podes sair do tópico 👋",
-    "bm.thread_not_eval": "Este tópico não é uma avaliação. Por favor, vá à mensagem da avaliação e responda lá.",
+    "bm.thread_not_eval": "⌛ Esta avaliação expirou. Tens uma avaliação mais recente pendente: responde no seu tópico, mais abaixo.",
     "bm.updated_suffix": "\n\n✅ Resposta atualizada. Queres alterar mais alguma coisa ou posso continuar?\nClica em *Modificar* para alterar outra resposta ou em *Sim, guardar* para continuar.",
     "bm.which_member": "Que membro do projeto pretende avaliar?",
     "bm.whose_to_edit": "✏️ A avaliação de quem pretende modificar?",

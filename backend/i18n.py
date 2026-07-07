@@ -145,7 +145,7 @@ TEXTOS: dict[str, dict[str, str]] = {
     "bm.situ_proyecto": {"es": "En proyecto 🏗️", "en": "On a project 🏗️"},
     "bm.situ_barbecho": {"es": "En barbecho ⏸️", "en": "On the bench ⏸️"},
     "bm.area_negocio": {"es": "Negocio", "en": "Business"},
-    "bm.thread_not_eval": {"es": "Este hilo no es una evaluación. Por favor, ve al mensaje de la evaluación y contesta ahí.", "en": "This thread is not an evaluation. Please go to the evaluation message and reply there."},
+    "bm.thread_not_eval": {"es": "⌛ Esta evaluación ha caducado. Tienes una evaluación más reciente pendiente: contéstala en su hilo, más abajo.", "en": "⌛ This evaluation has expired. You have a more recent evaluation pending: reply in its thread, further down."},
     "bm.eval_cancelled": {"es": "Evaluación *cancelada* voluntariamente. Si quieres volver a empezar, escribe cualquier mensaje en este hilo.", "en": "Evaluation *cancelled* voluntarily. If you want to start over, type any message in this thread."},
     "bm.which_member": {"es": "¿Qué miembro del proyecto quieres evaluar?", "en": "Which project member do you want to evaluate?"},
     "bm.not_found_full": {"es": "No encontré a *{nombre}* en la base de datos. Escribe nombre y apellido completos.", "en": "I couldn't find *{nombre}* in the database. Type the full first and last name."},

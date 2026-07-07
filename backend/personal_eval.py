@@ -36,6 +36,7 @@ _lock = threading.Lock()
 
 personal_dm_activas: set = set()
 personal_dm_ts: dict = {}
+personal_dm_ts_anterior: dict = {}  # user_id -> ts de la personal anterior (caducada)
 personal_dm_canal: dict = {}
 personal_hora: dict = {}
 personal_ultimo_recordatorio: dict = {}
@@ -190,6 +191,8 @@ def enviar_pregunta_inicial_personal() -> None:
                 msg_ts = resp["ts"]
                 with _lock:
                     personal_dm_activas.add(user_id)
+                    if personal_dm_ts.get(user_id):
+                        personal_dm_ts_anterior[user_id] = personal_dm_ts[user_id]
                     personal_dm_ts[user_id] = msg_ts
                     personal_dm_canal[user_id] = dm_channel
                     personal_hora[user_id] = time.time()
@@ -592,46 +595,109 @@ def _handle_personal_otro_no(ack, body, logger):
         logger.exception("Error procesando personal_otro_no")
 
 
+def _resolver_nombre_slack(user_id: str) -> str:
+    """Resuelve el nombre real del usuario (Notion → perfil de Slack → user_id)."""
+    nombre = obtener_nombre_por_id_usuario(user_id)
+    if not nombre:
+        try:
+            r = slack_app.client.users_info(user=user_id)
+            u = r.get("user", {})
+            p = u.get("profile", {})
+            nombre = u.get("real_name") or p.get("real_name") or p.get("display_name") or u.get("name") or user_id
+        except Exception:
+            nombre = user_id
+    return nombre
+
+
+def _build_objetivos_view(objetivos: list, expanded: set | None = None, idioma: str = "es") -> dict:
+    """Modal con los objetivos actuales (título + KPIs). La descripción va en un desplegable."""
+    expanded = expanded or set()
+    if objetivos:
+        blocks: list = [
+            {"type": "section", "text": {"type": "mrkdwn", "text": t("bp.current_goals_header", idioma)}},
+            {"type": "divider"},
+        ]
+        for idx, obj in enumerate(objetivos):
+            clave = str(idx)
+            is_exp = clave in expanded
+            linea = f"• *{obj['titulo']}*"
+            if obj.get("kpis"):
+                linea += f"\n  _KPIs:_ {obj['kpis']}"
+            descripcion = (obj.get("descripcion") or "").strip()
+            seccion: dict = {"type": "section", "text": {"type": "mrkdwn", "text": linea[:3000]}}
+            if descripcion:
+                seccion["accessory"] = {
+                    "type": "button",
+                    "text": {"type": "plain_text", "text": t("bm.btn_hide_item", idioma) if is_exp else t("bm.btn_show_item", idioma)},
+                    "action_id": "objetivos_personal_toggle",
+                    "value": clave,
+                }
+            blocks.append(seccion)
+            if descripcion and is_exp:
+                blocks.append({"type": "section", "text": {"type": "mrkdwn", "text": descripcion[:3000]}})
+                blocks.append({"type": "divider"})
+    else:
+        blocks = [{"type": "section", "text": {"type": "mrkdwn", "text": t("bp.no_current_goals", idioma)}}]
+    return {
+        "type": "modal",
+        "callback_id": "objetivos_personal_ver",
+        "private_metadata": json.dumps({"expanded": list(expanded)}),
+        "title": {"type": "plain_text", "text": t("bp.btn_view_goals", idioma)[:24]},
+        "close": {"type": "plain_text", "text": t("bm.close", idioma)},
+        "blocks": blocks[:100],
+    }
+
+
 @slack_app.action("personal_ver_objetivos")
 def _handle_personal_ver_objetivos(ack, body, logger):
     ack()
+    trigger_id = body.get("trigger_id")
+    if not trigger_id:
+        return
+    user_id = body.get("user", {}).get("id", "")
+    _idi = idioma_por_slack_id(user_id)
+    # Abrir un modal de carga YA (sin lecturas de Notion) para no agotar el trigger_id (~3s),
+    # y luego rellenarlo con views_update una vez leídos los objetivos.
     try:
-        user_id = body["user"]["id"]
-        msg = body.get("message", {})
-        channel = body["channel"]["id"]
-        thread_ts = msg.get("ts", "")
-
-        nombre = obtener_nombre_por_id_usuario(user_id)
-        if not nombre:
-            try:
-                resp = slack_app.client.users_info(user=user_id)
-                u = resp.get("user", {})
-                p = u.get("profile", {})
-                nombre = u.get("real_name") or p.get("real_name") or p.get("display_name") or u.get("name") or user_id
-            except Exception:
-                nombre = user_id
-
-        objetivos = obtener_objetivos_persona(nombre) if nombre else []
-        _idi = idioma_por_slack_id(user_id)
-        if objetivos:
-            lineas = []
-            for obj in objetivos:
-                # Solo titulo y KPIs (sin descripcion ni tipo).
-                linea = f"• *{obj['titulo']}*"
-                if obj.get("kpis"):
-                    linea += f"\n  _KPIs:_ {obj['kpis']}"
-                lineas.append(linea)
-            msg_obj = t("bp.current_goals_header", _idi) + "\n\n" + "\n\n".join(lineas)
-        else:
-            msg_obj = t("bp.no_current_goals", _idi)
-
-        slack_app.client.chat_postMessage(
-            channel=channel,
-            thread_ts=thread_ts,
-            text=msg_obj,
+        resp = slack_app.client.views_open(
+            trigger_id=trigger_id, view=_vista_modal_cargando(t("bp.btn_view_goals", _idi)),
         )
     except Exception:
-        logger.exception("Error mostrando objetivos en evaluación personal")
+        logger.exception("Error abriendo modal de objetivos personal")
+        return
+    try:
+        nombre = _resolver_nombre_slack(user_id)
+        objetivos = obtener_objetivos_persona(nombre) if nombre else []
+        slack_app.client.views_update(
+            view_id=resp["view"]["id"], view=_build_objetivos_view(objetivos, set(), _idi),
+        )
+    except Exception:
+        logger.exception("Error mostrando objetivos en modal personal")
+
+
+@slack_app.action("objetivos_personal_toggle")
+def _handle_objetivos_personal_toggle(ack, body, logger):
+    ack()
+    view = body.get("view", {})
+    try:
+        metadata = json.loads(view.get("private_metadata", "{}"))
+    except Exception:
+        metadata = {}
+    expanded = set(metadata.get("expanded", []))
+    clave = (body.get("actions") or [{}])[0].get("value", "")
+    if clave in expanded:
+        expanded.discard(clave)
+    else:
+        expanded.add(clave)
+    try:
+        user_id = body.get("user", {}).get("id", "")
+        _idi = idioma_por_slack_id(user_id)
+        objetivos = obtener_objetivos_persona(_resolver_nombre_slack(user_id))
+        slack_app.client.views_update(
+            view_id=view["id"], view=_build_objetivos_view(objetivos, expanded, _idi),
+        )
+    except Exception:
+        logger.exception("Error actualizando desplegable de objetivos personal")
 
 
 # ---------------------------------------------------------------------------
@@ -861,11 +927,11 @@ def _handle_lang_set_personal(ack, body, logger):
         logger.exception("Error cambiando idioma (personal)")
 
 
-def _vista_modal_cargando() -> dict:
+def _vista_modal_cargando(titulo: str = "Ejemplo") -> dict:
     """Modal ligero de carga: se abre al instante para no agotar el trigger_id de Slack."""
     return {
         "type": "modal",
-        "title": {"type": "plain_text", "text": "Ejemplo"},
+        "title": {"type": "plain_text", "text": (titulo or "…")[:24]},
         "close": {"type": "plain_text", "text": "Cerrar"},
         "blocks": [{"type": "section", "text": {"type": "mrkdwn", "text": "⏳ Cargando… / Loading… / A carregar…"}}],
     }

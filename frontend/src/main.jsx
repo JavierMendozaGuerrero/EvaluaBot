@@ -2415,7 +2415,7 @@ function EvaluacionesSlackSection({ token, user, advisees, onNavigate, onComplet
   );
 }
 
-function DashNavItem({ label, onClick, disabled }) {
+function DashNavItem({ label, onClick, disabled, external = false }) {
   const [hover, setHover] = useState(false);
   return (
     <div
@@ -2425,26 +2425,40 @@ function DashNavItem({ label, onClick, disabled }) {
       onMouseEnter={() => setHover(true)}
       onMouseLeave={() => setHover(false)}
       style={{
+        display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8,
         padding: "6px 0", fontSize: 14, fontWeight: 400,
         cursor: disabled ? "default" : "pointer",
         color: disabled ? "rgba(0,0,0,.3)" : hover ? "var(--accent)" : "#000",
         transition: "color .15s", userSelect: "none",
       }}
     >
-      <span className="dash-dot" />{label}
+      <span><span className="dash-dot" />{label}</span>
+      {external && (
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ width: 13, height: 13, flexShrink: 0 }}><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6" /><polyline points="15 3 21 3 21 9" /><line x1="10" y1="14" x2="21" y2="3" /></svg>
+      )}
     </div>
   );
 }
 
-function DashCollapsible({ title, open, onToggle, children }) {
+function DashCollapsible({ title, open, onToggle, children, badge = null }) {
   return (
     <div>
       <div onClick={onToggle} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", cursor: "pointer", userSelect: "none" }}>
         <span className="eyebrow" style={{ marginBottom: 0, fontSize: "0.7rem" }}><span className="dash-dot" />{title}</span>
-        <svg viewBox="0 0 24 24" fill="none" stroke="rgba(0,0,0,.3)" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"
-          style={{ width: 11, height: 11, flexShrink: 0, transform: open ? "rotate(180deg)" : "rotate(0deg)", transition: "transform .25s" }}>
-          <polyline points="18 15 12 9 6 15" />
-        </svg>
+        <span style={{ display: "inline-flex", alignItems: "center", gap: 8, flexShrink: 0 }}>
+          {badge != null && (
+            <span style={{
+              display: "inline-flex", alignItems: "center", justifyContent: "center",
+              minWidth: 20, height: 20, padding: "0 5px", borderRadius: 4,
+              background: "rgba(242,60,20,.12)", color: "var(--accent)", fontWeight: 500,
+              fontSize: 11, whiteSpace: "nowrap",
+            }}>{badge}</span>
+          )}
+          <svg viewBox="0 0 24 24" fill="none" stroke="rgba(0,0,0,.3)" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"
+            style={{ width: 11, height: 11, flexShrink: 0, transform: open ? "rotate(180deg)" : "rotate(0deg)", transition: "transform .25s" }}>
+            <polyline points="18 15 12 9 6 15" />
+          </svg>
+        </span>
       </div>
       {open && <div style={{ marginTop: 10 }}>{children}</div>}
     </div>
@@ -2656,10 +2670,6 @@ function Dashboard({ token, user, onLogout, onNavigate, onBackToRoleSelect = nul
     const prog = proyectosProgreso[p.nombre_proyecto];
     return !prog || (prog.total - prog.done) > 0;
   });
-  const projPendTotal = proyectosPendientes.reduce((n, p) => {
-    const pr = proyectosProgreso[p.nombre_proyecto];
-    return n + (pr ? Math.max(0, pr.total - pr.done) : 0);
-  }, 0);
   const ownEvaluado = user?.persona || user?.username || "";
   const targetEvaluado = isAdmin ? evaluado : (evaluado || ownEvaluado);
   const selectedLabel = useMemo(() => evaluados.find((item) => item.value === evaluado)?.label || "", [evaluados, evaluado]);
@@ -2792,7 +2802,7 @@ function Dashboard({ token, user, onLogout, onNavigate, onBackToRoleSelect = nul
             <hr style={{ ...DASH_DIVIDER, margin: 0 }} />
             <nav style={{ display: "flex", flexDirection: "column" }}>
               {!isAdmin && (
-                <DashNavItem label={t("dash.nav_activate_proj")} onClick={() => onNavigate({ type: "activar-evaluaciones-proyecto" })} />
+                <DashNavItem label={t("dash.nav_activate_proj")} onClick={() => onNavigate({ type: "activar-evaluaciones-proyecto" })} external />
               )}
               <div>
                 <div
@@ -2858,16 +2868,9 @@ function Dashboard({ token, user, onLogout, onNavigate, onBackToRoleSelect = nul
                   >
                     <span><span className="dash-dot" />{t("dash.nav_proj_evals")}</span>
                     <span style={{ display: "inline-flex", alignItems: "center", gap: 8, flexShrink: 0 }}>
-                      {projPendTotal > 0 && (
-                        <span style={{ display: "inline-flex", alignItems: "center", gap: 6, flexShrink: 0 }}>
-                          <span style={{ fontSize: 11, fontWeight: 400, color: "#000", opacity: 0.65, whiteSpace: "nowrap" }}>
-                            {t("dash.proj_evals_complete_label")}
-                          </span>
-                          <span style={{ display: "inline-flex", alignItems: "center", justifyContent: "center", minWidth: 20, height: 20, padding: "0 5px", borderRadius: 4, background: "rgba(242,60,20,.12)", color: "var(--accent)", opacity: 1, fontWeight: 500, fontSize: 11, whiteSpace: "nowrap" }}>
-                            {projPendTotal}
-                          </span>
-                        </span>
-                      )}
+                      <span style={{ fontSize: 11, fontWeight: 500, color: "var(--accent)", whiteSpace: "nowrap" }}>
+                        {t("dash.proj_evals_unfinished")}
+                      </span>
                       <svg viewBox="0 0 24 24" fill="none" stroke="rgba(0,0,0,.3)" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"
                         style={{ width: 11, height: 11, flexShrink: 0, transform: projOpen ? "rotate(180deg)" : "rotate(0deg)", transition: "transform .25s" }}>
                         <polyline points="18 15 12 9 6 15" />
@@ -2878,7 +2881,6 @@ function Dashboard({ token, user, onLogout, onNavigate, onBackToRoleSelect = nul
                     <div style={{ display: "flex", flexDirection: "column", gap: 6, paddingBottom: 12 }}>
                       {proyectosPendientes.map((p) => {
                         const prog = proyectosProgreso[p.nombre_proyecto];
-                        const restantes = prog ? prog.total - prog.done : 0;
                         return (
                           <div
                             key={p.nombre_proyecto}
@@ -2886,13 +2888,12 @@ function Dashboard({ token, user, onLogout, onNavigate, onBackToRoleSelect = nul
                             style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8, fontSize: 13, color: "#000", cursor: "pointer", padding: "5px 0", paddingLeft: 4 }}
                           >
                             <span>{p.nombre_proyecto}</span>
-                            {prog && restantes > 0 && (
+                            {prog && (
                               <span style={{ display: "inline-flex", alignItems: "center", gap: 6, flexShrink: 0 }}>
                                 <span style={{ fontSize: 11, fontWeight: 400, color: "#000", opacity: 0.65, whiteSpace: "nowrap" }}>
                                   {t("dash.proj_evals_complete_label")}
                                 </span>
                                 <span
-                                  title={t("dash.proj_evals_pending")}
                                   style={{
                                     display: "inline-flex",
                                     alignItems: "center",
@@ -2901,15 +2902,15 @@ function Dashboard({ token, user, onLogout, onNavigate, onBackToRoleSelect = nul
                                     height: 20,
                                     padding: "0 5px",
                                     borderRadius: 4,
-                                    background: "rgba(242,60,20,.12)",
-                                    color: "var(--accent)",
+                                    background: "rgba(22,163,74,.12)",
+                                    color: "#16A34A",
                                     opacity: 1,
                                     fontWeight: 500,
                                     fontSize: 11,
                                     whiteSpace: "nowrap",
                                   }}
                                 >
-                                  {restantes}/{prog.total}
+                                  {prog.done}/{prog.total}
                                 </span>
                               </span>
                             )}
@@ -2921,10 +2922,10 @@ function Dashboard({ token, user, onLogout, onNavigate, onBackToRoleSelect = nul
                 </div>
               )}
               {advisees.length > 0 && (
-                <DashNavItem label={t("dash.nav_my_advisees")} onClick={() => onNavigate({ type: "advisees-list", advisees })} />
+                <DashNavItem label={t("dash.nav_my_advisees")} onClick={() => onNavigate({ type: "advisees-list", advisees })} external />
               )}
               {!isAdmin && proyectosManager?.length > 0 && (
-                <DashNavItem label={t("dash.nav_manage_projects")} onClick={() => onNavigate({ type: "mis-proyectos-activos" })} />
+                <DashNavItem label={t("dash.nav_manage_projects")} onClick={() => onNavigate({ type: "mis-proyectos-activos" })} external />
               )}
               {isAdmin && !onBackToRoleSelect && (
                 <DashNavItem label={t("dash.nav_admin_panel")} onClick={() => setSeccionActiva((v) => v === "admin" ? null : "admin")} />
@@ -3048,7 +3049,8 @@ function Dashboard({ token, user, onLogout, onNavigate, onBackToRoleSelect = nul
             <hr style={{ ...DASH_DIVIDER, margin: 0 }} />
 
             <div className="dash-tareas">
-              <DashCollapsible title={t("dash.pending_tasks")} open={tareasOpen} onToggle={() => setTareasOpen((v) => !v)}>
+              <DashCollapsible title={t("dash.pending_tasks")} open={tareasOpen} onToggle={() => setTareasOpen((v) => !v)}
+                badge={(() => { const n = tareasSlack.pendientes.length + tareasProyecto.length + evaluacionesExtraPendientes.length; return n > 0 ? n : null; })()}>
               {(tareasSlack.pendientes.length + tareasProyecto.length + evaluacionesExtraPendientes.length) === 0 ? (
                 <p className="fine">{t("dash.no_pending_tasks")}</p>
               ) : (
@@ -4585,7 +4587,7 @@ function FormularioEvaluacionProyecto({ token, user, proyecto, tipo, manager, ev
                     {p.tipo === "escala_1_5" && (
                       <div style={{ display: "flex", gap: "12px", flexWrap: "wrap", alignItems: "center" }}>
                         <span className="fine" style={{ fontSize: "12px" }}>{t("fep.scale_low")}</span>
-                        <div style={{ display: "flex", border: "1px solid #DBDBDE", borderRadius: "8px", overflow: "hidden", width: "100%", maxWidth: "360px" }}>
+                        <div style={{ display: "flex", border: "1px solid #DBDBDE", borderRadius: "8px", overflow: "hidden", width: "100%", maxWidth: "220px" }}>
                           {[1, 2, 3, 4, 5].map((val, idx) => {
                             const selected = respuestas[p.id] === String(val);
                             return (
@@ -4594,7 +4596,7 @@ function FormularioEvaluacionProyecto({ token, user, proyecto, tipo, manager, ev
                                 className="eval-seg"
                                 style={{
                                   flex: 1, display: "flex", alignItems: "center", justifyContent: "center",
-                                  padding: "14px 8px", cursor: "pointer",
+                                  padding: "4px 6px", cursor: "pointer",
                                   background: selected ? "#000000" : "#FFFFFF",
                                   color: selected ? "#FFFFFF" : "rgba(0,0,0,0.55)",
                                   borderLeft: idx > 0 ? "1px solid #DBDBDE" : "none",

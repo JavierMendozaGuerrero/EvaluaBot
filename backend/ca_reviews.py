@@ -62,6 +62,7 @@ from .anonimato import cargar_config as _cargar_anonimato, evaluadores_visibles_
 
 ca_dm_activas: set = set()             # user_ids con evaluación CA activa
 ca_dm_ts: dict = {}                    # user_id -> ts del mensaje inicial (raíz del hilo)
+ca_dm_ts_anterior: dict = {}           # user_id -> ts de la CA anterior (caducada)
 ca_dm_canal: dict = {}                 # user_id -> dm_channel_id
 ca_hora_dm: dict = {}                  # user_id -> timestamp de envío
 ca_ultimo_recordatorio_dm: dict = {}   # user_id -> timestamp del último recordatorio
@@ -749,6 +750,8 @@ def enviar_pregunta_inicial_ca() -> None:
                 with _lock:
                     ca_dm_activas.add(user_id)
                     ca_dm_canal[user_id] = dm_channel
+                    if ca_dm_ts.get(user_id):
+                        ca_dm_ts_anterior[user_id] = ca_dm_ts[user_id]
                     ca_dm_ts[user_id] = resp["ts"]
                     ca_hora_dm[user_id] = time.time()
                     conversaciones_ca.pop(user_id, None)

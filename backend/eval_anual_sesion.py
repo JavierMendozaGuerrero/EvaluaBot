@@ -466,6 +466,12 @@ def responder_area(advisee: str, clave: str, texto: str) -> dict:
         cargo=sesion.get("cargo", ""))
     area["conversacion"].append({"rol": "ia", "texto": res["mensaje"]})
     area["propuesta"] = res["propuesta"] or area.get("propuesta", "")
+    # Si el CA reabre un área ya confirmada y sigue hablando, la propuesta se
+    # actualiza pero texto_final (lo que va al informe) se quedó congelado en
+    # confirmar_area(). Desconfirmamos para que finalizar_sesion() exija volver
+    # a confirmarla explícitamente antes de generar el borrador — así no se cuela
+    # una edición sin que el CA la haya validado.
+    area["confirmada"] = False
     _guardar(slug, sesion)
     return {"mensaje": res["mensaje"], "propuesta": area["propuesta"],
             "conversacion": area["conversacion"], "diagnostico": area.get("diagnostico", "")}

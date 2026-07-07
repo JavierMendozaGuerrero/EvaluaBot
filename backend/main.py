@@ -10,7 +10,6 @@ from .ca_reviews import ciclo_envio_ca, ciclo_recordatorios_ca  # noqa: F401 —
 from .personal_eval import ciclo_envio_personal, ciclo_recordatorios_personal
 from .slack_bot import ciclo_recordatorios_proyecto, enviar_evaluaciones_programadas, start_socket_mode
 from .recordatorios_web import ciclo_recordatorios_web
-from .web_server import iniciar_servidor_web
 
 
 def validar_configuracion():
@@ -47,16 +46,12 @@ def main():
     threading.Thread(target=ciclo_recordatorios_ca, daemon=True).start()
     threading.Thread(target=ciclo_recordatorios_personal, daemon=True).start()
     threading.Thread(target=ciclo_recordatorios_web, daemon=True).start()
-    servidor_web = iniciar_servidor_web if config.WEB_MODE == "legacy" else iniciar_api_backend
-    threading.Thread(target=servidor_web, daemon=True).start()
+    threading.Thread(target=iniciar_api_backend, daemon=True).start()
 
     if config.APP_MODE == "produccion":
         print("Bot activo en modo produccion. Enviara las evaluaciones segun la fecha configurada en Notion (personal cada 2 semanas, CA y mensuales cada 4 semanas).")
     else:
         print(f"Bot activo en modo prueba. Enviara los 3 hilos ahora y luego cada {config.INTERVALO_PRUEBA_DIAS} dias.")
     print("Las preguntas se hacen una a una en el hilo y el resultado se guarda en Notion tras confirmacion.")
-    if config.WEB_MODE == "legacy":
-        print(f"Web legacy disponible en http://localhost:{config.PUERTO_WEB}")
-    else:
-        print(f"API backend disponible en http://localhost:{config.PUERTO_WEB}")
+    print(f"API backend disponible en http://localhost:{config.PUERTO_WEB}")
     start_socket_mode()

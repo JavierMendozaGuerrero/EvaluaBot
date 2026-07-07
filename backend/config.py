@@ -23,7 +23,12 @@ CARPETA_WEB = os.path.join(BASE_DIR, "dashboard_web")
 PREFIJO_BBDD_EVALUADO = "Evaluaciones - "
 FRONTEND_ORIGIN = os.environ.get("FRONTEND_ORIGIN", "http://localhost:5173").strip()
 APP_PUBLIC_URL = os.environ.get("APP_PUBLIC_URL", FRONTEND_ORIGIN).strip().rstrip("/")
-WEB_MODE = os.environ.get("WEB_MODE", "api").strip().lower()
+# Orígenes permitidos para CORS: el del frontend + los de desarrollo local +
+# extras opcionales (separados por comas) para dominios adicionales en producción.
+CORS_ORIGINS = list(dict.fromkeys(
+    [FRONTEND_ORIGIN, "http://localhost:5173", "http://127.0.0.1:5173"]
+    + [o.strip() for o in os.environ.get("CORS_EXTRA_ORIGINS", "").split(",") if o.strip()]
+))
 SMTP_HOST = os.environ.get("SMTP_HOST", "").strip()
 SMTP_PORT = int(os.environ.get("SMTP_PORT", "587"))
 SMTP_USER = os.environ.get("SMTP_USER", "").strip()

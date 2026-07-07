@@ -157,6 +157,7 @@ TEXTOS_PT = {
     "bm.no_questions_area": "⚠️ Não existem perguntas configuradas no Notion para esta área.",
     "bm.no_reply_outside": "Por favor, não respondas às avaliações fora das threads 😊",
     "bm.not_found": "*{nome}* não consta na lista de colaboradores. Escreva o nome e apelido tal como aparece na lista.",
+    "bm.self_eval": "Não te podes avaliar a ti mesmo. Diz-me o nome de outro colega do projeto.",
     "bm.not_found_full": "Não encontrei *{nombre}* na base de dados. Escreva o nome e apelido completos.",
     "bm.not_found_suggest": "*{nome}* não consta na lista de colaboradores.\nQuis dizer algum destes nomes?",
     "bm.pending_fallback": "📍 Tens uma avaliação mensal pendente",

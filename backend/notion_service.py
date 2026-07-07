@@ -247,8 +247,45 @@ def _safe_link_by_name(page_id, nombre):
         return None
 
 
+def _tabla_directa_o_none(id_):
+    """Si `id_` ya es una tabla de Notion (data_source o database), devuelve su
+    data_source_id para usarla directamente. Si es una pagina o no es accesible,
+    devuelve None para que el llamador navegue/busque. Silencia el warning de
+    notion_client durante el sondeo para no ensuciar el log en el caso pagina."""
+    logger_nc = logging.getLogger("notion_client")
+    nivel_previo = logger_nc.level
+    logger_nc.setLevel(logging.ERROR)
+    try:
+        if _usa_data_sources():
+            try:
+                notion.data_sources.retrieve(data_source_id=id_)
+                return id_
+            except Exception:
+                try:
+                    db = notion.databases.retrieve(database_id=id_)
+                    return _data_source_id(db)
+                except Exception:
+                    return None
+        try:
+            notion.databases.retrieve(database_id=id_)
+            return id_
+        except Exception:
+            return None
+    finally:
+        logger_nc.setLevel(nivel_previo)
+
+
 def _resolver_ruta_lista_empleados(origen_id):
     origen_id = _normalizar_notion_id(origen_id)
+
+    # Paso 0: si el ID ya apunta directamente a la tabla, usarla sin navegar como
+    # pagina. Asi NOTION_EMPLOYEES_DATABASE_ID puede ser el ID exacto de la
+    # "Lista de empleados"; la navegacion / busqueda global queda solo de fallback.
+    tabla_directa = _tabla_directa_o_none(origen_id)
+    if tabla_directa:
+        logging.info("Lista de empleados usada por ID directo (sin navegar): %s", tabla_directa)
+        return tabla_directa
+
     pagina_listas_id = _safe_link_by_name(origen_id, config.NOTION_DATA_LISTS_PAGE_NAME)
     if pagina_listas_id:
         logging.info("Pagina de listas de datos encontrada: %s", config.NOTION_DATA_LISTS_PAGE_NAME)
@@ -336,6 +373,8 @@ def asegurar_propiedades_bbdd(database_id):
 def _parent_bbdd_referencia():
     if config.NOTION_PARENT_PAGE_ID:
         return {"type": "page_id", "page_id": _normalizar_notion_id(config.NOTION_PARENT_PAGE_ID)}
+    if not config.NOTION_DATABASE_ID:
+        raise RuntimeError("Configura NOTION_PARENT_PAGE_ID con la página donde crear las bases nuevas.")
     bbdd_referencia = notion.databases.retrieve(database_id=config.NOTION_DATABASE_ID)
     parent = bbdd_referencia.get("parent", {})
     if parent.get("type") != "page_id":
@@ -2379,9 +2418,12 @@ def obtener_slack_id_por_nombre(nombre: str) -> str | None:
 
 
 
-def sugerir_empleados_parecidos(nombre: str, limite: int = 8) -> list[str]:
+def sugerir_empleados_parecidos(nombre: str, limite: int = 8, excluir: str | None = None) -> list[str]:
+    excluir_norm = _normalizar_para_match(excluir) if excluir else None
     candidatos = []
     for registro in _obtener_registros_empleados():
+        if excluir_norm and _normalizar_para_match(registro["nombre"]) == excluir_norm:
+            continue  # no sugerir el propio nombre del evaluador
         valores = [registro["nombre"], *registro.get("aliases", [])]
         score = max((_score_nombre(nombre, valor) for valor in valores if valor), default=0)
         candidatos.append((score, registro["nombre"]))
@@ -2522,6 +2564,8 @@ def obtener_evaluaciones():
     evaluaciones = []
     bases = listar_bbdd_evaluados()
     if not bases:
+        if not config.NOTION_DATABASE_ID:
+            return evaluaciones
         return obtener_evaluaciones_de_bbdd(config.NOTION_DATABASE_ID, "General")
     for bbdd in bases:
         evaluaciones.extend(obtener_evaluaciones_de_bbdd(bbdd["id"], bbdd["evaluado"]))
@@ -3873,15 +3917,18 @@ def _poblar_bbdd_preguntas_personal(db_id: str) -> None:
             logging.exception("Error poblando pregunta personal '%s'", clave)
 
 
-def obtener_preguntas_personales(idioma: str = "es") -> dict:
+def obtener_preguntas_personales(idioma: str = "es", con_fallback_es: bool = True) -> dict:
     """Devuelve {clave: texto} de la evaluación personal en el idioma dado (cacheado 5 min).
 
-    Filtra por la columna 'Idioma' (ES/EN) con fallback EN->ES por clave."""
+    Filtra por la columna 'Idioma' (ES/EN) con fallback EN->ES por clave.
+    Si con_fallback_es=False, devuelve SOLO las claves que existen en ese idioma en
+    Notion (sin caer a ES); sirve para saber si una clave está realmente traducida."""
     import time as _time
     idioma = idioma if idioma in IDIOMAS_SOPORTADOS else "es"
     ahora = _time.time()
+    cache_key = idioma if con_fallback_es else f"{idioma}|nofb"
     with lock:
-        entry = _cache_personal_preguntas.get(idioma)
+        entry = _cache_personal_preguntas.get(cache_key)
     if entry and (ahora - entry["ts"]) < _PERSONAL_PREGUNTAS_TTL:
         return entry["data"]
 
@@ -3917,9 +3964,12 @@ def obtener_preguntas_personales(idioma: str = "es") -> dict:
         # Lo que hay en Notion manda: NO se re-siembran las claves por defecto (añadir/quitar surte efecto).
         es_map = mapas.get("es", {})
         base = mapas.get(idioma, {})
-        resultado = {c: (base.get(c) or es_map.get(c)) for c in (set(es_map) | set(base))}
+        if con_fallback_es:
+            resultado = {c: (base.get(c) or es_map.get(c)) for c in (set(es_map) | set(base))}
+        else:
+            resultado = dict(base)
         with lock:
-            _cache_personal_preguntas[idioma] = {"data": resultado, "ts": _time.time()}
+            _cache_personal_preguntas[cache_key] = {"data": resultado, "ts": _time.time()}
         return resultado
     except Exception:
         logging.exception("Error leyendo preguntas personales desde Notion")

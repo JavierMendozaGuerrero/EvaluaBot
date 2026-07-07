@@ -102,7 +102,10 @@ def _bloques_selector_topico(idioma: str = "es", preguntas: dict | None = None) 
     ('topic_*') son editables en Notion (BD 'Preguntas'); si faltan, se usa el texto i18n."""
     if preguntas is None:
         preguntas = obtener_preguntas_personales(idioma)
-    pregunta_tipo = preguntas.get("pregunta_tipo") or t("bp.q_topic", idioma)
+    # ES: valor de Notion (con fallback). Otros idiomas: valor de Notion SOLO si hay
+    # una fila en ese idioma; si no, la traducción i18n.
+    preguntas_disp = preguntas if idioma == "es" else obtener_preguntas_personales(idioma, con_fallback_es=False)
+    pregunta_tipo = preguntas_disp.get("pregunta_tipo") or t("bp.q_topic", idioma)
     return [
         {"type": "section", "text": {"type": "mrkdwn", "text": f"*{pregunta_tipo}*"}},
         {
@@ -110,7 +113,7 @@ def _bloques_selector_topico(idioma: str = "es", preguntas: dict | None = None) 
             "elements": [
                 {
                     "type": "button",
-                    "text": {"type": "plain_text", "text": preguntas.get(f"topic_{clave}") or t(clave_i18n, idioma), "emoji": True},
+                    "text": {"type": "plain_text", "text": preguntas_disp.get(f"topic_{clave}") or t(clave_i18n, idioma), "emoji": True},
                     "action_id": f"personal_tipo_{clave}",
                 }
                 for clave, clave_i18n, _label in _TOPICOS_PERSONAL
@@ -122,7 +125,8 @@ def _bloques_selector_topico(idioma: str = "es", preguntas: dict | None = None) 
 def _enviar_selector_topico(dm_channel, thread_ts, idioma="es", prefijo="") -> None:
     """Envía un mensaje con el selector de tema (para cuando pide 'otro comentario')."""
     preguntas = obtener_preguntas_personales(idioma)
-    pregunta_tipo = preguntas.get("pregunta_tipo") or t("bp.q_topic", idioma)
+    preguntas_disp = preguntas if idioma == "es" else obtener_preguntas_personales(idioma, con_fallback_es=False)
+    pregunta_tipo = preguntas_disp.get("pregunta_tipo") or t("bp.q_topic", idioma)
     bloques = _bloques_selector_topico(idioma, preguntas)
     if prefijo:
         bloques = [{"type": "section", "text": {"type": "mrkdwn", "text": prefijo}}] + bloques
@@ -525,10 +529,11 @@ def _handle_personal_tipo(ack, body, logger):
             if estado.get("modo") != "terminado":
                 estado["modo"] = "esperando_comentario"
             _idi = estado.get("idioma", "es")
+        tipo_display = tipo if _idi == "es" else (obtener_preguntas_personales(_idi, con_fallback_es=False).get(f"topic_{clave}") or t(f"bp.topic_{clave}", _idi))
         slack_app.client.chat_postMessage(
             channel=dm_channel,
             thread_ts=thread_ts,
-            text=f"*{tipo}*\n{t('bp.write_comment', _idi)}",
+            text=f"*{tipo_display}*\n{t('bp.write_comment', _idi)}",
         )
     except Exception:
         logger.exception("Error procesando selección de tipo personal")
@@ -855,6 +860,23 @@ def _handle_criterios_toggle(ack, body, logger):
 # Ejemplos de guía — modal interactivo (Personal)
 # ---------------------------------------------------------------------------
 
+# Traducción de los nombres de apartado de los ejemplos de guía (la clave en Notion
+# es estable/en español; aquí la traducimos al mostrarla). Si no está en el mapa,
+# se muestra tal cual.
+_TRAD_APARTADO = {
+    "objetivos": {"en": "Goals", "pt": "Objetivos"},
+    "apoyo": {"en": "Support", "pt": "Apoio"},
+    "criterios": {"en": "Criteria", "pt": "Critérios"},
+    "contribution to the firm": {"en": "Contribution to the firm", "pt": "Contribuição para a empresa"},
+}
+
+
+def _traducir_apartado(nombre: str, idioma: str) -> str:
+    if idioma == "es":
+        return nombre
+    return _TRAD_APARTADO.get(nombre.strip().lower(), {}).get(idioma, nombre)
+
+
 def _build_ejemplos_personal_view(ejemplos: dict, expanded: set, idioma: str = "es") -> dict:
     # Filtrar entradas de Notion cuyo tipo contenga "personal" (case-insensitive)
     personales = {k: v for k, v in ejemplos.items() if "personal" in k.lower()}
@@ -874,6 +896,7 @@ def _build_ejemplos_personal_view(ejemplos: dict, expanded: set, idioma: str = "
             if nombre.startswith(prefijo):
                 nombre = nombre[len(prefijo):].strip()
                 break
+        nombre = _traducir_apartado(nombre, idioma)
         blocks.append({
             "type": "section",
             "text": {"type": "mrkdwn", "text": f"*{nombre}*"},

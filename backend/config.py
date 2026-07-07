@@ -56,7 +56,9 @@ SLACK_TEST_USER_ID = os.environ.get("SLACK_TEST_USER_ID", "").strip()
 # solo cuando el bot esté en el workspace de pago definitivo de la empresa.
 SLACK_LISTAS_PENDIENTES_HABILITADO = env_bool("SLACK_LISTAS_PENDIENTES_HABILITADO", "false")
 NOTION_TOKEN = _require_env("NOTION_TOKEN")
-NOTION_DATABASE_ID = _require_env("NOTION_DATABASE_ID")
+# Vestigial: solo se usa como fallback si no hay NOTION_PARENT_PAGE_ID o si
+# no existen tablas de evaluaciones por persona. Opcional; arranca sin ella.
+NOTION_DATABASE_ID = os.environ.get("NOTION_DATABASE_ID", "").strip()
 NOTION_EMPLOYEES_DATABASE_ID = os.environ.get("NOTION_EMPLOYEES_DATABASE_ID", NOTION_DATABASE_ID).strip()
 # Nueva estructura Notion: páginas contenedoras de nivel 1 bajo la raíz
 NOTION_TODO_PAGE_NAME = os.environ.get("NOTION_TODO_PAGE_NAME", "TO-DO").strip()

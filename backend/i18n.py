@@ -137,6 +137,7 @@ TEXTOS: dict[str, dict[str, str]] = {
     "bm.not_found_suggest": {"es": "*{nombre}* no aparece en la lista de empleados.\n¿Querías decir alguno de estos nombres?", "en": "*{nombre}* is not in the employee list.\nDid you mean one of these names?"},
     "bm.not_found": {"es": "*{nombre}* no aparece en la lista de empleados. Escribe nombre y apellido como aparece en la lista.", "en": "*{nombre}* is not in the employee list. Type the first and last name as they appear in the list."},
     "bm.rating_updated": {"es": "Valoración: *{v} / 4* ✅", "en": "Rating: *{v} / 4* ✅"},
+    "bm.self_eval": {"es": "No puedes evaluarte a ti mismo. Dime el nombre de otro compañero del proyecto.", "en": "You can't evaluate yourself. Tell me another project member's name."},
     "bm.rating_fallback": {"es": "Valoración: {v} / 4", "en": "Rating: {v} / 4"},
     "bm.situation_updated": {"es": "Situación: *{v}* ✅", "en": "Situation: *{v}* ✅"},
     "bm.situation_fallback": {"es": "Situación: {v}", "en": "Situation: {v}"},

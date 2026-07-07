@@ -16,6 +16,7 @@ from ...project_evals import (
     obtener_estado_evaluaciones_proyecto,
     obtener_evals_completadas_proyecto,
     obtener_preguntas_tipo,
+    obtener_progreso_proyectos_empleado,
     obtener_proyectos_activos_empleado,
     obtener_proyectos_manager,
 )
@@ -27,6 +28,14 @@ router = APIRouter()
 def evaluaciones_proyecto_activas(session=Depends(require_session)):
     persona = session.get("persona", "")
     return {"proyectos": obtener_proyectos_activos_empleado(persona)}
+
+
+@router.get("/api/proyectos-progreso")
+def proyectos_progreso(session=Depends(require_session)):
+    """Equipo + evals completadas de CADA proyecto activo de la persona, en una sola
+    respuesta (sustituye el waterfall de 1 + 2N peticiones que hacía el dashboard)."""
+    persona = session.get("persona", "")
+    return {"proyectos": obtener_progreso_proyectos_empleado(persona)}
 
 
 @router.get("/api/evaluaciones-proyecto-completadas")

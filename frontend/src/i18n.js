@@ -553,7 +553,6 @@ export const STRINGS = {
   "eaw.plan_ask_ph": { es: "Ej: hazlo más ambicioso, quita el objetivo 3…", en: "e.g. make it more ambitious, remove objective 3…" },
   "eaw.plan_saved": { es: "Plan guardado", en: "Plan saved" },
   "eaw.prev_area": { es: "← Área anterior", en: "← Previous area" },
-  "eaw.next_area": { es: "Siguiente área →", en: "Next area →" },
   "eaw.area_confirmed_badge": { es: "✓ Confirmada", en: "✓ Confirmed" },
   "eaw.reopened_notice": { es: "Has reabierto esta área: al enviar un nuevo punto quedará pendiente de volver a confirmar.", en: "You've reopened this area: sending a new point will leave it pending re-confirmation." },
   "eaw.jump_to_area": { es: "Ir a un área concreta", en: "Jump to a specific area" },

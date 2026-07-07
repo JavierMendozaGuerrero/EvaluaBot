@@ -5378,9 +5378,6 @@ function EvaluacionAnualWizard({ token, advisee, onBack }) {
           <button className="secondary" onClick={() => setSecIdx((i) => i - 1)} disabled={busy || secIdx === 0}>
             {t("eaw.prev_area")}
           </button>
-          <button className="secondary" onClick={() => setSecIdx((i) => i + 1)} disabled={busy || secIdx >= est.totalSecciones - 1}>
-            {t("eaw.next_area")}
-          </button>
         </div>
       </section>
     );

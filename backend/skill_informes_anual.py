@@ -602,11 +602,11 @@ def _formatear_contexto(emp_data: dict) -> tuple[str, dict]:
                     "url": ev.get("url", ""), "tipo": "evaluacion", "fecha": fecha,
                     "label": f"{proyecto} · {_ETIQUETA_REL[rel_key]} · {fecha}".strip(" ·"),
                     "evaluador": evaluador,
-                    "texto": f"Valoración: {q1} | Ejemplo: {q2}",
+                    "texto": f"Valoración: {q1}/4 | Ejemplo: {q2}",
                 }
                 bloques.append(
                     f"[{cid}] [{_mes_tag(fecha)}] Proyecto: {proyecto} | Evaluador: {evaluador} | "
-                    f"Valoración: {q1} | Ejemplo: {q2}"
+                    f"Valoración: {q1}/4 | Ejemplo: {q2}"
                 )
 
     # ── Evaluaciones de proyecto (por proyecto y cronológicas) ── [P#] ───────

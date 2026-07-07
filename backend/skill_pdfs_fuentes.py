@@ -213,7 +213,7 @@ def generar_pdf_evals_mensuales(advisee: str, anonimo: bool = True, idioma: str 
     for d in datos:
         cuerpo = []
         if d.get("q1"):
-            cuerpo.append(f"{_t(idioma, 'valoracion')}: {d['q1']}")
+            cuerpo.append(f"{_t(idioma, 'valoracion')}: {d['q1']}/4")
         if d.get("q2"):
             cuerpo.append(f"{_t(idioma, 'ejemplo')}: {d['q2']}")
         entradas.append({
@@ -273,7 +273,7 @@ def _entradas_evals_mensuales(advisee, anonimo, idioma="es"):
     for d in datos:
         cuerpo = []
         if d.get("q1"):
-            cuerpo.append(f"{_t(idioma, 'valoracion')}: {d['q1']}")
+            cuerpo.append(f"{_t(idioma, 'valoracion')}: {d['q1']}/4")
         if d.get("q2"):
             cuerpo.append(f"{_t(idioma, 'ejemplo')}: {d['q2']}")
         out.append({

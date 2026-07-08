@@ -1984,7 +1984,13 @@ def obtener_criterios_evaluacion(grupo: str, idioma: str = "es") -> dict:
                 for nivel in _NIVELES:
                     texto = _rt(props.get(nivel))
                     if texto:
-                        niveles[nivel] = [texto]
+                        lineas = [
+                            re.sub(r"^[-•*]\s*", "", linea).strip()
+                            for linea in texto.split("\n")
+                        ]
+                        lineas = [linea for linea in lineas if linea]
+                        if lineas:
+                            niveles[nivel] = lineas
                 if not niveles:
                     continue
                 _lang = _normalizar_idioma(_texto_propiedad(props, "Idioma"))

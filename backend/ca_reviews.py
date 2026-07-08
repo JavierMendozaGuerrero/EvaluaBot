@@ -728,6 +728,7 @@ def enviar_pregunta_inicial_ca() -> None:
                 return
 
         with _lock:
+            activas_previas = set(ca_dm_activas)
             ca_dm_activas.clear()
 
         enlace_pendientes = enlace_lista_pendientes()
@@ -739,9 +740,11 @@ def enviar_pregunta_inicial_ca() -> None:
                     logging.info(f"[CA] {user_id} ({ca_nombre}) no tiene advisees, omitiendo")
                     continue
 
+                _idi = idioma_por_slack_id(user_id)
+                if user_id in activas_previas:
+                    _editar_dm_inicial_ca_caducada(user_id, _idi)
                 resp_dm = slack_app.client.conversations_open(users=[user_id])
                 dm_channel = resp_dm["channel"]["id"]
-                _idi = idioma_por_slack_id(user_id)
                 resp = slack_app.client.chat_postMessage(
                     channel=dm_channel,
                     text=t("bc.pending_fallback", _idi),
@@ -782,6 +785,25 @@ def _editar_dm_inicial_ca(user_id, idioma=None):
         logging.exception("No se pudo editar el DM inicial CA de %s", user_id)
 
 
+def _editar_dm_inicial_ca_caducada(user_id, idioma=None):
+    """Marca como caducado el DM inicial de la evaluación CA anterior de user_id,
+    que quedó sin responder al llegar una nueva. No se toca si ya fue completada
+    (en ese caso ya la sustituyó _editar_dm_inicial_ca)."""
+    ts = ca_dm_ts.get(user_id)
+    canal = ca_dm_canal.get(user_id)
+    if not ts or not canal:
+        return
+    idioma = idioma or idioma_por_slack_id(user_id)
+    texto = t("bc.dm_expirada", idioma)
+    try:
+        slack_app.client.chat_update(
+            channel=canal, ts=ts, text=texto,
+            blocks=[{"type": "section", "text": {"type": "mrkdwn", "text": texto}}],
+        )
+    except Exception:
+        logging.exception("No se pudo marcar como caducado el DM inicial CA de %s", user_id)
+
+
 def _enviar_lista_advisees(user_id, channel, thread_ts, estado, idioma, logger, prefijo=""):
     """Muestra la lista de advisees pendientes con botones. Se usa tanto al avanzar
     normalmente como al reenviar esta pregunta tras pulsar 'Atrás'."""
@@ -795,6 +817,7 @@ def _enviar_lista_advisees(user_id, channel, thread_ts, estado, idioma, logger, 
         with _lock:
             if user_id in conversaciones_ca:
                 conversaciones_ca[user_id]["modo"] = "terminado"
+            ca_dm_activas.discard(user_id)
         quitar_pendiente("ca", user_id)
         marcar_completada_por_slack_id(user_id, "ca")
         _editar_dm_inicial_ca(user_id, idioma)

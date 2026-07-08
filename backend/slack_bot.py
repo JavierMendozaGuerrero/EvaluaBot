@@ -76,6 +76,25 @@ def _editar_dm_inicial_mensual(user_id, idioma=None):
         logging.exception("No se pudo editar el DM inicial mensual de %s", user_id)
 
 
+def _editar_dm_inicial_mensual_caducada(user_id, idioma=None):
+    """Marca como caducado el DM inicial de la evaluación mensual anterior de user_id,
+    que quedó sin responder al llegar una nueva. No se toca si ya fue completada
+    (en ese caso ya la sustituyó _editar_dm_inicial_mensual)."""
+    ts = evaluacion_dm_ts.get(user_id)
+    canal = evaluacion_dm_canal.get(user_id)
+    if not ts or not canal:
+        return
+    idioma = idioma or idioma_por_slack_id(user_id)
+    texto = t("bm.dm_expirada", idioma)
+    try:
+        slack_app.client.chat_update(
+            channel=canal, ts=ts, text=texto,
+            blocks=[{"type": "section", "text": {"type": "mrkdwn", "text": texto}}],
+        )
+    except Exception:
+        logging.exception("No se pudo marcar como caducado el DM inicial mensual de %s", user_id)
+
+
 def _bloques_dm_mensual(idioma, enlace_pendientes=None):
     """Bloques del DM inicial de la evaluación mensual, con botón de cambio de idioma en la cabecera."""
     bloques = [
@@ -120,14 +139,17 @@ def enviar_una_evaluacion():
                 logging.warning("No se encontraron Slack IDs en la lista de empleados de Notion")
                 return
         with lock:
+            activas_previas = set(evaluaciones_dm_activas)
             evaluaciones_dm_expiradas.update(evaluaciones_dm_activas)
             evaluaciones_dm_activas.clear()
         enlace_pendientes = enlace_lista_pendientes()
         for user_id in slack_ids:
             try:
+                idioma = idioma_por_slack_id(user_id)
+                if user_id in activas_previas:
+                    _editar_dm_inicial_mensual_caducada(user_id, idioma)
                 resp_dm = slack_app.client.conversations_open(users=[user_id])
                 dm_channel = resp_dm["channel"]["id"]
-                idioma = idioma_por_slack_id(user_id)
                 resp = slack_app.client.chat_postMessage(
                     channel=dm_channel,
                     text=t("bm.pending_fallback", idioma),

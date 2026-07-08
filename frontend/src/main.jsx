@@ -4140,6 +4140,11 @@ function ActivarEvaluacionesProyectoPage({ token, user, onBack, onActivado }) {
     setSeleccionados((prev) =>
       prev.includes(nombre) ? prev.filter((n) => n !== nombre) : [...prev, nombre]
     );
+    setBusqueda("");
+  }
+
+  function quitarEmpleado(nombre) {
+    setSeleccionados((prev) => prev.filter((n) => n !== nombre));
   }
 
   async function activar(e) {
@@ -4229,16 +4234,45 @@ function ActivarEvaluacionesProyectoPage({ token, user, onBack, onActivado }) {
               <p className="fine">{t("aep.loading_employees")}</p>
             ) : (
               <>
-                <div style={{ position: "relative" }}>
-                  <span style={{ position: "absolute", left: 11, top: "50%", transform: "translateY(-50%)", color: "rgba(0,0,0,.35)", display: "flex", pointerEvents: "none" }}>
-                    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
-                  </span>
+                <div style={{
+                  display: "flex", flexWrap: "wrap", alignItems: "center", gap: 6,
+                  border: "1px solid var(--border)", borderRadius: "var(--radius-md)",
+                  padding: "6px 10px", minHeight: 38, background: "#fff",
+                }}>
+                  <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" style={{ color: "rgba(0,0,0,.35)", flexShrink: 0 }}>
+                    <circle cx="11" cy="11" r="8" /><line x1="21" y1="21" x2="16.65" y2="16.65" />
+                  </svg>
+                  {seleccionados.map((nombre) => (
+                    <span
+                      key={nombre}
+                      style={{
+                        display: "inline-flex", alignItems: "center", gap: 6,
+                        background: "#f4f4f1", border: "1px solid var(--border)",
+                        borderRadius: 999, padding: "3px 6px 3px 10px", fontSize: 12, whiteSpace: "nowrap",
+                      }}
+                    >
+                      {nombre}
+                      <button
+                        type="button"
+                        onClick={() => quitarEmpleado(nombre)}
+                        aria-label={`${t("aep.remove_member")} ${nombre}`}
+                        style={{
+                          background: "none", border: "none", padding: 0, minHeight: 0,
+                          height: 16, width: 16, lineHeight: 1, cursor: "pointer",
+                          color: "rgba(0,0,0,.5)", fontSize: 12,
+                          display: "flex", alignItems: "center", justifyContent: "center",
+                        }}
+                      >
+                        ✕
+                      </button>
+                    </span>
+                  ))}
                   <input
                     type="text"
                     value={busqueda}
                     onChange={(e) => setBusqueda(e.target.value)}
-                    placeholder={t("aep.search_by_name")}
-                    style={{ paddingLeft: 32 }}
+                    placeholder={seleccionados.length ? "" : t("aep.search_by_name")}
+                    style={{ flex: 1, minWidth: 100, border: "none", outline: "none", background: "transparent", fontSize: 13, padding: "4px 2px" }}
                   />
                 </div>
                 <div style={{ marginTop: 8, maxHeight: 220, overflowY: "auto", border: "1px solid var(--border)", borderRadius: "var(--radius-md)", background: "#fff" }}>
@@ -4890,7 +4924,7 @@ function SolicitarEvaluacionExtraPage({ token, user, onBack }) {
                   <input
                     type="text"
                     value={busqueda}
-                    onChange={(e) => setBusqueda(e.target.value)}
+                    onChange={(e) => { setBusqueda(e.target.value); setEvaluador(""); }}
                     placeholder={t("aep.search_by_name")}
                     style={{ paddingLeft: 32 }}
                   />
@@ -4901,7 +4935,7 @@ function SolicitarEvaluacionExtraPage({ token, user, onBack }) {
                     return (
                       <div
                         key={nombre}
-                        onClick={() => setEvaluador(nombre)}
+                        onClick={() => { setEvaluador(nombre); setBusqueda(nombre); }}
                         style={{ display: "flex", alignItems: "center", gap: 10, padding: "9px 12px", borderBottom: "1px solid var(--border)", cursor: "pointer", userSelect: "none", background: selected ? "rgba(0,0,0,.04)" : "transparent" }}
                       >
                         <span style={{ width: 14, height: 14, borderRadius: "50%", border: `1px solid ${selected ? "#000" : "var(--border)"}`, background: selected ? "#000" : "#fff", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>

@@ -443,6 +443,7 @@ export const STRINGS = {
   "aep.team_members": { es: "Miembros del equipo", en: "Team members" },
   "aep.loading_employees": { es: "Cargando empleados...", en: "Loading employees..." },
   "aep.search_by_name": { es: "Buscar por nombre...", en: "Search by name..." },
+  "aep.remove_member": { es: "Quitar", en: "Remove" },
   "aep.members_selected_one": { es: "miembro seleccionado", en: "member selected" },
   "aep.members_selected_many": { es: "miembros seleccionados", en: "members selected" },
   "aep.activating": { es: "Activando...", en: "Activating..." },

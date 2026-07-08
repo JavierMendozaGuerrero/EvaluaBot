@@ -3135,7 +3135,12 @@ _PROPS_OBJETIVO_PERSONA = {
 }
 
 _cache_objetivos_persona: dict = {}  # cache_key -> db_id  (base destino para GUARDAR)
-_cache_objetivos_ids: dict = {}      # cache_key -> list[db_id]  (todas las bases, para LEER)
+_cache_objetivos_ids: dict = {}      # cache_key -> (ts, list[db_id])  (todas las bases, para LEER)
+# Las bases son estables → si encontramos alguna, cacheamos largo (el CONTENIDO se lee en
+# vivo igualmente). Si NO hay ninguna, cacheamos corto para ver enseguida bases nuevas o
+# restauradas de la papelera sin tener que reiniciar el backend.
+_TTL_OBJ_POS = 600
+_TTL_OBJ_NEG = 20
 
 
 def _clave_objetivos(texto: str) -> str:
@@ -3156,10 +3161,14 @@ def _buscar_todas_bbdd_objetivos_persona(nombre: str) -> list[str]:
     obtener_objetivos_persona, así que un objetivo nuevo en una base ya conocida se ve
     al instante; solo si se crea una base nueva se actualiza este cache (en _obtener_o_crear)."""
     objetivo = _clave_objetivos(f"Objetivos - {nombre.strip()}")
+    ahora = time.time()
     with lock:
-        cache = _cache_objetivos_ids.get(objetivo)
-    if cache is not None:
-        return cache
+        entry = _cache_objetivos_ids.get(objetivo)
+    if entry is not None:
+        ts, ids_cache = entry
+        ttl = _TTL_OBJ_POS if ids_cache else _TTL_OBJ_NEG
+        if ahora - ts < ttl:
+            return ids_cache
 
     parent = _parent_bbdd_en_pagina("Objetivos empleados", crear=False)
     ids: list[str] = []
@@ -3171,7 +3180,7 @@ def _buscar_todas_bbdd_objetivos_persona(nombre: str) -> list[str]:
                 except Exception:
                     ids.append(bloque["id"])
     with lock:
-        _cache_objetivos_ids[objetivo] = ids
+        _cache_objetivos_ids[objetivo] = (time.time(), ids)
     return ids
 
 
@@ -3216,7 +3225,7 @@ def _obtener_o_crear_bbdd_objetivos_persona(nombre: str) -> str:
     with lock:
         _cache_objetivos_persona[cache_key] = db_id
         # La lectura debe incluir la base recién creada sin re-listar todo Notion.
-        _cache_objetivos_ids[cache_key] = [db_id]
+        _cache_objetivos_ids[cache_key] = (time.time(), [db_id])
     logging.info("Base de datos objetivos persona creada: %s", titulo)
     return db_id
 
@@ -3244,7 +3253,9 @@ def obtener_objetivos_persona(advisee_nombre: str) -> list[dict]:
         db_ids = _buscar_todas_bbdd_objetivos_persona(advisee_nombre)
         resultados = []
         vistos: set = set()
+        alguna_fallo = False
         for db_id in db_ids:
+          try:
             cursor = None
             while True:
                 kwargs: dict = {"page_size": 100}
@@ -3284,6 +3295,13 @@ def obtener_objetivos_persona(advisee_nombre: str) -> list[dict]:
                 if not resp.get("has_more"):
                     break
                 cursor = resp.get("next_cursor")
+          except Exception:
+            alguna_fallo = True
+            logging.exception("Error leyendo base de objetivos %s (¿borrada?)", db_id)
+        if alguna_fallo:
+            # Alguna base cacheada ya no existe (borrada/restaurada): invalida para re-listar.
+            with lock:
+                _cache_objetivos_ids.pop(_clave_objetivos(f"Objetivos - {advisee_nombre.strip()}"), None)
         resultados.sort(key=lambda x: x["fecha"] or "", reverse=True)
         return resultados
     except Exception:

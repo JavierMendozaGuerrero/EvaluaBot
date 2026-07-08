@@ -161,6 +161,7 @@ export const STRINGS = {
   // --- Login / registro / recuperar contrasena (AuthScreen) ---
   "auth.eyebrow": { es: "Evaluaciones internas", en: "Internal evaluations" },
   "auth.title_verify": { es: "Verificación requerida", en: "Verification required" },
+  "auth.account_verified": { es: "Cuenta verificada. Ya puedes iniciar sesión.", en: "Account verified. You can now sign in." },
   "auth.title_forgot": { es: "Recuperar contraseña", en: "Reset password" },
   "auth.title_reset": { es: "Nueva contraseña", en: "New password" },
   "auth.title_login": { es: "Iniciar sesión", en: "Sign in" },
@@ -428,6 +429,8 @@ export const STRINGS = {
 
   // --- Activar evaluaciones de proyecto (ActivarEvaluacionesProyectoPage) ---
   "aep.err_type_project": { es: "Escribe el nombre del proyecto.", en: "Type the project name." },
+  "aep.err_format": { es: "El nombre debe seguir el formato AÑO_EMPRESA_NOMBRE en mayúsculas, sin espacios ni tildes (p.ej. 2026_ACME_INNOVACION).", en: "The name must follow the format YEAR_COMPANY_NAME in uppercase, no spaces or accents (e.g. 2026_ACME_INNOVATION)." },
+  "aep.format_bad": { es: "Formato erróneo", en: "Invalid format" },
   "aep.err_select_employee": { es: "Selecciona al menos un empleado.", en: "Select at least one employee." },
   "aep.activated": { es: "Evaluaciones activadas para {n} persona(s). Se les ha enviado una notificación por Slack.", en: "Evaluations activated for {n} person(s). They’ve been notified on Slack." },
   "aep.err_activate": { es: "No se pudo activar.", en: "Could not activate." },
@@ -436,7 +439,7 @@ export const STRINGS = {
   "aep.activate_another": { es: "Activar otro proyecto", en: "Activate another project" },
   "aep.back_home": { es: "Volver al inicio", en: "Back to home" },
   "aep.project_name": { es: "Nombre del proyecto", en: "Project name" },
-  "aep.format_hint": { es: "Formato: AÑO_EMPRESA_NOMBRE (sin espacios ni tildes, p.ej. 2026_Acme_Innovacion)", en: "Format: YEAR_COMPANY_NAME (no spaces or accents, e.g. 2026_Acme_Innovation)" },
+  "aep.format_hint": { es: "Formato: AÑO_EMPRESA_NOMBRE en mayúsculas, sin espacios ni tildes (p.ej. 2026_ACME_INNOVACION)", en: "Format: YEAR_COMPANY_NAME in uppercase, no spaces or accents (e.g. 2026_ACME_INNOVATION)" },
   "aep.team_members": { es: "Miembros del equipo", en: "Team members" },
   "aep.loading_employees": { es: "Cargando empleados...", en: "Loading employees..." },
   "aep.search_by_name": { es: "Buscar por nombre...", en: "Search by name..." },
@@ -490,7 +493,7 @@ export const STRINGS = {
   "sex.desc": { es: "Pide a un compañero que te evalúe sobre algo en lo que habéis trabajado juntos, fuera de un proyecto. Es opcional para él: recibirá una notificación por Slack y decidirá si responde.", en: "Ask a colleague to evaluate you on something you worked on together, outside of a project. It's optional for them: they'll get a Slack notification and decide whether to answer." },
   "sex.who_label": { es: "¿A quién se lo pides?", en: "Who are you asking?" },
   "sex.context_label": { es: "¿Sobre qué debe evaluarte?", en: "What should they evaluate you on?" },
-  "sex.context_hint": { es: "Este texto se le mostrará a la persona junto con la evaluación.", en: "This text will be shown to them alongside the evaluation." },
+  "sex.context_hint": { es: "Este texto le llegará a la persona como parte de una notificación en Slack y se le mostrará junto con la evaluación.", en: "This text will reach the person as part of a Slack notification and will be shown to them alongside the evaluation." },
   "sex.context_placeholder": { es: "P. ej.: la sesión de trabajo que preparamos juntos para el cliente X", en: "E.g.: the work session we prepared together for client X" },
   "sex.err_select_employee": { es: "Selecciona a quién se lo pides.", en: "Select who you're asking." },
   "sex.err_context": { es: "Escribe sobre qué debe evaluarte.", en: "Write what they should evaluate you on." },

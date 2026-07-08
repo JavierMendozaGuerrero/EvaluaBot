@@ -54,13 +54,47 @@ def test_objetivos_get_permitido_si_es_advisee_del_ca(client, as_session, user_s
     assert r.json() == {"objetivos": [{"titulo": "Meta 1"}]}
 
 
-def test_objetivos_delete_no_comprueba_advisee_hueco_conocido(client, as_session, user_session, monkeypatch):
-    """No es un test de "comportamiento deseado": documenta el hueco de permisos
-    conocido y heredado del original (ver plan de migración, sección Fuera de alcance).
-    Si algún día se decide corregirlo, este test debe actualizarse a la vez."""
+def test_objetivos_delete_sin_nombre_da_400(client, as_session, user_session):
+    """Ahora el borrado exige `nombre` para poder comprobar permisos."""
     as_session(user_session)
+    r = client.request("DELETE", "/api/objetivos", json={"page_id": "cualquier-id"})
+    assert r.status_code == 400
+
+
+def test_objetivos_delete_bloqueado_si_no_es_advisee_del_ca(client, as_session, user_session, monkeypatch):
+    """El hueco conocido queda cerrado: un no-CA no puede borrar objetivos ajenos."""
+    as_session(user_session)
+    monkeypatch.setattr(deps, "obtener_advisees", lambda *a, **k: ["Otra Persona"])
     monkeypatch.setattr(ca_router, "eliminar_objetivo_persona", lambda page_id: True)
-    r = client.request("DELETE", "/api/objetivos", json={"page_id": "cualquier-id-ajeno"})
+    r = client.request(
+        "DELETE", "/api/objetivos",
+        json={"page_id": "id-ajeno", "nombre": "Alguien Que No Tutela"},
+    )
+    assert r.status_code == 403
+
+
+def test_objetivos_delete_bloqueado_si_page_id_no_es_de_la_persona(client, as_session, user_session, monkeypatch):
+    """Aunque el CA tutele a la persona, no puede borrar un page_id que no le pertenece."""
+    as_session(user_session)
+    monkeypatch.setattr(deps, "obtener_advisees", lambda *a, **k: ["Juan Perez"])
+    monkeypatch.setattr(ca_router, "obtener_objetivos_persona", lambda nombre: [{"page_id": "suyo-1"}])
+    monkeypatch.setattr(ca_router, "eliminar_objetivo_persona", lambda page_id: True)
+    r = client.request(
+        "DELETE", "/api/objetivos",
+        json={"page_id": "id-de-otro", "nombre": "Juan Perez"},
+    )
+    assert r.status_code == 403
+
+
+def test_objetivos_delete_permitido_si_es_advisee_y_page_id_suyo(client, as_session, user_session, monkeypatch):
+    as_session(user_session)
+    monkeypatch.setattr(deps, "obtener_advisees", lambda *a, **k: ["Juan Perez"])
+    monkeypatch.setattr(ca_router, "obtener_objetivos_persona", lambda nombre: [{"page_id": "suyo-1"}])
+    monkeypatch.setattr(ca_router, "eliminar_objetivo_persona", lambda page_id: True)
+    r = client.request(
+        "DELETE", "/api/objetivos",
+        json={"page_id": "suyo-1", "nombre": "Juan Perez"},
+    )
     assert r.status_code == 200
     assert r.json() == {"ok": True}
 

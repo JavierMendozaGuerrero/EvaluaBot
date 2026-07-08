@@ -73,6 +73,17 @@ _TOPICOS_PERSONAL = [
 ]
 _TOPICO_LABEL = {clave: label for clave, _i18n, label in _TOPICOS_PERSONAL}
 
+# Alias tópico → nombre del apartado en la BD "Ejemplos de Guía para bot", cuando no
+# coinciden literalmente. CTTF = "Contribution To The Firm", así que el ejemplo de guía
+# de ese área está guardado como "Personal-Contribution to the firm" en Notion.
+# Dificultades y Trayectoria no tienen ejemplo propio, así que reutilizan los de
+# Apoyo y Criterios respectivamente.
+_ALIAS_APARTADO_EJEMPLO = {
+    "cttf": "Contribution to the firm",
+    "dificultades": "Apoyo",
+    "trayectoria": "Criterios",
+}
+
 
 def _obtener_bloques_oportunidad(idioma: str = "es") -> list:
     preguntas = obtener_preguntas_personales(idioma)
@@ -530,10 +541,21 @@ def _handle_personal_tipo(ack, body, logger):
                 estado["modo"] = "esperando_comentario"
             _idi = estado.get("idioma", "es")
         tipo_display = tipo if _idi == "es" else (obtener_preguntas_personales(_idi, con_fallback_es=False).get(f"topic_{clave}") or t(f"bp.topic_{clave}", _idi))
+        texto_msg = f"*{tipo_display}*\n{t('bp.write_comment', _idi)}"
+        seccion: dict = {"type": "section", "text": {"type": "mrkdwn", "text": texto_msg}}
+        # Botón "Ver ejemplo" a la derecha, solo si hay un ejemplo de guía para ese área.
+        if _ejemplo_personal_para_clave(clave, obtener_ejemplos_guia(_idi)):
+            seccion["accessory"] = {
+                "type": "button",
+                "text": {"type": "plain_text", "text": t("bp.see_example", _idi), "emoji": True},
+                "action_id": "personal_ver_ejemplo_area",
+                "value": clave,
+            }
         slack_app.client.chat_postMessage(
             channel=dm_channel,
             thread_ts=thread_ts,
-            text=f"*{tipo_display}*\n{t('bp.write_comment', _idi)}",
+            text=texto_msg,
+            blocks=[seccion],
         )
     except Exception:
         logger.exception("Error procesando selección de tipo personal")
@@ -930,6 +952,58 @@ def _build_ejemplos_personal_view(ejemplos: dict, expanded: set, idioma: str = "
     }
 
 
+def _nombre_apartado_ejemplo(tipo: str) -> str:
+    """Quita el prefijo 'Personal - ' de la clave de Notion y devuelve el nombre del apartado."""
+    nombre = tipo
+    for prefijo in ("Personal - ", "Personal-", "personal - ", "personal-"):
+        if nombre.startswith(prefijo):
+            return nombre[len(prefijo):].strip()
+    return nombre
+
+
+def _ejemplo_personal_para_clave(clave: str, ejemplos: dict) -> tuple[str, str] | None:
+    """Devuelve (tipo_key, texto) del ejemplo personal que corresponde al tópico `clave`
+    (cttf/objetivos/dificultades/trayectoria), o None si no hay ejemplo para ese área."""
+    candidatos = {
+        _TOPICO_LABEL.get(clave, ""),
+        obtener_preguntas_personales("es").get(f"topic_{clave}") or "",
+        clave,
+        # Alias: el nombre del apartado en la BD de ejemplos no siempre coincide con la
+        # etiqueta del botón (p.ej. el botón dice "CTTF" pero el ejemplo se llama
+        # "Contribution to the firm", que es lo que significa el acrónimo).
+        _ALIAS_APARTADO_EJEMPLO.get(clave, ""),
+    }
+    candidatos_norm = {normalizar_nombre(c) for c in candidatos if c}
+    for tipo, texto in ejemplos.items():
+        if "personal" not in tipo.lower():
+            continue
+        if normalizar_nombre(_nombre_apartado_ejemplo(tipo)) in candidatos_norm:
+            return tipo, texto
+    return None
+
+
+def _build_ejemplo_area_view(clave: str, ejemplos: dict, idioma: str = "es") -> dict:
+    """Modal con el ejemplo de guía de un único área (el tópico que el usuario acaba de pulsar)."""
+    match = _ejemplo_personal_para_clave(clave, ejemplos)
+    if match:
+        tipo, texto = match
+        nombre = _traducir_apartado(_nombre_apartado_ejemplo(tipo), idioma)
+        blocks = [
+            {"type": "section", "text": {"type": "mrkdwn", "text": f"*{nombre}*"}},
+            {"type": "divider"},
+            {"type": "section", "text": {"type": "mrkdwn", "text": texto[:3000] if texto else t("bm.no_example", idioma)}},
+        ]
+    else:
+        blocks = [{"type": "section", "text": {"type": "mrkdwn", "text": t("bp.no_personal_examples", idioma)}}]
+    return {
+        "type": "modal",
+        "callback_id": "ejemplo_personal_area_ver",
+        "title": {"type": "plain_text", "text": t("bp.examples_title", idioma)},
+        "close": {"type": "plain_text", "text": t("bm.close", idioma)},
+        "blocks": blocks[:100],
+    }
+
+
 @slack_app.action(re.compile(r"^lang_set_personal_(es|en|pt)$"))
 def _handle_lang_set_personal(ack, body, logger):
     ack()
@@ -982,6 +1056,30 @@ def _handle_personal_ver_ejemplo(ack, body, logger):
         )
     except Exception:
         logger.exception("Error actualizando modal de ejemplos personal")
+
+
+@slack_app.action("personal_ver_ejemplo_area")
+def _handle_personal_ver_ejemplo_area(ack, body, logger):
+    ack()
+    trigger_id = body.get("trigger_id")
+    if not trigger_id:
+        return
+    clave = (body.get("actions") or [{}])[0].get("value", "")
+    # Modal de carga inmediato (sin lecturas de Notion) para no agotar el trigger_id.
+    try:
+        resp = slack_app.client.views_open(trigger_id=trigger_id, view=_vista_modal_cargando())
+    except Exception:
+        logger.exception("Error abriendo modal de ejemplo de área personal")
+        return
+    try:
+        _idi = idioma_por_slack_id(body.get("user", {}).get("id", ""))
+        ejemplos = obtener_ejemplos_guia(_idi)
+        slack_app.client.views_update(
+            view_id=resp["view"]["id"],
+            view=_build_ejemplo_area_view(clave, ejemplos, _idi),
+        )
+    except Exception:
+        logger.exception("Error actualizando modal de ejemplo de área personal")
 
 
 @slack_app.action("ejemplo_personal_toggle")

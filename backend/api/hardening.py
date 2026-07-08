@@ -24,6 +24,39 @@ RUTAS_GENERACION = "/api/generar"  # cubre /api/generar, /api/generar-anual, /ap
 LIMITE_GENERACION = 10             # peticiones...
 VENTANA_GENERACION = 60            # ...por minuto y por cliente
 
+# Endpoints de autenticación: sin límite, permitían fuerza bruta de contraseñas y
+# bombardeo de emails de reset. Límite estricto por IP.
+RUTAS_AUTH = ("/api/login", "/api/register", "/api/register/verify", "/api/password-reset/request")
+LIMITE_AUTH = 8                    # intentos...
+VENTANA_AUTH = 60                  # ...por minuto y por IP
+
+
+class SecurityHeadersMiddleware:
+    """Añade cabeceras de seguridad a todas las respuestas HTTP.
+
+    - X-Content-Type-Options: nosniff → el navegador no adivina el tipo de contenido.
+    - X-Frame-Options: DENY → nadie puede embeber la API en un iframe (clickjacking).
+    - Referrer-Policy: no-referrer → no se filtra la URL de origen a terceros.
+    """
+
+    def __init__(self, app: ASGIApp):
+        self.app = app
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send):
+        if scope["type"] != "http":
+            await self.app(scope, receive, send)
+            return
+
+        async def send_wrapper(message):
+            if message["type"] == "http.response.start":
+                headers = message.setdefault("headers", [])
+                headers.append((b"x-content-type-options", b"nosniff"))
+                headers.append((b"x-frame-options", b"DENY"))
+                headers.append((b"referrer-policy", b"no-referrer"))
+            await send(message)
+
+        await self.app(scope, receive, send_wrapper)
+
 
 class BodySizeLimitMiddleware:
     def __init__(self, app: ASGIApp):
@@ -90,6 +123,55 @@ class GenerationRateLimitMiddleware:
             if self._excede(self._clave_cliente(scope)):
                 respuesta = JSONResponse(
                     {"error": "Has generado demasiados documentos seguidos. Espera un minuto y vuelve a intentarlo."},
+                    status_code=429,
+                )
+                await respuesta(scope, receive, send)
+                return
+        await self.app(scope, receive, send)
+
+
+class AuthRateLimitMiddleware:
+    """Ventana deslizante por IP para los endpoints de autenticación.
+
+    Frena la fuerza bruta de contraseñas y el bombardeo de emails de reset. Se
+    limita por IP (no por token/usuario) porque el atacante prueba muchos usuarios.
+    """
+
+    def __init__(self, app: ASGIApp, limite: int = LIMITE_AUTH, ventana: int = VENTANA_AUTH):
+        self.app = app
+        self.limite = limite
+        self.ventana = ventana
+        self._historial: dict[str, list[float]] = {}
+        self._lock = threading.Lock()
+
+    def _ip_cliente(self, scope: Scope) -> str:
+        cliente = scope.get("client")
+        return cliente[0] if cliente else "desconocido"
+
+    def _excede(self, clave: str) -> bool:
+        ahora = time.monotonic()
+        with self._lock:
+            marcas = [m for m in self._historial.get(clave, []) if ahora - m < self.ventana]
+            if len(marcas) >= self.limite:
+                self._historial[clave] = marcas
+                return True
+            marcas.append(ahora)
+            self._historial[clave] = marcas
+            if len(self._historial) > 10_000:
+                self._historial = {
+                    k: v for k, v in self._historial.items() if v and ahora - v[-1] < self.ventana
+                }
+            return False
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send):
+        if (
+            scope["type"] == "http"
+            and scope["method"] == "POST"
+            and scope.get("path", "") in RUTAS_AUTH
+        ):
+            if self._excede(self._ip_cliente(scope)):
+                respuesta = JSONResponse(
+                    {"error": "Demasiados intentos. Espera un minuto y vuelve a intentarlo."},
                     status_code=429,
                 )
                 await respuesta(scope, receive, send)

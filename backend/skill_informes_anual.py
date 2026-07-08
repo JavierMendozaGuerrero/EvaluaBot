@@ -786,6 +786,7 @@ def _verificar_soporte(comentarios: dict, fuentes: dict) -> list[dict]:
         "SÍ está respaldada. Devuelve ÚNICAMENTE un JSON válido: "
         '{"no_soportadas": [{"i": <numero de la afirmacion>, "motivo": "<breve>"}]}. '
         "Si todas están respaldadas, devuelve {\"no_soportadas\": []}."
+        + config.INSTRUCCION_ANTIINYECCION
     )
     try:
         respuesta = anthropic_client.messages.create(
@@ -920,6 +921,8 @@ def interpretar_evaluaciones_anual(emp_data: dict, cargo: str = "", criterios: s
             "Quando não houver evidência para uma dimensão, escreve exatamente 'Informação "
             "insuficiente' (sem citação)."
         )
+
+    system += config.INSTRUCCION_ANTIINYECCION
 
     user_content = (
         f"Empleado: {emp_data['empleado']}\n"

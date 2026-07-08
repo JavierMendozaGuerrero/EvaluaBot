@@ -204,6 +204,7 @@ def _generar_diagnostico(cargo: str, etiqueta: str, criterios: list, evidencia: 
         "concreta [X#]; (2) qué le falta (gaps concretos) para consolidar su nivel o para subir al siguiente. "
         "Devuelve texto plano, 2-4 frases, con las citas [X#] correspondientes. NO inventes: solo lo que "
         "la evidencia respalde."
+        + config.INSTRUCCION_ANTIINYECCION
     )
     user = f"CRITERIOS POR NIVEL:\n{crit_txt}\n\nEVIDENCIA:\n{ev_txt}"
     try:
@@ -390,6 +391,7 @@ def _claude_conversa_area(etiqueta: str, evidencia: list, claude_bullets: str, c
         "- NO inventes: cada afirmación de la propuesta debe llevar su cita [X#] de la evidencia.\n\n"
         'Devuelve SOLO un JSON válido: {"mensaje": "tu respuesta conversacional", '
         '"propuesta": "los bullets finales del área, uno por línea, cada uno con su cita"}.'
+        + config.INSTRUCCION_ANTIINYECCION
     )
     # La evidencia, criterios, diagnóstico y tu valoración son ESTÁTICOS durante todo el debate del área
     # → se cachean (prompt caching): los turnos siguientes casi no pagan esos tokens (mismo modelo, menos API).
@@ -523,6 +525,7 @@ def _generar_plan_accion(sesion: dict, instruccion: str = "", plan_previo: str =
         "cómo lograrlo, atado a los GAPS detectados y a la ruta de crecimiento (consolidar su nivel o subir "
         "al siguiente). Realista, específico y medible cuando se pueda. Es una SUGERENCIA para el CA. "
         "Devuelve texto plano como lista numerada (1., 2., …), sin preámbulos."
+        + config.INSTRUCCION_ANTIINYECCION
     )
     user = f"CARGO: {sesion.get('cargo') or 'no especificado'}\n\nEVALUACIÓN POR ÁREA:\n{resumen}"
     if plan_previo and instruccion:

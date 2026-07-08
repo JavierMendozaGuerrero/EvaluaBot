@@ -5,13 +5,22 @@ from ..notion_service import obtener_advisees
 from ..utils import normalizar_nombre
 
 
-def get_session(request: Request):
-    """Bearer header primero; si no hay, cae a ?token= (usado por descargas por window.open())."""
+def get_token(request: Request) -> str:
+    """Extrae el token de sesión de la cabecera Authorization: Bearer.
+
+    Antes se aceptaba también ?token= en la URL para las descargas por
+    window.open(), pero eso filtraba el token en el historial/logs/Referer.
+    El frontend ahora descarga con la cabecera (fetch + blob), así que el
+    token ya nunca viaja en la URL.
+    """
     auth = request.headers.get("Authorization", "")
     if auth.lower().startswith("bearer "):
-        return users.obtener_sesion_por_token(auth.split(" ", 1)[1].strip())
-    token_query = request.query_params.get("token", "")
-    return users.obtener_sesion_por_token(token_query)
+        return auth.split(" ", 1)[1].strip()
+    return ""
+
+
+def get_session(request: Request):
+    return users.obtener_sesion_por_token(get_token(request))
 
 
 def require_session(session: dict | None = Depends(get_session)):

@@ -64,12 +64,16 @@ def objetivos_post(datos: dict = Body(default={}), session=Depends(require_sessi
 
 @router.delete("/api/objetivos")
 def objetivos_delete(datos: dict = Body(default={}), session=Depends(require_session)):
-    # Preservado tal cual el original: a diferencia de GET/POST, aquí NO se comprueba
-    # exigir_acceso_advisee. Hueco de permisos conocido y documentado en el plan de
-    # migración — no se corrige en esta migración, solo se deja constancia.
     page_id = datos.get("page_id", "")
-    if not page_id:
-        return JSONResponse({"error": "Falta page_id."}, status_code=400)
+    nombre = datos.get("nombre", "")
+    if not page_id or not nombre:
+        return JSONResponse({"error": "Faltan page_id y nombre."}, status_code=400)
+    # Autorización: solo el CA (o admin) de esa persona puede borrar, y el objetivo
+    # a borrar debe pertenecer realmente a esa persona (evita borrar por page_id ajeno).
+    exigir_acceso_advisee(session, nombre)
+    page_ids_persona = {o.get("page_id") for o in obtener_objetivos_persona(nombre)}
+    if page_id not in page_ids_persona:
+        raise PermissionError("Ese objetivo no pertenece a la persona indicada.")
     ok = eliminar_objetivo_persona(page_id)
     return {"ok": ok}
 
@@ -119,6 +123,8 @@ def notas_ca(datos: dict = Body(default={}), session=Depends(require_session)):
     nota = datos.get("nota", "").strip()
     if not advisee_nombre or not nota:
         return JSONResponse({"error": "Faltan datos"}, status_code=400)
+    # Autorización: solo el CA (o admin) de esa persona puede escribir notas sobre ella.
+    exigir_acceso_advisee(session, advisee_nombre)
     ca_nombre = session.get("persona", "")
     ok, err = guardar_nota_ca_web(ca_nombre, advisee_nombre, nota)
     return {"ok": ok, "error": err}

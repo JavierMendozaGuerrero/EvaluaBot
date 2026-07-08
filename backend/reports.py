@@ -62,6 +62,7 @@ def generar_informe_claude(evaluaciones, comentarios_personales=None, idioma="es
     respuesta = anthropic_client.messages.create(
         model="claude-sonnet-4-6",
         max_tokens=2200,
+        system=config.INSTRUCCION_ANTIINYECCION.strip(),
         messages=[{"role": "user", "content": prompt}],
     )
     return "".join(bloque.text for bloque in respuesta.content if bloque.type == "text").strip()

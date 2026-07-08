@@ -58,13 +58,20 @@ def servir_archivo_protegido(
         else:
             raise PermissionError("No tienes permiso para ver este archivo.")
 
-    ruta = os.path.join(config.CARPETA_WEB, os.path.basename(nombre_archivo))
+    # Defensa en profundidad: solo se sirven documentos generados (html/pdf/docx).
+    # Aunque los prefijos ya acotan qué se sirve, esto impide de raíz servir
+    # ficheros sensibles que viven en la misma carpeta (users.json, *.csv, cachés).
+    base = os.path.basename(nombre_archivo)
+    if not base.endswith((".html", ".pdf", ".docx")):
+        raise PermissionError("Tipo de archivo no permitido.")
+
+    ruta = os.path.join(config.CARPETA_WEB, base)
     if not os.path.exists(ruta):
         return JSONResponse({"error": "Archivo no encontrado"}, status_code=404)
 
-    if nombre_archivo.endswith(".docx"):
+    if base.endswith(".docx"):
         content_type = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
-    elif nombre_archivo.endswith(".pdf"):
+    elif base.endswith(".pdf"):
         content_type = "application/pdf"
     else:
         content_type = "text/html; charset=utf-8"
@@ -73,13 +80,17 @@ def servir_archivo_protegido(
     stat = os.stat(ruta)
     etag = '"%x-%x"' % (int(stat.st_mtime), stat.st_size)
 
+    headers = {"Cache-Control": cache_control, "ETag": etag}
+    # Los informes finales son HTML convertido de un .docx subido por el CA. Para
+    # neutralizar cualquier script incrustado, se sirven con una CSP que prohíbe
+    # ejecutar JS. (Los HTML generados por nosotros —trayectoria— sí usan script,
+    # por eso la CSP se aplica solo al informe final subido.)
+    if es_final and base.endswith(".html"):
+        headers["Content-Security-Policy"] = "default-src 'none'; img-src data:; style-src 'unsafe-inline'"
+
     if request.headers.get("If-None-Match") == etag:
-        return Response(status_code=304, headers={"ETag": etag, "Cache-Control": cache_control})
+        return Response(status_code=304, headers=headers)
 
     with open(ruta, "rb") as f:
         body = f.read()
-    return Response(
-        content=body,
-        media_type=content_type,
-        headers={"Cache-Control": cache_control, "ETag": etag},
-    )
+    return Response(content=body, media_type=content_type, headers=headers)

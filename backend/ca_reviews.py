@@ -328,7 +328,7 @@ def _texto_seguimiento_personal(advisee: str, desde_fecha: str | None, anonimo: 
         return ""
     lineas = []
     for c in sorted(comentarios, key=lambda x: x.get("fecha", "")):
-        autor_c = "Anónimo" if anonimo else c["autor"]
+        autor_c = c["autor"]  # seguimiento personal: autor = propio advisee, nunca anonimo
         lineas.append(f"• [{c['fecha']}] *{autor_c}* → _{c['comentario']}_")
     return "\n".join(lineas)
 
@@ -401,7 +401,7 @@ def _resumen_advisee(advisee: str, desde_fecha: str | None, anonimo: bool = True
         if comentarios:
             lineas_personales = []
             for c in sorted(comentarios, key=lambda x: x.get("fecha", "")):
-                autor_c = "Anónimo" if anonimo else c['autor']
+                autor_c = c['autor']  # seguimiento personal: nunca anonimo (autor = advisee)
                 lineas_personales.append(
                     f"• [{c['fecha']}] *{autor_c}* → _{c['comentario']}_"
                 )

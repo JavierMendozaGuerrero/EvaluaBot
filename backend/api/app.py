@@ -4,7 +4,12 @@ from fastapi.middleware.gzip import GZipMiddleware
 
 from .. import config
 from .errors import register_exception_handlers
-from .hardening import BodySizeLimitMiddleware, GenerationRateLimitMiddleware
+from .hardening import (
+    AuthRateLimitMiddleware,
+    BodySizeLimitMiddleware,
+    GenerationRateLimitMiddleware,
+    SecurityHeadersMiddleware,
+)
 from .files import router as files_router
 from .routers.admin import router as admin_router
 from .routers.auth import router as auth_router
@@ -28,6 +33,8 @@ app.add_middleware(
 app.add_middleware(GZipMiddleware, minimum_size=1000)
 app.add_middleware(BodySizeLimitMiddleware)
 app.add_middleware(GenerationRateLimitMiddleware)
+app.add_middleware(AuthRateLimitMiddleware)
+app.add_middleware(SecurityHeadersMiddleware)
 
 register_exception_handlers(app)
 

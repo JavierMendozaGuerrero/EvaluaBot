@@ -198,7 +198,7 @@ def generar_pdf_seguimiento_personal(advisee: str, anonimo: bool = True, idioma:
     datos = sorted(datos, key=lambda x: x.get("fecha", ""))
     entradas = [{
         "header": _fecha_es(d.get("fecha", ""), idioma),
-        "meta": "" if anonimo else d.get("autor", ""),
+        "meta": d.get("autor", ""),  # seguimiento personal: siempre el autor (advisee)
         "cuerpo": d.get("comentario", ""),
     } for d in datos]
     slug = slug_archivo(advisee)
@@ -263,7 +263,7 @@ def _entradas_evals_proyecto(advisee, anonimo, idioma="es"):
 
 def _entradas_seguimiento(advisee, anonimo, idioma="es"):
     datos = sorted(obtener_comentarios_personales(advisee), key=lambda x: x.get("fecha", ""))
-    return [{"header": _fecha_es(d.get("fecha", ""), idioma), "meta": "" if anonimo else d.get("autor", ""),
+    return [{"header": _fecha_es(d.get("fecha", ""), idioma), "meta": d.get("autor", ""),
              "cuerpo": d.get("comentario", "")} for d in datos]
 
 

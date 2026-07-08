@@ -27,22 +27,20 @@ def test_get_session_usa_bearer_header(monkeypatch):
     assert llamado_con["token"] == "abc123"
 
 
-def test_get_session_fallback_query_token(monkeypatch):
-    """El fallback a ?token= es imprescindible: el frontend lo usa para descargas por window.open()."""
-    llamado_con = {}
-
+def test_get_session_ignora_query_token(monkeypatch):
+    """El token en la URL (?token=) ya NO se acepta: filtraba el token en historial/logs.
+    El frontend descarga con la cabecera Authorization (fetch + blob)."""
     def fake_obtener_sesion_por_token(token):
-        llamado_con["token"] = token
-        return {"persona": "Y"}
+        return {"token_usado": token}
 
     monkeypatch.setattr(deps.users, "obtener_sesion_por_token", fake_obtener_sesion_por_token)
     request = _request(query="token=xyz789")
     sesion = deps.get_session(request)
-    assert sesion == {"persona": "Y"}
-    assert llamado_con["token"] == "xyz789"
+    # Sin cabecera Bearer, get_token devuelve "" → sesión con token vacío.
+    assert sesion == {"token_usado": ""}
 
 
-def test_get_session_header_tiene_precedencia_sobre_query(monkeypatch):
+def test_get_session_solo_usa_bearer_header(monkeypatch):
     def fake_obtener_sesion_por_token(token):
         return {"token_usado": token}
 

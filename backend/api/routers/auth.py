@@ -1,13 +1,16 @@
-from fastapi import APIRouter, Body, Depends
+from fastapi import APIRouter, Body, Depends, Request
 
-from ..deps import get_session, require_session
+from ... import config
+from ..deps import get_session, get_token, require_session
 from ...notion_service import guardar_idioma_por_sesion, guardar_pais_por_sesion, idioma_por_sesion
 from ...users import (
     autenticar_usuario,
     cambiar_password_con_token,
+    cerrar_sesion,
+    confirmar_registro,
     crear_sesion,
     obtener_sesion_por_token,
-    registrar_usuario,
+    solicitar_registro,
     solicitar_reset_password,
 )
 
@@ -29,9 +32,30 @@ def me(session=Depends(get_session)):
     return {"user": usuario}
 
 
+def _exigir_registro_habilitado():
+    if not config.REGISTRO_WEB_HABILITADO:
+        raise PermissionError("El registro está deshabilitado. Contacta con RRHH para tu cuenta.")
+
+
 @router.post("/api/register")
 def register(datos: dict = Body(default={})):
-    registrar_usuario(datos.get("username", ""), datos.get("password", ""))
+    _exigir_registro_habilitado()
+    # Paso 1: valida y envía el código. El frontend detecta este marcador y pide el código.
+    email = solicitar_registro(datos.get("username", ""), datos.get("password", ""), datos.get("email", ""))
+    raise PermissionError(f"VERIFICACION_REQUERIDA:{email}")
+
+
+@router.post("/api/register/verify")
+def register_verify(datos: dict = Body(default={})):
+    _exigir_registro_habilitado()
+    # Paso 2: confirma el código y crea la cuenta.
+    confirmar_registro(datos.get("email", ""), datos.get("code", ""))
+    return {"ok": True}
+
+
+@router.post("/api/logout")
+def logout(request: Request):
+    cerrar_sesion(get_token(request))
     return {"ok": True}
 
 

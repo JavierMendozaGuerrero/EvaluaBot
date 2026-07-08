@@ -32,5 +32,7 @@ def register_exception_handlers(app):
 
     @app.exception_handler(Exception)
     async def _generic_error(request: Request, exc: Exception):
+        # El detalle del error queda en el log del servidor; al cliente solo le
+        # damos un mensaje genérico para no filtrar rutas ni internals.
         logging.exception("Error en API")
-        return JSONResponse({"error": str(exc)}, status_code=500)
+        return JSONResponse({"error": "Error interno del servidor."}, status_code=500)

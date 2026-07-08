@@ -165,6 +165,25 @@ async function apiRequest(path, { token, method = "GET", body } = {}) {
   }
 }
 
+// Abre un archivo protegido (HTML/PDF) en una pestaña nueva SIN poner el token en
+// la URL: lo pide con la cabecera Authorization y lo muestra desde un blob local.
+// Antes se hacía window.open(`...?token=${token}`), lo que filtraba el token de
+// sesión en el historial, la caché, los logs del servidor y la cabecera Referer.
+async function openAuthedFile(path, token) {
+  // Abrimos la pestaña de forma síncrona (gesto del usuario) para no ser bloqueados
+  // por el bloqueador de pop-ups; luego le cargamos el blob cuando llega.
+  const win = window.open("", "_blank");
+  try {
+    const res = await fetch(apiUrl(path), { headers: { Authorization: `Bearer ${token}` } });
+    if (!res.ok) throw new Error(String(res.status));
+    const url = URL.createObjectURL(await res.blob());
+    if (win) win.location = url; else window.open(url, "_blank", "noopener,noreferrer");
+    setTimeout(() => URL.revokeObjectURL(url), 60000);
+  } catch {
+    if (win) win.close();
+  }
+}
+
 const _CACHE_TTL = 5 * 60 * 1000;
 
 function _getCached(key) {
@@ -606,7 +625,7 @@ function AdminPanel({ token, onBack }) {
 
   async function openFile(path, filename) {
     if (!filename.endsWith(".docx")) {
-      window.open(apiUrl(`${path}&token=${encodeURIComponent(token)}`), "_blank", "noopener,noreferrer");
+      openAuthedFile(path, token);
       return;
     }
     try {
@@ -1042,7 +1061,7 @@ function ObjetivosPage({ token, advisee, caName, onBack }) {
     if (!window.confirm(t("goals.confirm_delete"))) return;
     setDeleting(page_id);
     try {
-      await apiRequest("/api/objetivos", { token, method: "DELETE", body: { page_id } });
+      await apiRequest("/api/objetivos", { token, method: "DELETE", body: { page_id, nombre: advisee.nombre } });
       await recargar();
     } catch (err) {
       setError(err.message);
@@ -1225,8 +1244,14 @@ function AuthScreen({ onLogin }) {
     setLoading(true);
     try {
       if (mode === "register") {
+        // El backend responde VERIFICACION_REQUERIDA:<email> (se captura abajo) y
+        // pasamos a pedir el código; la cuenta no se crea hasta confirmarlo.
         await apiRequest("/api/register", { method: "POST", body: form });
         setMode("login");
+      } else if (mode === "verify-code") {
+        await apiRequest("/api/register/verify", { method: "POST", body: { email: form.email, code: form.verifyCode } });
+        setMode("login");
+        setMessage(t("auth.account_verified"));
       } else if (mode === "forgot") {
         await apiRequest("/api/password-reset/request", { method: "POST", body: { email: form.email } });
         setMessage(t("auth.forgot_sent"));
@@ -1317,6 +1342,12 @@ function AuthScreen({ onLogin }) {
             <>
               <label>{mode === "login" ? t("auth.user_or_email") : t("auth.user")}</label>
               <input value={form.username} onChange={(e) => setForm({ ...form, username: e.target.value })} required />
+              {mode === "register" && (
+                <>
+                  <label>Email</label>
+                  <input type="email" value={form.email} onChange={(e) => setForm({ ...form, email: e.target.value })} required />
+                </>
+              )}
               <label>{t("auth.password")}</label>
               <PasswordInput value={form.password} onChange={(e) => setForm({ ...form, password: e.target.value })} minLength={mode === "register" ? 8 : undefined} />
               {mode === "register" && (
@@ -2471,11 +2502,11 @@ function DashNavItem({ label, onClick, disabled, external = false }) {
   );
 }
 
-function DashCollapsible({ title, open, onToggle, children, badge = null }) {
+function DashCollapsible({ title, open, onToggle, children, badge = null, bodyMarginTop = 10 }) {
   return (
     <div>
       <div onClick={onToggle} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", cursor: "pointer", userSelect: "none" }}>
-        <span className="eyebrow" style={{ marginBottom: 0, fontSize: "0.7rem" }}><span className="dash-dot" />{title}</span>
+        <span className="eyebrow" style={{ marginBottom: 0, fontSize: "0.7rem" }}>{title}</span>
         <span style={{ display: "inline-flex", alignItems: "center", gap: 8, flexShrink: 0 }}>
           {badge != null && (
             <span style={{
@@ -2491,7 +2522,7 @@ function DashCollapsible({ title, open, onToggle, children, badge = null }) {
           </svg>
         </span>
       </div>
-      {open && <div style={{ marginTop: 10 }}>{children}</div>}
+      {open && <div style={{ marginTop: bodyMarginTop }}>{children}</div>}
     </div>
   );
 }
@@ -2753,7 +2784,7 @@ function Dashboard({ token, user, onLogout, onNavigate, onBackToRoleSelect = nul
 
   async function openFile(path, filename) {
     if (!filename.endsWith(".docx")) {
-      window.open(apiUrl(`${path}&token=${encodeURIComponent(token)}`), "_blank", "noopener,noreferrer");
+      openAuthedFile(path, token);
       return;
     }
     setStatus(t("dash.downloading"));
@@ -2853,9 +2884,12 @@ function Dashboard({ token, user, onLogout, onNavigate, onBackToRoleSelect = nul
                           <div
                             key={p.nombre_proyecto}
                             onClick={() => onNavigate({ type: "evaluaciones-proyecto", proyectos: proyectosActivos, initialProyecto: p.nombre_proyecto })}
-                            style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8, fontSize: 13, color: "#000", cursor: "pointer", padding: "5px 0", paddingLeft: 4 }}
+                            style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8, fontSize: 13, color: "#000", cursor: "pointer", padding: "5px 0", paddingLeft: 16 }}
                           >
-                            <span>{p.nombre_proyecto}</span>
+                            <span style={{ display: "inline-flex", alignItems: "center", minWidth: 0 }}>
+                              <span style={{ display: "inline-block", width: 4, height: 4, borderRadius: "50%", background: "var(--accent)", marginRight: 10, flexShrink: 0 }} />
+                              {p.nombre_proyecto}
+                            </span>
                             {prog && (
                               <span style={{ display: "inline-flex", alignItems: "center", gap: 6, flexShrink: 0 }}>
                                 <span style={{ fontSize: 11, fontWeight: 400, color: "#000", opacity: 0.65, whiteSpace: "nowrap" }}>
@@ -2928,16 +2962,20 @@ function Dashboard({ token, user, onLogout, onNavigate, onBackToRoleSelect = nul
                       <div
                         key={p.page_id}
                         onClick={() => onNavigate({ type: "formulario-evaluacion-extra", solicitudPageId: p.page_id, evaluado: p.evaluado, contexto: p.contexto })}
-                        style={{ display: "flex", flexDirection: "column", gap: 2, fontSize: 13, color: "#000", cursor: "pointer", padding: "5px 0", paddingLeft: 4 }}
+                        style={{ display: "flex", alignItems: "flex-start", gap: 10, fontSize: 13, color: "#000", cursor: "pointer", padding: "5px 0", paddingLeft: 16 }}
                       >
-                        <span>{t("eep.requested_by", { nombre: p.evaluado })}</span>
-                        <span style={{ fontSize: 12, fontWeight: 200, color: "rgba(0,0,0,.55)" }}>{p.contexto}</span>
+                        <span style={{ display: "inline-block", width: 4, height: 4, borderRadius: "50%", background: "var(--accent)", flexShrink: 0, marginTop: 6 }} />
+                        <span style={{ display: "flex", flexDirection: "column", gap: 2, minWidth: 0 }}>
+                          <span>{t("eep.requested_by", { nombre: p.evaluado })}</span>
+                          <span style={{ fontSize: 12, fontWeight: 200, color: "rgba(0,0,0,.55)" }}>{p.contexto}</span>
+                        </span>
                       </div>
                     ))}
                     <div
                       onClick={() => onNavigate({ type: "solicitar-evaluacion-extra" })}
-                      style={{ fontSize: 13, color: "var(--accent)", cursor: "pointer", padding: "5px 0", paddingLeft: 4 }}
+                      style={{ display: "flex", alignItems: "center", gap: 10, fontSize: 13, color: "var(--accent)", cursor: "pointer", padding: "5px 0", paddingLeft: 16 }}
                     >
+                      <span style={{ display: "inline-block", width: 4, height: 4, borderRadius: "50%", background: "var(--accent)", flexShrink: 0 }} />
                       {t("dash.nav_request_extra_eval")}
                     </div>
                   </div>
@@ -2989,7 +3027,7 @@ function Dashboard({ token, user, onLogout, onNavigate, onBackToRoleSelect = nul
 
             <div>
               <div style={{ display: "flex", alignItems: "baseline", gap: 10 }}>
-                <p className="eyebrow" style={{ margin: 0, flexShrink: 0, fontSize: "0.7rem" }}><span className="dash-dot" />{t("dash.my_country")}</p>
+                <p className="eyebrow" style={{ margin: 0, flexShrink: 0, fontSize: "0.7rem" }}>{t("dash.my_country")}</p>
                 {!editandoPais && (
                   <p style={{ fontSize: 13, color: perfil.pais ? "#000" : "rgba(0,0,0,.45)", margin: 0 }}>
                     {perfil.pais || t("dash.country_none")}
@@ -3040,14 +3078,25 @@ function Dashboard({ token, user, onLogout, onNavigate, onBackToRoleSelect = nul
 
             <DashCollapsible title={t("dash.my_goals")} open={objOpen} onToggle={() => setObjOpen((v) => !v)}>
               {misObjetivos.length ? (
-                <div style={{ display: "flex", flexDirection: "column", gap: 8, paddingLeft: 12 }}>
+                <div style={{ display: "flex", flexDirection: "column", gap: 8, paddingLeft: 16 }}>
                   {misObjetivos.map((obj, i) => (
-                    <div key={i}>
-                      <p style={{ fontSize: 13, color: "#000", display: "flex", alignItems: "center", gap: 6 }}>
-                        <span style={{ color: "var(--accent)", flexShrink: 0, fontSize: "1.3em" }}>•</span>
+                    <div key={i} style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+                      <p style={{ fontSize: 13, color: "#000", display: "flex", alignItems: "center", gap: 10 }}>
+                        <span style={{ display: "inline-block", width: 4, height: 4, borderRadius: "50%", background: "var(--accent)", flexShrink: 0 }} />
                         {obj.titulo}
                       </p>
-                      {obj.kpis && <p style={{ fontSize: 13, fontWeight: 200, color: "rgba(0,0,0,.55)", paddingLeft: 12 }}>{obj.kpis}</p>}
+                      {obj.kpis && (
+                        <p style={{ fontSize: 13, fontWeight: 200, color: "rgba(0,0,0,.55)", display: "flex", alignItems: "flex-start", gap: 10, paddingLeft: 24 }}>
+                          <span style={{ display: "inline-block", width: 4, height: 4, borderRadius: "50%", background: "var(--accent)", flexShrink: 0, marginTop: 6 }} />
+                          <span><em>KPIs:</em> {obj.kpis}</span>
+                        </p>
+                      )}
+                      {obj.descripcion && (
+                        <p style={{ fontSize: 13, fontWeight: 200, color: "rgba(0,0,0,.55)", display: "flex", alignItems: "flex-start", gap: 10, paddingLeft: 24 }}>
+                          <span style={{ display: "inline-block", width: 4, height: 4, borderRadius: "50%", background: "var(--accent)", flexShrink: 0, marginTop: 6 }} />
+                          <span>{obj.descripcion}</span>
+                        </p>
+                      )}
                     </div>
                   ))}
                 </div>
@@ -3062,12 +3111,18 @@ function Dashboard({ token, user, onLogout, onNavigate, onBackToRoleSelect = nul
               {informeFinalEmpleado === null ? (
                 <p className="fine">{t("common.loading")}</p>
               ) : informeFinalEmpleado?.disponible ? (
-                <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
+                <div className="tareas-list">
                   {informeFinalEmpleado.htmlUrl && (
-                    <button className="secondary" onClick={() => openFile(informeFinalEmpleado.htmlUrl, "informe_final.html")}>{t("dash.open_web")}</button>
+                    <div className="tarea-row" onClick={() => openFile(informeFinalEmpleado.htmlUrl, "informe_final.html")}>
+                      <span className="tarea-label">{t("dash.open_web")}</span>
+                      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ width: 14, height: 14, flexShrink: 0 }}><circle cx="12" cy="12" r="9" /><line x1="3" y1="12" x2="21" y2="12" /><path d="M12 3a15 15 0 0 1 0 18 15 15 0 0 1 0-18z" /></svg>
+                    </div>
                   )}
                   {informeFinalEmpleado.docxUrl && (
-                    <button className="secondary" onClick={() => openFile(informeFinalEmpleado.docxUrl, "informe_final.docx")}>{t("admin.download_word")}</button>
+                    <div className="tarea-row" onClick={() => openFile(informeFinalEmpleado.docxUrl, "informe_final.docx")}>
+                      <span className="tarea-label">{t("admin.download_word")}</span>
+                      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ width: 14, height: 14, flexShrink: 0 }}><path d="M12 3v12" /><polyline points="7 10 12 15 17 10" /><line x1="5" y1="21" x2="19" y2="21" /></svg>
+                    </div>
                   )}
                 </div>
               ) : (
@@ -3079,6 +3134,7 @@ function Dashboard({ token, user, onLogout, onNavigate, onBackToRoleSelect = nul
 
             <div className="dash-tareas">
               <DashCollapsible title={t("dash.pending_tasks")} open={tareasOpen} onToggle={() => setTareasOpen((v) => !v)}
+                bodyMarginTop={2}
                 badge={(() => { const n = tareasSlack.pendientes.length + tareasProyecto.length + evaluacionesExtraPendientes.length; return n > 0 ? n : null; })()}>
               {(tareasSlack.pendientes.length + tareasProyecto.length + evaluacionesExtraPendientes.length) === 0 ? (
                 <p className="fine">{t("dash.no_pending_tasks")}</p>
@@ -3249,7 +3305,7 @@ function SubirInformePage({ token, advisee, onBack }) {
 
   async function openFile(path, filename) {
     if (!filename.endsWith(".docx")) {
-      window.open(apiUrl(`${path}&token=${encodeURIComponent(token)}`), "_blank", "noopener,noreferrer");
+      openAuthedFile(path, token);
       return;
     }
     try {
@@ -3516,7 +3572,7 @@ function AdviseeDetail({ token, advisee, advisees, onBack, onNavigate }) {
       const path = formato === "web" ? data.htmlUrl : data.pdfUrl;
       if (!path) throw new Error(t("ad.err_no_doc"));
       if (formato === "web") {
-        window.open(apiUrl(`${path}&token=${encodeURIComponent(token)}`), "_blank", "noopener,noreferrer");
+        openAuthedFile(path, token);
       } else {
         const response = await fetch(apiUrl(path), { headers: { Authorization: `Bearer ${token}` } });
         if (!response.ok) {
@@ -3943,7 +3999,7 @@ function MisProyectosActivosPage({ token, user, onBack }) {
                 <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 16, flexWrap: "wrap", marginBottom: 16 }}>
                   <div>
                     <p style={{ fontSize: 14, fontWeight: 500, color: "#000", marginBottom: 2 }}>{nombre}</p>
-                    <p style={{ fontSize: 12, fontWeight: 200, color: "rgba(0,0,0,.45)" }}>{t("mpa.progress", { done, total })}</p>
+                    <p style={{ fontSize: 12, fontWeight: 200, color: "#000" }}>{t("mpa.progress", { done, total })}</p>
                   </div>
                   <ProgressBar pct={pct} barWidth={72} height={5} />
                 </div>
@@ -4057,6 +4113,10 @@ function MisProyectosActivosPage({ token, user, onBack }) {
 // Activar evaluaciones de proyecto (responsable de proyecto)
 // ---------------------------------------------------------------------------
 
+// Formato obligatorio del nombre de proyecto: AÑO_EMPRESA_NOMBRE
+// (año de 4 dígitos + al menos dos tokens en MAYÚSCULAS/dígitos, sin espacios ni tildes).
+const FORMATO_PROYECTO = /^\d{4}(_[A-Z0-9]+){2,}$/;
+
 function ActivarEvaluacionesProyectoPage({ token, user, onBack, onActivado }) {
   const [proyecto, setProyecto] = useState("");
   const [todosEmpleados, setTodosEmpleados] = useState([]);
@@ -4085,6 +4145,7 @@ function ActivarEvaluacionesProyectoPage({ token, user, onBack, onActivado }) {
   async function activar(e) {
     e.preventDefault();
     if (!proyecto.trim()) { setStatus(t("aep.err_type_project")); return; }
+    if (!FORMATO_PROYECTO.test(proyecto.trim())) { setStatus(t("aep.err_format")); return; }
     if (seleccionados.length === 0) { setStatus(t("aep.err_select_employee")); return; }
     setLoading(true);
     setStatus("");
@@ -4109,7 +4170,7 @@ function ActivarEvaluacionesProyectoPage({ token, user, onBack, onActivado }) {
   }
 
   const filtrados = todosEmpleados.filter((n) => n.toLowerCase().includes(busqueda.toLowerCase().trim()));
-  const canSubmit = proyecto.trim().length > 0 && seleccionados.length > 0 && !loading;
+  const canSubmit = FORMATO_PROYECTO.test(proyecto.trim()) && seleccionados.length > 0 && !loading;
   const plural = seleccionados.length !== 1;
   // En esta pantalla el status solo se muestra en el formulario cuando es un error
   // o validacion (el exito se muestra en la vista "enviado"). Siempre error aqui.
@@ -4125,7 +4186,7 @@ function ActivarEvaluacionesProyectoPage({ token, user, onBack, onActivado }) {
       <div style={{ flex: 1, width: "100%", paddingTop: "clamp(44px, 6vw, 68px)", paddingBottom: 48 }}>
         <p className="eyebrow">{t("mpa.kicker")}</p>
         <h1>{t("aep.title")}</h1>
-        <p className="fine" style={{ marginTop: 10, color: "rgba(0,0,0,.6)" }}>
+        <p className="fine" style={{ marginTop: 10, color: "#000" }}>
           {t("aep.desc")}
         </p>
         <hr style={{ border: "none", borderTop: "1px solid var(--border)", margin: "24px 0" }} />
@@ -4146,7 +4207,7 @@ function ActivarEvaluacionesProyectoPage({ token, user, onBack, onActivado }) {
         ) : (
           <form onSubmit={activar}>
             <label htmlFor="proj-name">{t("aep.project_name")}</label>
-            <p className="fine" style={{ marginTop: -2, marginBottom: 8, color: "rgba(0,0,0,.45)", fontSize: 11 }}>
+            <p className="fine" style={{ marginTop: -2, marginBottom: 8, color: "#000", fontSize: 11 }}>
               {t("aep.format_hint")}
             </p>
             <input
@@ -4154,9 +4215,14 @@ function ActivarEvaluacionesProyectoPage({ token, user, onBack, onActivado }) {
               type="text"
               value={proyecto}
               onChange={(e) => setProyecto(e.target.value)}
-              placeholder="2026_Empresa_NombreProyecto"
+              placeholder="2026_EMPRESA_NOMBRE"
               required
             />
+            {proyecto.trim() && !FORMATO_PROYECTO.test(proyecto.trim()) && (
+              <p style={{ marginTop: 6, marginBottom: 0, color: "var(--accent)", fontSize: 12 }}>
+                {t("aep.format_bad")}
+              </p>
+            )}
 
             <label style={{ marginTop: 24 }}>{t("aep.team_members")}</label>
             {loadingEmpleados ? (
@@ -4373,11 +4439,11 @@ function EvaluacionesProyectoPage({ token, user, proyectos, onBack, onNavigate, 
             <>
               <div style={{ marginBottom: 36 }}>
                 <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", marginBottom: 8 }}>
-                  <span style={{ fontSize: 13, fontWeight: 200, color: "rgba(0,0,0,.55)" }}>{t("ep.progress")}</span>
+                  <span style={{ fontSize: 13, fontWeight: 200, color: "#000" }}>{t("ep.progress")}</span>
                   <span style={{ fontSize: 13, fontWeight: 400, color: "#000" }}>{t("ep.progress_stat", { done: shownDone, total: totalEvals, pct: shownPct })}</span>
                 </div>
                 <div style={{ height: 6, background: "var(--border)", borderRadius: 3, overflow: "hidden" }}>
-                  <div style={{ height: "100%", width: `${shownPct}%`, background: "#000", borderRadius: 3, transition: "width .1s linear" }} />
+                  <div style={{ height: "100%", width: `${shownPct}%`, background: "var(--accent)", opacity: 0.6, borderRadius: 3, transition: "width .1s linear" }} />
                 </div>
               </div>
 
@@ -4584,7 +4650,7 @@ function FormularioEvaluacionProyecto({ token, user, proyecto, tipo, manager, ev
             </>
           )}
           {!necesitaSelector && evaluadoFijo && (
-            <p className="fine" style={{ marginBottom: "16px" }}>
+            <p className="fine" style={{ marginBottom: "16px", color: "#000" }}>
               {tipo === "autoevaluacion" ? t("fep.evaluating_self", { nombre: evaluadoFijo }) : t("fep.evaluating", { nombre: evaluadoFijo })}
             </p>
           )}
@@ -4608,20 +4674,20 @@ function FormularioEvaluacionProyecto({ token, user, proyecto, tipo, manager, ev
                 <React.Fragment key={p.id}>
                   {cambioCat && (
                     <div style={{ marginTop: "32px", paddingBottom: "10px", borderBottom: "1px solid #DBDBDE" }}>
-                      <span style={{ fontSize: "11px", fontWeight: 400, textTransform: "uppercase", letterSpacing: "0.1em", color: "rgba(0,0,0,0.55)" }}>
+                      <span style={{ fontSize: "13px", fontWeight: 400, textTransform: "uppercase", letterSpacing: "0.1em", color: "rgba(0,0,0,0.55)" }}>
                         {p.categoria}
                       </span>
                     </div>
                   )}
                   <div style={{ marginTop: "18px" }}>
                     {mostrarLabel && (
-                      <label style={{ fontWeight: 400, fontSize: "14px", marginBottom: "12px", display: "block", color: "#000000" }}>
+                      <label style={{ fontWeight: 400, fontSize: "14px", marginBottom: "12px", display: "block", color: "#000000", textTransform: "none", letterSpacing: "normal" }}>
                         {p.texto} <span style={{ color: "#C1121F" }} aria-hidden="true">*</span>
                       </label>
                     )}
                     {p.tipo === "escala_1_5" && (
                       <div style={{ display: "flex", gap: "12px", flexWrap: "wrap", alignItems: "center" }}>
-                        <span className="fine" style={{ fontSize: "12px" }}>{t("fep.scale_low")}</span>
+                        <span className="fine" style={{ fontSize: "12px", color: "#000", fontWeight: 400, opacity: 0.65 }}>{t("fep.scale_low")}</span>
                         <div style={{ display: "flex", border: "1px solid #DBDBDE", borderRadius: "8px", overflow: "hidden", width: "100%", maxWidth: "220px" }}>
                           {[1, 2, 3, 4, 5].map((val, idx) => {
                             const selected = respuestas[p.id] === String(val);
@@ -4633,7 +4699,7 @@ function FormularioEvaluacionProyecto({ token, user, proyecto, tipo, manager, ev
                                   flex: 1, display: "flex", alignItems: "center", justifyContent: "center",
                                   padding: "4px 6px", cursor: "pointer",
                                   background: selected ? "#000000" : "#FFFFFF",
-                                  color: selected ? "#FFFFFF" : "rgba(0,0,0,0.55)",
+                                  color: selected ? "#FFFFFF" : "#000",
                                   borderLeft: idx > 0 ? "1px solid #DBDBDE" : "none",
                                   userSelect: "none", transition: "background 0.15s, color 0.15s",
                                 }}
@@ -4651,7 +4717,7 @@ function FormularioEvaluacionProyecto({ token, user, proyecto, tipo, manager, ev
                             );
                           })}
                         </div>
-                        <span className="fine" style={{ fontSize: "12px" }}>{t("fep.scale_high")}</span>
+                        <span className="fine" style={{ fontSize: "12px", color: "#000", fontWeight: 400, opacity: 0.65 }}>{t("fep.scale_high")}</span>
                       </div>
                     )}
                     {p.tipo === "radio_3" && (
@@ -4670,7 +4736,7 @@ function FormularioEvaluacionProyecto({ token, user, proyecto, tipo, manager, ev
                                 padding: "14px 8px",
                                 cursor: "pointer",
                                 background: selected ? "#000000" : "#FFFFFF",
-                                color: selected ? "#FFFFFF" : "rgba(0,0,0,0.55)",
+                                color: selected ? "#FFFFFF" : "#000",
                                 borderLeft: idx > 0 ? "1px solid #DBDBDE" : "none",
                                 userSelect: "none",
                                 transition: "background 0.15s, color 0.15s",
@@ -4792,7 +4858,7 @@ function SolicitarEvaluacionExtraPage({ token, user, onBack }) {
       <div style={{ flex: 1, width: "100%", paddingTop: "clamp(44px, 6vw, 68px)", paddingBottom: 48 }}>
         <p className="eyebrow">{t("sex.kicker")}</p>
         <h1>{t("sex.title")}</h1>
-        <p className="fine" style={{ marginTop: 10, color: "rgba(0,0,0,.6)" }}>
+        <p className="fine" style={{ marginTop: 10, color: "#000" }}>
           {t("sex.desc")}
         </p>
         <hr style={{ border: "none", borderTop: "1px solid var(--border)", margin: "24px 0" }} />
@@ -4853,7 +4919,7 @@ function SolicitarEvaluacionExtraPage({ token, user, onBack }) {
             )}
 
             <label style={{ marginTop: 24 }}>{t("sex.context_label")}</label>
-            <p className="fine" style={{ marginTop: -2, marginBottom: 8, color: "rgba(0,0,0,.45)", fontSize: 11 }}>
+            <p className="fine" style={{ marginTop: -2, marginBottom: 8, color: "#000", fontSize: 11 }}>
               {t("sex.context_hint")}
             </p>
             <textarea
@@ -5183,7 +5249,7 @@ function EvaluacionAnualWizard({ token, advisee, onBack }) {
   }
 
   function abrirHtml(path) {
-    window.open(apiUrl(`${path}&token=${encodeURIComponent(token)}`), "_blank", "noopener,noreferrer");
+    openAuthedFile(path, token);
   }
 
   // Borra por completo la sesión (conversaciones, áreas confirmadas y borradores)
@@ -5551,6 +5617,8 @@ function App() {
   }, [token, resetToken]);
 
   function handleLogout() {
+    // Invalida el token también en el servidor (no solo en el navegador).
+    if (token) apiRequest("/api/logout", { token, method: "POST" }).catch(() => {});
     localStorage.removeItem("evaluabot_token");
     sessionStorage.removeItem("evaluabot_token");
     clearApiCache();

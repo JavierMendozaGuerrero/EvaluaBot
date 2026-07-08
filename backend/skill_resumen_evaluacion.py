@@ -7,6 +7,7 @@ a Claude â€” solo se mandan los nombres de los apartados y el texto de evaluaciÃ
 
 import logging
 
+from . import config
 from .clients import anthropic_client
 
 
@@ -290,7 +291,7 @@ def generar_resumen_evaluacion(nombre: str, cargo: str, evaluaciones_texto: str,
         respuesta = anthropic_client.messages.create(
             model="claude-sonnet-4-6",
             max_tokens=1200,
-            system=_SYSTEM_PROMPT + _INSTR_IDIOMA.get(idioma, ""),
+            system=_SYSTEM_PROMPT + _INSTR_IDIOMA.get(idioma, "") + config.INSTRUCCION_ANTIINYECCION,
             messages=[{"role": "user", "content": user_prompt}],
         )
         return "".join(b.text for b in respuesta.content if b.type == "text").strip()

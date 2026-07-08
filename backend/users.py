@@ -21,11 +21,20 @@ from .notion_service import (
     _usa_data_sources,
     obtener_registros_empleados,
 )
-from .state import lock, password_reset_tokens, sesiones_web
+from .state import lock, password_reset_tokens, registros_pendientes, sesiones_expira, sesiones_web
 from .utils import normalizar_nombre
 
 
 _cache_users_database_id = None
+
+# Caducidad de sesión: una sesión inactiva/antigua deja de ser válida pasado este
+# tiempo, aunque el token siga circulando. Antes las sesiones vivían para siempre.
+SESSION_TTL = timedelta(hours=12)
+
+# Registro: el alta se confirma con un código de 6 dígitos enviado al email del
+# empleado, para probar que quien se registra es el dueño de ese buzón.
+REGISTRO_CODE_TTL = timedelta(minutes=10)
+REGISTRO_MAX_INTENTOS = 5
 
 
 def _ruta_usuarios():
@@ -260,6 +269,18 @@ def validar_password_segura(password):
         raise ValueError("La contraseña debe incluir al menos un caracter especial.")
 
 
+def _empleado_por_email(email):
+    """Devuelve el registro de empleado cuyo email/alias coincide, o None."""
+    email_clave = normalizar_nombre(email)
+    if "@" not in email_clave:
+        return None
+    for empleado in obtener_registros_empleados():
+        valores = [empleado.get("email", ""), *empleado.get("aliases", [])]
+        if any(normalizar_nombre(valor) == email_clave for valor in valores if valor):
+            return empleado
+    return None
+
+
 def _buscar_usuario_por_email_empleado(usuarios, email):
     email_clave = normalizar_nombre(email)
     if "@" not in email_clave:
@@ -319,6 +340,28 @@ def _enviar_email_reset(destinatario, reset_url):
         smtp.send_message(mensaje)
 
 
+def _enviar_email_codigo(destinatario, codigo):
+    if not config.SMTP_HOST or not config.SMTP_FROM:
+        raise RuntimeError("Falta configurar SMTP_HOST y SMTP_FROM para enviar el código.")
+
+    mensaje = EmailMessage()
+    mensaje["Subject"] = "Tu código de verificación"
+    mensaje["From"] = config.SMTP_FROM
+    mensaje["To"] = destinatario
+    mensaje.set_content(
+        "Hola,\n\n"
+        f"Tu código de verificación para completar el registro es: {codigo}\n\n"
+        "El código caduca en 10 minutos. Si no has intentado registrarte, ignora este correo.\n"
+    )
+
+    with smtplib.SMTP(config.SMTP_HOST, config.SMTP_PORT, timeout=20) as smtp:
+        if config.SMTP_USE_TLS:
+            smtp.starttls()
+        if config.SMTP_USER or config.SMTP_PASSWORD:
+            smtp.login(config.SMTP_USER, config.SMTP_PASSWORD)
+        smtp.send_message(mensaje)
+
+
 def solicitar_reset_password(email):
     email = " ".join((email or "").split()).strip().lower()
     if not email or "@" not in email:
@@ -365,31 +408,93 @@ def cambiar_password_con_token(token, nueva_password, confirm_password=None):
     usuario["password_hash"] = password_hash
     guardar_usuario(usuario)
 
+    # Al cambiar la contraseña cerramos cualquier sesión abierta del usuario.
+    invalidar_sesiones_de_usuario(usuario["username"])
+
     with lock:
         password_reset_tokens.pop(token, None)
 
 
-def registrar_usuario(username, password):
+def solicitar_registro(username, password, email=""):
+    """Paso 1 del alta: valida los datos y envía un código de verificación al email
+    del empleado. La cuenta NO se crea hasta confirmar el código (confirmar_registro).
+    Devuelve el email de destino (para que el frontend muestre a dónde se envió)."""
     username = " ".join((username or "").split()).strip()
+    email = " ".join((email or "").split()).strip().lower()
     if not username or not password:
         raise ValueError("Usuario y contraseña son obligatorios.")
+    if not email or "@" not in email:
+        raise ValueError("Introduce un email válido.")
     validar_password_segura(password)
+
+    # El alta solo se permite a empleados reales: el email debe estar en la
+    # "Lista de empleados" de Notion. Además la identidad (persona) se liga al
+    # empleado verificado, no al username elegido — así nadie puede reclamar la
+    # identidad (y por tanto los datos) de otra persona poniendo su nombre.
+    empleado = _empleado_por_email(email)
+    if not empleado:
+        raise PermissionError("Ese email no está en la lista de empleados. Contacta con RRHH.")
+    persona = (empleado.get("nombre") or username).strip()
 
     usuarios = cargar_usuarios()
     clave = normalizar_nombre(username)
     if clave in usuarios:
         raise ValueError("Ese usuario ya existe.")
+    persona_clave = normalizar_nombre(persona)
+    if any(normalizar_nombre(u.get("persona")) == persona_clave for u in usuarios.values()):
+        raise ValueError("Ya existe una cuenta para este empleado. Usa «He olvidado mi contraseña».")
 
     salt, password_hash = hash_password(password)
+    codigo = f"{secrets.randbelow(1_000_000):06d}"
+    with lock:
+        registros_pendientes[normalizar_nombre(email)] = {
+            "username": username,
+            "persona": persona,
+            "email": email,
+            "salt": salt,
+            "password_hash": password_hash,
+            "codigo": codigo,
+            "expires_at": datetime.now(timezone.utc) + REGISTRO_CODE_TTL,
+            "intentos": 0,
+        }
+    _enviar_email_codigo(email, codigo)
+    return email
+
+
+def confirmar_registro(email, codigo):
+    """Paso 2 del alta: comprueba el código y, si es correcto, crea la cuenta."""
+    email_clave = normalizar_nombre(email)
+    codigo = (codigo or "").strip()
+    with lock:
+        pendiente = registros_pendientes.get(email_clave)
+        if not pendiente or pendiente["expires_at"] < datetime.now(timezone.utc):
+            registros_pendientes.pop(email_clave, None)
+            raise PermissionError("El código ha caducado. Vuelve a registrarte.")
+        pendiente["intentos"] += 1
+        if pendiente["intentos"] > REGISTRO_MAX_INTENTOS:
+            registros_pendientes.pop(email_clave, None)
+            raise PermissionError("Demasiados intentos. Vuelve a registrarte.")
+        if not hmac.compare_digest(codigo, pendiente["codigo"]):
+            raise PermissionError("Código incorrecto.")
+        datos = dict(pendiente)
+
+    usuarios = cargar_usuarios()
+    clave = normalizar_nombre(datos["username"])
+    if clave in usuarios:
+        with lock:
+            registros_pendientes.pop(email_clave, None)
+        raise ValueError("Ese usuario ya existe.")
     usuarios[clave] = {
-        "username": username,
-        "persona": username,
-        "email": "",
+        "username": datos["username"],
+        "persona": datos["persona"],
+        "email": datos["email"],
         "is_admin": False,
-        "salt": salt,
-        "password_hash": password_hash,
+        "salt": datos["salt"],
+        "password_hash": datos["password_hash"],
     }
     guardar_usuarios(usuarios)
+    with lock:
+        registros_pendientes.pop(email_clave, None)
 
 
 def autenticar_usuario(username, password):
@@ -403,20 +508,47 @@ def autenticar_usuario(username, password):
         )
     if not usuario:
         usuario = _buscar_usuario_por_email_empleado(usuarios, username)
-    if not usuario or not verificar_password(password, usuario["salt"], usuario["password_hash"]):
+    if not usuario:
+        # Ejecutamos un hash igualmente para que el tiempo de respuesta no revele
+        # si el usuario existe o no (evita enumeración de usuarios por tiempos).
+        hash_password(password or "", "timing_dummy_salt")
+        raise PermissionError("Usuario o contraseña incorrectos.")
+    if not verificar_password(password, usuario["salt"], usuario["password_hash"]):
         raise PermissionError("Usuario o contraseña incorrectos.")
     return usuario
 
 
 def crear_sesion(usuario):
     token = secrets.token_urlsafe(32)
-    sesiones_web[token] = {
-        "username": usuario["username"],
-        "persona": usuario["persona"],
-        "email": usuario.get("email", ""),
-        "is_admin": bool(usuario.get("is_admin")),
-    }
+    with lock:
+        sesiones_web[token] = {
+            "username": usuario["username"],
+            "persona": usuario["persona"],
+            "email": usuario.get("email", ""),
+            "is_admin": bool(usuario.get("is_admin")),
+        }
+        sesiones_expira[token] = datetime.now(timezone.utc) + SESSION_TTL
     return token
+
+
+def cerrar_sesion(token):
+    """Invalida un token de sesión (logout del lado servidor)."""
+    with lock:
+        sesiones_web.pop(token, None)
+        sesiones_expira.pop(token, None)
+
+
+def invalidar_sesiones_de_usuario(username):
+    """Cierra todas las sesiones abiertas de un usuario (p. ej. al cambiar su contraseña)."""
+    clave = normalizar_nombre(username)
+    with lock:
+        tokens = [
+            t for t, s in sesiones_web.items()
+            if normalizar_nombre(s.get("username")) == clave
+        ]
+        for t in tokens:
+            sesiones_web.pop(t, None)
+            sesiones_expira.pop(t, None)
 
 
 def obtener_cookie(headers, nombre):
@@ -435,7 +567,16 @@ def obtener_sesion(headers):
 
 
 def obtener_sesion_por_token(token):
-    return sesiones_web.get(token)
+    if not token:
+        return None
+    with lock:
+        expira = sesiones_expira.get(token)
+        if expira is not None and expira < datetime.now(timezone.utc):
+            # Sesión caducada: la eliminamos y la tratamos como inexistente.
+            sesiones_web.pop(token, None)
+            sesiones_expira.pop(token, None)
+            return None
+        return sesiones_web.get(token)
 
 
 def validar_acceso_sesion(sesion, evaluado, extra_permitidos=None):

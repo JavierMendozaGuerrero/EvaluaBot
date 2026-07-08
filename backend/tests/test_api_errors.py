@@ -50,10 +50,13 @@ def test_value_error_da_400_no_500(test_client):
     assert r.json() == {"error": "Valor no permitido."}
 
 
-def test_excepcion_generica_da_500_con_forma_error(test_client):
+def test_excepcion_generica_da_500_con_mensaje_generico(test_client):
+    """El detalle del error NO debe filtrarse al cliente (info disclosure): el
+    mensaje interno queda solo en el log y el cliente ve un texto genérico."""
     r = test_client.get("/boom/runtime")
     assert r.status_code == 500
-    assert r.json() == {"error": "Algo raro pasó."}
+    assert r.json() == {"error": "Error interno del servidor."}
+    assert "Algo raro" not in r.text
 
 
 def test_404_no_encontrado_tiene_forma_original(test_client):

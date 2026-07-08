@@ -89,6 +89,7 @@ _TOPICOS_PERSONAL = [
     ("objetivos",    "bp.topic_objetivos",    "Objetivos"),
     ("dificultades", "bp.topic_dificultades", "Dificultades"),
     ("trayectoria",  "bp.topic_trayectoria",  "Trayectoria"),
+    ("otro",         "bp.topic_otro",         "Otro"),
 ]
 _TOPICO_LABEL = {clave: label for clave, _i18n, label in _TOPICOS_PERSONAL}
 
@@ -541,7 +542,7 @@ def _handle_personal_modificar(ack, body, logger):
         logger.exception("Error procesando modificación personal interactiva")
 
 
-@slack_app.action(re.compile(r"^personal_tipo_(cttf|objetivos|dificultades|trayectoria)$"))
+@slack_app.action(re.compile(r"^personal_tipo_(cttf|objetivos|dificultades|trayectoria|otro)$"))
 def _handle_personal_tipo(ack, body, logger):
     ack()
     try:

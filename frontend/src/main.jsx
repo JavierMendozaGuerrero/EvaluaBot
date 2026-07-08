@@ -2373,6 +2373,55 @@ function HistorialEvaluacionesPage({ token, evaluado, evaluador, proyecto, onBac
   );
 }
 
+function DetalleEvaluacionRealizadaPage({ ev, proyecto, onBack }) {
+  // `ev.respuestas` viene del backend como "pregunta: respuesta" por línea
+  // (ver _formatear_respuestas). Partimos por el primer ": " para no romper
+  // respuestas que contengan ":".
+  const lineas = (ev?.respuestas || "")
+    .split("\n")
+    .map((l) => l.trim())
+    .filter(Boolean)
+    .map((l) => {
+      const idx = l.indexOf(": ");
+      return idx === -1
+        ? { pregunta: l, respuesta: "" }
+        : { pregunta: l.slice(0, idx), respuesta: l.slice(idx + 2) };
+    });
+
+  function formatFecha(iso) {
+    if (!iso) return "";
+    try {
+      return new Date(iso).toLocaleDateString(getLang() === "en" ? "en-GB" : "es-ES", { day: "2-digit", month: "short", year: "numeric" });
+    } catch { return iso.slice(0, 10); }
+  }
+
+  return (
+    <main className="page">
+      <nav className="nav">
+        <a className="brand" href="/"><img src="/src/logo.png" alt="igeneris" className="brand-logo" /></a>
+        <NavBack onBack={onBack} />
+      </nav>
+      <div className="historial-page">
+        <p className="kicker">{proyecto || ev?.proyecto || ""}</p>
+        <h1 className="historial-title">{ev?.tipo}{ev?.evaluado ? ` · ${ev.evaluado}` : ""}</h1>
+        {ev?.fecha && <p className="fine historial-subtitle">{formatFecha(ev.fecha)}</p>}
+        {lineas.length === 0 && <p className="historial-empty">{t("dash.finished_project_empty")}</p>}
+        {lineas.length > 0 && (
+          <div style={{ display: "flex", flexDirection: "column", gap: 16, marginTop: 20, maxWidth: 720 }}>
+            {lineas.map((l, i) => (
+              <div key={i} style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+                <span style={{ fontSize: 14, fontWeight: 500, color: "#000" }}>{l.pregunta}</span>
+                <span style={{ fontSize: 14, color: "rgba(0,0,0,.7)", whiteSpace: "pre-wrap" }}>{l.respuesta || "—"}</span>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+      <Footer />
+    </main>
+  );
+}
+
 function EvaluacionesSlackSection({ token, user, advisees, onNavigate, onCompletada }) {
   // sessionStorage persiste dentro de la misma sesión del navegador (sobrevive navegar atrás/adelante).
   // Clave incluye los últimos 8 chars del token para que sea específica del usuario.
@@ -2527,7 +2576,7 @@ function DashCollapsible({ title, open, onToggle, children, badge = null, bodyMa
   );
 }
 
-const DASH_DIVIDER = { border: "none", borderTop: "1px solid var(--border)", margin: "16px 0" };
+const DASH_DIVIDER = { border: "none", borderTop: "1px solid var(--border)", margin: "10px 0" };
 const PAISES_PERMITIDOS = ["España", "México", "Portugal"];
 
 function Dashboard({ token, user, onLogout, onNavigate, onBackToRoleSelect = null }) {
@@ -2562,6 +2611,10 @@ function Dashboard({ token, user, onLogout, onNavigate, onBackToRoleSelect = nul
   const [tareasOpen, setTareasOpen] = useState(false);
   const [projOpen, setProjOpen] = useState(false);
   const [extraEvalOpen, setExtraEvalOpen] = useState(false);
+  const [terminadosOpen, setTerminadosOpen] = useState(false);
+  const [proyectosTerminados, setProyectosTerminados] = useState(null); // null = aún no cargado
+  const [terminadosCargando, setTerminadosCargando] = useState(false);
+  const [proyTerminadoAbierto, setProyTerminadoAbierto] = useState(null); // nombre del proyecto expandido
   const [seccionActiva, setSeccionActiva] = useState(null);
   const [proyectosActivos, setProyectosActivos] = useState([]);
   const [proyectosManager, setProyectosManager] = useState(null);
@@ -2676,6 +2729,18 @@ function Dashboard({ token, user, onLogout, onNavigate, onBackToRoleSelect = nul
     apiRequest("/api/evaluaciones-extra-pendientes", { token })
       .then((d) => setEvaluacionesExtraPendientes(d.pendientes || []))
       .catch(() => setEvaluacionesExtraPendientes([]));
+  }, [token]);
+
+  // Proyectos terminados: se cargan al abrir el desplegable (recorre todas las
+  // subpáginas de proyecto en Notion, así que solo pegamos cuando el usuario lo pide).
+  // Se recarga en CADA apertura para reflejar evals recién hechas; mientras llega la
+  // respuesta se mantiene la lista anterior visible.
+  const cargarProyectosTerminados = React.useCallback(() => {
+    setTerminadosCargando(true);
+    apiRequest("/api/mis-evaluaciones-proyecto-realizadas", { token })
+      .then((d) => setProyectosTerminados(d.proyectos || []))
+      .catch(() => setProyectosTerminados((prev) => prev || []))
+      .finally(() => setTerminadosCargando(false));
   }, [token]);
 
   useEffect(() => {
@@ -2842,11 +2907,139 @@ function Dashboard({ token, user, onLogout, onNavigate, onBackToRoleSelect = nul
       </nav>
 
       <div className="profile-wrap" style={{ flex: 1 }}>
-        <div className="profile-grid">
+        <div className="dash-layout">
 
-          {/* LEFT — To-do */}
-          <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
-            <p className="eyebrow" style={{ color: "var(--fg)", textAlign: "center", fontWeight: 500, display: "flex", alignItems: "center", justifyContent: "center", gap: 6 }}>
+          {/* LEFT — Mi perfil */}
+          <aside className="dash-profile">
+            <p className="eyebrow" style={{ color: "var(--fg)", textAlign: "center", fontWeight: 500, margin: 0 }}>{t("dash.my_profile")}</p>
+          <div className="profile-photo-wrap">
+            {perfil.foto
+              ? <img src={perfil.foto} alt={persona} className="profile-photo" />
+              : <div className="profile-photo-placeholder">{initials(persona)}</div>
+            }
+            <div className="profile-id">
+              <h1 className="profile-name">{persona}</h1>
+              {perfil.cargo && <p className="profile-cargo">{perfil.cargo}</p>}
+            </div>
+          </div>
+            <hr style={{ ...DASH_DIVIDER, margin: 0 }} />
+            <div>
+              <div style={{ display: "flex", alignItems: "baseline", gap: 10 }}>
+                <p className="eyebrow" style={{ margin: 0, flexShrink: 0, fontSize: "0.7rem" }}>{t("dash.my_country")}</p>
+                {!editandoPais && (
+                  <p style={{ fontSize: 13, color: perfil.pais ? "#000" : "rgba(0,0,0,.45)", margin: 0 }}>
+                    {perfil.pais || t("dash.country_none")}
+                  </p>
+                )}
+                {!editandoPais && (
+                  <button
+                    type="button"
+                    onClick={abrirEdicionPais}
+                    className="dash-cambiar"
+                    style={{ border: "none", background: "none", cursor: "pointer", padding: 0, minHeight: "auto", fontSize: 12, fontWeight: 400, marginLeft: "auto", flexShrink: 0 }}
+                  >{t("dash.country_change")}</button>
+                )}
+              </div>
+              {!editandoPais ? null : (
+                <div style={{ display: "flex", flexDirection: "column", gap: 8, marginTop: 4 }}>
+                  <select
+                    value={paisSel}
+                    onChange={(e) => setPaisSel(e.target.value)}
+                    style={{ fontSize: 14 }}
+                  >
+                    <option value="">{t("dash.country_placeholder")}</option>
+                    {PAISES_PERMITIDOS.map((p) => (
+                      <option key={p} value={p}>{p}</option>
+                    ))}
+                  </select>
+                  <div style={{ display: "flex", gap: 8 }}>
+                    <button
+                      type="button"
+                      onClick={guardarPais}
+                      disabled={paisGuardando || !paisSel}
+                      style={{ fontSize: 13, padding: "5px 12px", minHeight: "auto" }}
+                    >{paisGuardando ? t("common.loading") : t("common.save")}</button>
+                    <button
+                      type="button"
+                      className="secondary"
+                      onClick={() => { setEditandoPais(false); setPaisMsg(""); }}
+                      disabled={paisGuardando}
+                      style={{ fontSize: 13, padding: "5px 12px", minHeight: "auto" }}
+                    >{t("common.cancel")}</button>
+                  </div>
+                </div>
+              )}
+              {paisMsg && <p className="fine" style={{ marginTop: 4 }}>{paisMsg}</p>}
+            </div>
+            <hr style={{ ...DASH_DIVIDER, margin: 0 }} />
+            <DashCollapsible title={t("dash.my_goals")} open={objOpen} onToggle={() => setObjOpen((v) => !v)}>
+              {misObjetivos.length ? (
+                <div style={{ display: "flex", flexDirection: "column", gap: 8, paddingLeft: 16 }}>
+                  {misObjetivos.map((obj, i) => (
+                    <div key={i} style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+                      <p style={{ fontSize: 13, color: "#000", display: "flex", alignItems: "center", gap: 10 }}>
+                        <span style={{ display: "inline-block", width: 4, height: 4, borderRadius: "50%", background: "var(--accent)", flexShrink: 0 }} />
+                        {obj.titulo}
+                      </p>
+                      {obj.kpis && (
+                        <p style={{ fontSize: 13, fontWeight: 200, color: "rgba(0,0,0,.55)", display: "flex", alignItems: "flex-start", gap: 10, paddingLeft: 24 }}>
+                          <span style={{ display: "inline-block", width: 4, height: 4, borderRadius: "50%", background: "var(--accent)", flexShrink: 0, marginTop: 6 }} />
+                          <span><em>KPIs:</em> {obj.kpis}</span>
+                        </p>
+                      )}
+                      {obj.descripcion && (
+                        <p style={{ fontSize: 13, fontWeight: 200, color: "rgba(0,0,0,.55)", display: "flex", alignItems: "flex-start", gap: 10, paddingLeft: 24 }}>
+                          <span style={{ display: "inline-block", width: 4, height: 4, borderRadius: "50%", background: "var(--accent)", flexShrink: 0, marginTop: 6 }} />
+                          <span>{obj.descripcion}</span>
+                        </p>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <p className="fine">{t("dash.no_goals")}</p>
+              )}
+            </DashCollapsible>
+            <hr style={{ ...DASH_DIVIDER, margin: 0 }} />
+            <div className="dash-tareas">
+              <DashCollapsible title={t("dash.pending_tasks")} open={tareasOpen} onToggle={() => setTareasOpen((v) => !v)}
+                bodyMarginTop={2}
+                badge={(() => { const n = tareasSlack.pendientes.length + tareasProyecto.length + evaluacionesExtraPendientes.length; return n > 0 ? n : null; })()}>
+              {(tareasSlack.pendientes.length + tareasProyecto.length + evaluacionesExtraPendientes.length) === 0 ? (
+                <p className="fine">{t("dash.no_pending_tasks")}</p>
+              ) : (
+                <div className="tareas-list">
+                  {tareasSlack.pendientes.map((tp) => (
+                    <div key={`slack-${tp}`} className="tarea-row"
+                      onClick={() => { if (tareasSlack.url) window.location.href = tareasSlack.url; }}>
+                      <span className="tarea-label">{t(`dash.slack_${tp}`)}</span>
+                      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ width: 13, height: 13, flexShrink: 0 }}><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6" /><polyline points="15 3 21 3 21 9" /><line x1="10" y1="14" x2="21" y2="3" /></svg>
+                    </div>
+                  ))}
+                  {tareasProyecto.map((it) => (
+                    <div key={`proj-${it.proyecto}-${it.tipo}-${it.evaluado}`} className="tarea-row"
+                      onClick={() => onNavigate({ type: "evaluaciones-proyecto", proyectos: proyectosActivos, initialProyecto: it.proyecto })}>
+                      <span className="tarea-label">{it.label} · {it.proyecto}</span>
+                      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ width: 13, height: 13, flexShrink: 0 }}><polyline points="9 18 15 12 9 6" /></svg>
+                    </div>
+                  ))}
+                  {evaluacionesExtraPendientes.map((ev) => (
+                    <div key={`extra-${ev.page_id}`} className="tarea-row"
+                      onClick={() => onNavigate({ type: "formulario-evaluacion-extra", solicitudPageId: ev.page_id, evaluado: ev.evaluado, contexto: ev.contexto })}>
+                      <span className="tarea-label">{t("eep.requested_by", { nombre: ev.evaluado })}</span>
+                      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ width: 13, height: 13, flexShrink: 0 }}><polyline points="9 18 15 12 9 6" /></svg>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </DashCollapsible>
+            </div>
+          </aside>
+
+          {/* RIGHT — To-do + To-see */}
+          <div className="dash-main">
+            <section className="dash-section">
+            <p className="eyebrow" style={{ color: "var(--fg)", textAlign: "left", fontWeight: 500, display: "flex", alignItems: "center", justifyContent: "flex-start", gap: 6 }}>
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ width: 14, height: 14, flexShrink: 0 }}>
                 <path d="M9 11l3 3L20 4" />
                 <path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11" />
@@ -2998,23 +3191,9 @@ function Dashboard({ token, user, onLogout, onNavigate, onBackToRoleSelect = nul
                 <DashNavItem label={t("dash.nav_admin_panel")} onClick={() => setSeccionActiva((v) => v === "admin" ? null : "admin")} />
               )}
             </nav>
-          </div>
-
-          {/* CENTER — profile photo + nombre */}
-          <div className="profile-photo-wrap">
-            {perfil.foto
-              ? <img src={perfil.foto} alt={persona} className="profile-photo" />
-              : <div className="profile-photo-placeholder">{initials(persona)}</div>
-            }
-            <div className="profile-id">
-              <h1 className="profile-name">{persona}</h1>
-              {perfil.cargo && <p className="profile-cargo">{perfil.cargo}</p>}
-            </div>
-          </div>
-
-          {/* RIGHT — To-see */}
-          <aside className="profile-info">
-            <p className="eyebrow" style={{ color: "var(--fg)", textAlign: "center", fontWeight: 500, display: "flex", alignItems: "center", justifyContent: "center", gap: 6 }}>
+            </section>
+            <section className="dash-section">
+            <p className="eyebrow" style={{ color: "var(--fg)", textAlign: "left", fontWeight: 500, display: "flex", alignItems: "center", justifyContent: "flex-start", gap: 6 }}>
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ width: 14, height: 14, flexShrink: 0 }}>
                 <path d="M1 12s4-7 11-7 11 7 11 7-4 7-11 7-11-7-11-7z" />
                 <circle cx="12" cy="12" r="3" />
@@ -3022,92 +3201,8 @@ function Dashboard({ token, user, onLogout, onNavigate, onBackToRoleSelect = nul
               To-see
             </p>
             <hr style={{ ...DASH_DIVIDER, margin: 0 }} />
-
-            
-
             <div>
-              <div style={{ display: "flex", alignItems: "baseline", gap: 10 }}>
-                <p className="eyebrow" style={{ margin: 0, flexShrink: 0, fontSize: "0.7rem" }}>{t("dash.my_country")}</p>
-                {!editandoPais && (
-                  <p style={{ fontSize: 13, color: perfil.pais ? "#000" : "rgba(0,0,0,.45)", margin: 0 }}>
-                    {perfil.pais || t("dash.country_none")}
-                  </p>
-                )}
-                {!editandoPais && (
-                  <button
-                    type="button"
-                    onClick={abrirEdicionPais}
-                    className="dash-cambiar"
-                    style={{ border: "none", background: "none", cursor: "pointer", padding: 0, minHeight: "auto", fontSize: 12, fontWeight: 400, marginLeft: "auto", flexShrink: 0 }}
-                  >{t("dash.country_change")}</button>
-                )}
-              </div>
-              {!editandoPais ? null : (
-                <div style={{ display: "flex", flexDirection: "column", gap: 8, marginTop: 4 }}>
-                  <select
-                    value={paisSel}
-                    onChange={(e) => setPaisSel(e.target.value)}
-                    style={{ fontSize: 14 }}
-                  >
-                    <option value="">{t("dash.country_placeholder")}</option>
-                    {PAISES_PERMITIDOS.map((p) => (
-                      <option key={p} value={p}>{p}</option>
-                    ))}
-                  </select>
-                  <div style={{ display: "flex", gap: 8 }}>
-                    <button
-                      type="button"
-                      onClick={guardarPais}
-                      disabled={paisGuardando || !paisSel}
-                      style={{ fontSize: 13, padding: "5px 12px", minHeight: "auto" }}
-                    >{paisGuardando ? t("common.loading") : t("common.save")}</button>
-                    <button
-                      type="button"
-                      className="secondary"
-                      onClick={() => { setEditandoPais(false); setPaisMsg(""); }}
-                      disabled={paisGuardando}
-                      style={{ fontSize: 13, padding: "5px 12px", minHeight: "auto" }}
-                    >{t("common.cancel")}</button>
-                  </div>
-                </div>
-              )}
-              {paisMsg && <p className="fine" style={{ marginTop: 4 }}>{paisMsg}</p>}
-            </div>
-
-            
-
-            <DashCollapsible title={t("dash.my_goals")} open={objOpen} onToggle={() => setObjOpen((v) => !v)}>
-              {misObjetivos.length ? (
-                <div style={{ display: "flex", flexDirection: "column", gap: 8, paddingLeft: 16 }}>
-                  {misObjetivos.map((obj, i) => (
-                    <div key={i} style={{ display: "flex", flexDirection: "column", gap: 4 }}>
-                      <p style={{ fontSize: 13, color: "#000", display: "flex", alignItems: "center", gap: 10 }}>
-                        <span style={{ display: "inline-block", width: 4, height: 4, borderRadius: "50%", background: "var(--accent)", flexShrink: 0 }} />
-                        {obj.titulo}
-                      </p>
-                      {obj.kpis && (
-                        <p style={{ fontSize: 13, fontWeight: 200, color: "rgba(0,0,0,.55)", display: "flex", alignItems: "flex-start", gap: 10, paddingLeft: 24 }}>
-                          <span style={{ display: "inline-block", width: 4, height: 4, borderRadius: "50%", background: "var(--accent)", flexShrink: 0, marginTop: 6 }} />
-                          <span><em>KPIs:</em> {obj.kpis}</span>
-                        </p>
-                      )}
-                      {obj.descripcion && (
-                        <p style={{ fontSize: 13, fontWeight: 200, color: "rgba(0,0,0,.55)", display: "flex", alignItems: "flex-start", gap: 10, paddingLeft: 24 }}>
-                          <span style={{ display: "inline-block", width: 4, height: 4, borderRadius: "50%", background: "var(--accent)", flexShrink: 0, marginTop: 6 }} />
-                          <span>{obj.descripcion}</span>
-                        </p>
-                      )}
-                    </div>
-                  ))}
-                </div>
-              ) : (
-                <p className="fine">{t("dash.no_goals")}</p>
-              )}
-            </DashCollapsible>
-
-            
-
-            <DashCollapsible title={t("dash.my_reports")} open={informesOpen} onToggle={() => setInformesOpen((v) => !v)}>
+              <p className="eyebrow" style={{ margin: "0 0 6px", fontSize: "0.7rem" }}>{t("dash.my_reports")}</p>
               {informeFinalEmpleado === null ? (
                 <p className="fine">{t("common.loading")}</p>
               ) : informeFinalEmpleado?.disponible ? (
@@ -3126,46 +3221,72 @@ function Dashboard({ token, user, onLogout, onNavigate, onBackToRoleSelect = nul
                   )}
                 </div>
               ) : (
-                <p className="fine">{t("dash.no_access")}</p>
+                <p style={{ fontStyle: "italic", color: "var(--accent)", fontSize: 13, margin: 0 }}>{t("dash.no_reports")}</p>
               )}
-            </DashCollapsible>
-
-            <hr style={{ ...DASH_DIVIDER, margin: 0 }} />
-
-            <div className="dash-tareas">
-              <DashCollapsible title={t("dash.pending_tasks")} open={tareasOpen} onToggle={() => setTareasOpen((v) => !v)}
-                bodyMarginTop={2}
-                badge={(() => { const n = tareasSlack.pendientes.length + tareasProyecto.length + evaluacionesExtraPendientes.length; return n > 0 ? n : null; })()}>
-              {(tareasSlack.pendientes.length + tareasProyecto.length + evaluacionesExtraPendientes.length) === 0 ? (
-                <p className="fine">{t("dash.no_pending_tasks")}</p>
-              ) : (
-                <div className="tareas-list">
-                  {tareasSlack.pendientes.map((tp) => (
-                    <div key={`slack-${tp}`} className="tarea-row"
-                      onClick={() => { if (tareasSlack.url) window.location.href = tareasSlack.url; }}>
-                      <span className="tarea-label">{t(`dash.slack_${tp}`)}</span>
-                      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ width: 13, height: 13, flexShrink: 0 }}><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6" /><polyline points="15 3 21 3 21 9" /><line x1="10" y1="14" x2="21" y2="3" /></svg>
-                    </div>
-                  ))}
-                  {tareasProyecto.map((it) => (
-                    <div key={`proj-${it.proyecto}-${it.tipo}-${it.evaluado}`} className="tarea-row"
-                      onClick={() => onNavigate({ type: "evaluaciones-proyecto", proyectos: proyectosActivos, initialProyecto: it.proyecto })}>
-                      <span className="tarea-label">{it.label} · {it.proyecto}</span>
-                      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ width: 13, height: 13, flexShrink: 0 }}><polyline points="9 18 15 12 9 6" /></svg>
-                    </div>
-                  ))}
-                  {evaluacionesExtraPendientes.map((ev) => (
-                    <div key={`extra-${ev.page_id}`} className="tarea-row"
-                      onClick={() => onNavigate({ type: "formulario-evaluacion-extra", solicitudPageId: ev.page_id, evaluado: ev.evaluado, contexto: ev.contexto })}>
-                      <span className="tarea-label">{t("eep.requested_by", { nombre: ev.evaluado })}</span>
-                      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ width: 13, height: 13, flexShrink: 0 }}><polyline points="9 18 15 12 9 6" /></svg>
-                    </div>
-                  ))}
-                </div>
-              )}
-            </DashCollapsible>
             </div>
-          </aside>
+            {/* ── PROYECTOS TERMINADOS ── */}
+            {!isAdmin && (
+              <>
+                <DashCollapsible
+                  title={<>{t("dash.todo_finished_projects")}{!terminadosOpen && <span style={{ textTransform: "none", letterSpacing: 0, fontStyle: "italic", fontWeight: 200, marginLeft: 8, fontSize: 11, color: "var(--text-55)" }}>{t("dash.finished_hint")}</span>}</>}
+                  open={terminadosOpen}
+                  onToggle={() => { const next = !terminadosOpen; setTerminadosOpen(next); if (next) cargarProyectosTerminados(); }}
+                  bodyMarginTop={2}
+                >
+                  <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+                    {terminadosCargando && !proyectosTerminados && (
+                      <p className="fine">{t("dash.finished_loading")}</p>
+                    )}
+                    {!terminadosCargando && proyectosTerminados?.length === 0 && (
+                      <p className="fine">{t("dash.finished_empty")}</p>
+                    )}
+                    {proyectosTerminados?.map((proy) => {
+                      const abierto = proyTerminadoAbierto === proy.nombre_proyecto;
+                      return (
+                        <div key={proy.nombre_proyecto}>
+                          <div
+                            role="button"
+                            tabIndex={0}
+                            onClick={() => setProyTerminadoAbierto((v) => v === proy.nombre_proyecto ? null : proy.nombre_proyecto)}
+                            style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8, fontSize: 13, color: "#000", cursor: "pointer", padding: "5px 0", userSelect: "none" }}
+                          >
+                            <span style={{ display: "inline-flex", alignItems: "center", minWidth: 0 }}>
+                              <span style={{ display: "inline-block", width: 4, height: 4, borderRadius: "50%", background: "var(--accent)", marginRight: 10, flexShrink: 0 }} />
+                              {proy.nombre_proyecto}
+                            </span>
+                            <svg viewBox="0 0 24 24" fill="none" stroke="rgba(0,0,0,.3)" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"
+                              style={{ width: 10, height: 10, flexShrink: 0, transform: abierto ? "rotate(180deg)" : "rotate(0deg)", transition: "transform .25s" }}>
+                              <polyline points="18 15 12 9 6 15" />
+                            </svg>
+                          </div>
+                          {abierto && (
+                            <div style={{ display: "flex", flexDirection: "column", gap: 6, padding: "2px 0 6px 14px" }}>
+                              {proy.evaluaciones?.length === 0 && (
+                                <span style={{ fontSize: 12, color: "rgba(0,0,0,.5)" }}>{t("dash.finished_project_empty")}</span>
+                              )}
+                              {proy.evaluaciones?.map((ev, i) => (
+                                <div
+                                  key={ev.url || i}
+                                  role="button"
+                                  tabIndex={0}
+                                  onClick={() => onNavigate({ type: "detalle-evaluacion-realizada", ev, proyecto: proy.nombre_proyecto })}
+                                  style={{ display: "flex", flexDirection: "column", gap: 1, fontSize: 12.5, color: "#000", cursor: "pointer" }}
+                                >
+                                  <span style={{ fontWeight: 400 }}>{ev.tipo}{ev.evaluado ? ` · ${ev.evaluado}` : ""}</span>
+                                  {ev.fecha && <span style={{ fontSize: 11, color: "rgba(0,0,0,.5)" }}>{ev.fecha}</span>}
+                                </div>
+                              ))}
+                            </div>
+                          )}
+                        </div>
+                      );
+                    })}
+                  </div>
+                </DashCollapsible>
+              </>
+            )}
+            </section>
+          </div>
 
         </div>
       </div>
@@ -4365,6 +4486,7 @@ function EvaluacionesProyectoPage({ token, user, proyectos, onBack, onNavigate, 
   const [equipo, setEquipo] = useState([]);
   const [loadingEquipo, setLoadingEquipo] = useState(false);
   const [completadasNotion, setCompletadasNotion] = useState([]);
+  const [progresoProyectos, setProgresoProyectos] = useState({});
   const managerDelProyecto = proyectos.find((p) => p.nombre_proyecto === proyectoSeleccionado)?.activado_por || "";
   const persona = user?.persona || user?.username || "";
 
@@ -4383,6 +4505,28 @@ function EvaluacionesProyectoPage({ token, user, proyectos, onBack, onNavigate, 
       .catch(() => {})
       .finally(() => setLoadingEquipo(false));
   }, [token, proyectoSeleccionado]);
+
+  // Progreso (done/total) de TODOS los proyectos activos, para no listar en el selector
+  // los que ya tienes 100% completados (misma lógica que el dashboard).
+  useEffect(() => {
+    let cancelado = false;
+    apiRequest("/api/proyectos-progreso", { token })
+      .then((data) => {
+        if (cancelado) return;
+        const norm = (s) => (s || "").normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase().trim();
+        const prog = {};
+        (data.proyectos || []).forEach((p) => {
+          const equipo = p.equipo || [];
+          const hechas = (p.completadas || []).map((c) => `${c.tipo}:${norm(c.evaluado)}`);
+          const lista = construirEvaluacionesProyectoAHacer(persona, p.activado_por || "", equipo);
+          const done = lista.filter((it) => hechas.includes(`${it.tipo}:${norm(it.evaluado)}`)).length;
+          prog[p.nombre_proyecto] = { done, total: lista.length };
+        });
+        setProgresoProyectos(prog);
+      })
+      .catch(() => {});
+    return () => { cancelado = true; };
+  }, [token, persona]);
 
   const evaluacionesAHacer = useMemo(
     () => construirEvaluacionesProyectoAHacer(persona, managerDelProyecto, equipo),
@@ -4404,6 +4548,20 @@ function EvaluacionesProyectoPage({ token, user, proyectos, onBack, onNavigate, 
   const grupoAuto = items.filter((i) => i.tipo === "autoevaluacion");
   const grupoManager = items.filter((i) => i.tipo === "miembros_a_manager");
   const grupoMiembros = items.filter((i) => i.tipo === "mismos_miembros" || i.tipo === "manager_a_miembros");
+
+  // Proyectos que se muestran en el selector: se ocultan los que ya tienes 100%
+  // completados (0 pendientes). Mientras el progreso aún carga (prog undefined) se muestran.
+  const proyectosVisibles = proyectos.filter((p) => {
+    const prog = progresoProyectos[p.nombre_proyecto];
+    return !prog || (prog.total - prog.done) > 0;
+  });
+  // Si el proyecto seleccionado acaba de completarse (ya no se lista) y hay otros
+  // pendientes, salta al primero pendiente para no quedar en uno oculto.
+  useEffect(() => {
+    if (proyectosVisibles.length > 0 && !proyectosVisibles.some((p) => p.nombre_proyecto === proyectoSeleccionado)) {
+      setProyectoSeleccionado(proyectosVisibles[0].nombre_proyecto);
+    }
+  }, [progresoProyectos, proyectoSeleccionado]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const abrirFormulario = (it) =>
     onNavigate({ type: "formulario-evaluacion-proyecto", proyecto: proyectoSeleccionado, tipo: it.tipo, evaluado: it.evaluado, manager: managerDelProyecto, proyectos });
@@ -4455,11 +4613,11 @@ function EvaluacionesProyectoPage({ token, user, proyectos, onBack, onNavigate, 
         <p className="eyebrow">{t("ep.kicker")}</p>
         <h1 style={{ marginBottom: 24 }}>{proyectoSeleccionado || t("dash.nav_proj_evals")}</h1>
 
-        {proyectos.length > 1 && (
+        {proyectosVisibles.length > 1 && (
           <div style={{ marginBottom: 28, maxWidth: 360 }}>
             <label htmlFor="proj-sel">{t("ep.project_label")}</label>
             <select id="proj-sel" value={proyectoSeleccionado} onChange={(e) => setProyectoSeleccionado(e.target.value)}>
-              {proyectos.map((p) => (
+              {proyectosVisibles.map((p) => (
                 <option key={p.nombre_proyecto} value={p.nombre_proyecto}>{p.nombre_proyecto}</option>
               ))}
             </select>
@@ -5759,6 +5917,14 @@ function App() {
         evaluador={page.evaluador}
         proyecto={page.proyecto}
         onBack={backFromHistorial}
+      />
+    );
+  } else if (page?.type === "detalle-evaluacion-realizada") {
+    content = (
+      <DetalleEvaluacionRealizadaPage
+        ev={page.ev}
+        proyecto={page.proyecto}
+        onBack={() => navigate(null)}
       />
     );
   } else if (page?.type === "formulario-evaluacion-proyecto") {

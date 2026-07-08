@@ -970,6 +970,76 @@ def obtener_evaluaciones_proyecto_por_evaluado(evaluado: str) -> list[dict]:
     return resultado
 
 
+def obtener_evaluaciones_proyecto_por_evaluador(evaluador: str, desde_fecha: str | None = None) -> list[dict]:
+    """Evaluaciones de proyecto REALIZADAS por `evaluador`, agrupadas por proyecto.
+
+    Recorre cada subpágina de proyecto bajo 'Resultados Evaluaciones al final de proyecto'
+    y su BD 'Evaluaciones' interna, quedándose con las filas donde Evaluador = `evaluador`.
+    Si `desde_fecha` (YYYY-MM-DD) se indica, descarta las anteriores a esa fecha.
+    Devuelve [{nombre_proyecto, evaluaciones: [{tipo, evaluado, respuestas, fecha, url}]}],
+    con las evals de cada proyecto y los proyectos ordenados por la más reciente (desc).
+    """
+    contenedor = _obtener_o_crear_pagina_resultados_final()
+    if not contenedor:
+        return []
+    objetivo = normalizar_nombre(evaluador)
+    por_proyecto: dict[str, dict] = {}
+    for proy in _listar_child_pages_proyecto(contenedor):
+        proyecto_nombre = proy["title"]
+        db_id = _buscar_bbdd_en_pagina_id(proy["id"], _NOMBRE_BBDD_EVALS_PROYECTO)
+        if not db_id:
+            continue
+        try:
+            cursor = None
+            while True:
+                kwargs: dict = {"page_size": 100}
+                if cursor:
+                    kwargs["start_cursor"] = cursor
+                resp = _query_bbdd(db_id, **kwargs)
+                for fila in resp.get("results", []):
+                    props = fila.get("properties", {})
+                    ev_evaluador = "".join(
+                        p.get("plain_text", "") for p in (props.get("Evaluador") or {}).get("rich_text", [])
+                    ).strip()
+                    if normalizar_nombre(ev_evaluador) != objetivo:
+                        continue
+                    fecha = (((props.get("Fecha") or {}).get("date") or {}).get("start", "") or "")[:10]
+                    if desde_fecha and fecha and fecha < desde_fecha:
+                        continue
+                    evaluado = "".join(
+                        p.get("plain_text", "") for p in (props.get("Evaluado") or {}).get("rich_text", [])
+                    ).strip()
+                    proyecto = "".join(
+                        p.get("plain_text", "") for p in (props.get("Proyecto") or {}).get("rich_text", [])
+                    ).strip()
+                    tipo = ((props.get("Tipo") or {}).get("select") or {}).get("name", "")
+                    respuestas = "".join(
+                        p.get("plain_text", "") for p in (props.get("Respuestas") or {}).get("rich_text", [])
+                    ).strip()
+                    nombre = proyecto or proyecto_nombre
+                    # Agrupamos por nombre NORMALIZADO para que variaciones menores (espacios,
+                    # mayúsculas) del campo Proyecto no partan un mismo proyecto en dos grupos.
+                    clave = normalizar_nombre(nombre)
+                    entrada = por_proyecto.setdefault(clave, {"nombre_proyecto": nombre, "evaluaciones": []})
+                    entrada["evaluaciones"].append({
+                        "tipo": tipo,
+                        "evaluado": evaluado,
+                        "respuestas": respuestas,
+                        "fecha": fecha,
+                        "url": fila.get("url", ""),
+                    })
+                if not resp.get("has_more"):
+                    break
+                cursor = resp.get("next_cursor")
+        except Exception:
+            logging.exception("Error leyendo evals realizadas en proyecto '%s' por '%s'", proyecto_nombre, evaluador)
+    salida = list(por_proyecto.values())
+    for entrada in salida:
+        entrada["evaluaciones"].sort(key=lambda x: x.get("fecha", ""), reverse=True)
+    salida.sort(key=lambda e: e["evaluaciones"][0]["fecha"] if e["evaluaciones"] else "", reverse=True)
+    return salida
+
+
 def obtener_proyectos_manager(manager_nombre: str) -> list:
     """Proyectos activos activados por este manager, con su equipo."""
     objetivo = normalizar_nombre(manager_nombre)
@@ -1068,11 +1138,12 @@ def obtener_estado_evaluaciones_proyecto(proyecto: str) -> list:
     return resultado
 
 
-def enviar_recordatorios_proyecto(proyecto: str) -> dict:
+def enviar_recordatorios_proyecto(proyecto: str, manager: str = "") -> dict:
     """Envía un DM de Slack a cada miembro del proyecto con evaluaciones pendientes.
 
     A cada miembro se le indica qué le falta: su autoevaluación y/o evaluar a los
-    compañeros que aún no ha evaluado. Devuelve {enviados, fallidos, sin_pendientes}.
+    compañeros que aún no ha evaluado. `manager` es el nombre del manager que lanza
+    el recordatorio (aparece en el mensaje). Devuelve {enviados, fallidos, sin_pendientes}.
     """
     estado = obtener_estado_evaluaciones_proyecto(proyecto)
     if not estado:
@@ -1110,7 +1181,7 @@ def enviar_recordatorios_proyecto(proyecto: str) -> dict:
                 lineas.append(f"• {t('rec.item_self', idioma)}")
             for otro in items_pendientes:
                 lineas.append(f"• {t('rec.item_eval', idioma, nombre=otro)}")
-            texto = t("rec.reminder", idioma, n=len(lineas), proyecto=proyecto, lista="\n".join(lineas))
+            texto = t("rec.reminder", idioma, n=len(lineas), proyecto=proyecto, manager=manager, lista="\n".join(lineas))
             dm = slack_app.client.conversations_open(users=[slack_id])
             slack_app.client.chat_postMessage(channel=dm["channel"]["id"], text=texto)
             enviados.append(nombre)

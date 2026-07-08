@@ -3134,23 +3134,60 @@ _PROPS_OBJETIVO_PERSONA = {
     "Tipo":        {"rich_text": {}},
 }
 
-_cache_objetivos_persona: dict = {}  # cache_key -> db_id
+_cache_objetivos_persona: dict = {}  # cache_key -> db_id  (base destino para GUARDAR)
+_cache_objetivos_ids: dict = {}      # cache_key -> list[db_id]  (todas las bases, para LEER)
+
+
+def _clave_objetivos(texto: str) -> str:
+    """Clave de comparación para las bases 'Objetivos - X': insensible a mayúsculas,
+    espacios y TILDES. Evita que 'Belén Hernández' y 'Belen Hernandez' se traten como
+    personas distintas (y acaben leyendo/creando bases separadas)."""
+    base = normalizar_nombre(texto)
+    return "".join(c for c in unicodedata.normalize("NFD", base) if unicodedata.category(c) != "Mn")
+
+
+def _buscar_todas_bbdd_objetivos_persona(nombre: str) -> list[str]:
+    """Todos los db_id de bases 'Objetivos - {nombre}' bajo 'Objetivos empleados',
+    comparando sin tildes ni mayúsculas. Devuelve varias si hay duplicados, para poder
+    agregar sus objetivos en la lectura.
+
+    Cachea la lista de db_id por persona (recorrer las bases es caro: ~1 llamada de
+    listado + 1 retrieve por base). El CONTENIDO se sigue leyendo en vivo en
+    obtener_objetivos_persona, así que un objetivo nuevo en una base ya conocida se ve
+    al instante; solo si se crea una base nueva se actualiza este cache (en _obtener_o_crear)."""
+    objetivo = _clave_objetivos(f"Objetivos - {nombre.strip()}")
+    with lock:
+        cache = _cache_objetivos_ids.get(objetivo)
+    if cache is not None:
+        return cache
+
+    parent = _parent_bbdd_en_pagina("Objetivos empleados", crear=False)
+    ids: list[str] = []
+    if parent.get("type") == "page_id":
+        for bloque in _iter_blocks(parent["page_id"]):
+            if bloque.get("type") == "child_database" and _clave_objetivos(_titulo_child_database(bloque)) == objetivo:
+                try:
+                    ids.append(_data_source_id(notion.databases.retrieve(database_id=bloque["id"])))
+                except Exception:
+                    ids.append(bloque["id"])
+    with lock:
+        _cache_objetivos_ids[objetivo] = ids
+    return ids
 
 
 def _obtener_o_crear_bbdd_objetivos_persona(nombre: str) -> str:
     nombre_strip = nombre.strip()
     titulo = f"Objetivos - {nombre_strip}"
-    cache_key = normalizar_nombre(titulo)
+    cache_key = _clave_objetivos(titulo)
     with lock:
         if cache_key in _cache_objetivos_persona:
             return _cache_objetivos_persona[cache_key]
 
-    # Busca la base exacta entre los hijos de "Objetivos empleados" (evita la
-    # búsqueda difusa de notion.search, que con muchas bases "Objetivos - X"
-    # puede no traer la correcta entre sus primeros resultados y acaba
-    # creando una base vacía duplicada).
-    db_id = _buscar_bbdd_en_pagina("Objetivos empleados", titulo)
-    if db_id:
+    # Busca cualquier base existente (insensible a tildes/mayúsculas). Si hay
+    # duplicados, usa la primera; la lectura las agrega todas de todos modos.
+    existentes = _buscar_todas_bbdd_objetivos_persona(nombre_strip)
+    if existentes:
+        db_id = existentes[0]
         with lock:
             _cache_objetivos_persona[cache_key] = db_id
         return db_id
@@ -3178,6 +3215,8 @@ def _obtener_o_crear_bbdd_objetivos_persona(nombre: str) -> str:
     db_id = _data_source_id(nueva)
     with lock:
         _cache_objetivos_persona[cache_key] = db_id
+        # La lectura debe incluir la base recién creada sin re-listar todo Notion.
+        _cache_objetivos_ids[cache_key] = [db_id]
     logging.info("Base de datos objetivos persona creada: %s", titulo)
     return db_id
 
@@ -3200,44 +3239,51 @@ def guardar_objetivo_persona(ca_nombre: str, advisee_nombre: str, titulo: str, k
 
 def obtener_objetivos_persona(advisee_nombre: str) -> list[dict]:
     try:
-        db_id = _obtener_o_crear_bbdd_objetivos_persona(advisee_nombre)
+        # Lee de TODAS las bases 'Objetivos - {nombre}' que casen (insensible a tildes),
+        # agregando duplicados. NO crea ninguna base (leer no debe generar duplicados vacíos).
+        db_ids = _buscar_todas_bbdd_objetivos_persona(advisee_nombre)
         resultados = []
-        cursor = None
-        while True:
-            kwargs: dict = {"page_size": 100}
-            if cursor:
-                kwargs["start_cursor"] = cursor
-            resp = _query_bbdd(db_id, **kwargs)
-            for pagina in resp.get("results", []):
-                props = pagina.get("properties", {})
-                titulo_val = "".join(
-                    p.get("plain_text", "") for p in (props.get("Name", {}).get("title") or [])
-                ).strip()
-                ca_val = "".join(
-                    p.get("plain_text", "") for p in (props.get("CA", {}).get("rich_text") or [])
-                ).strip()
-                kpis_val = "".join(
-                    p.get("plain_text", "") for p in (props.get("KPIs", {}).get("rich_text") or [])
-                ).strip()
-                desc_val = "".join(
-                    p.get("plain_text", "") for p in (props.get("Descripcion", {}).get("rich_text") or [])
-                ).strip()
-                tipo_val = "".join(
-                    p.get("plain_text", "") for p in (props.get("Tipo", {}).get("rich_text") or [])
-                ).strip()
-                fecha_prop = props.get("Fecha", {}).get("date") or {}
-                resultados.append({
-                    "page_id": pagina["id"],
-                    "titulo": titulo_val,
-                    "ca": ca_val,
-                    "kpis": kpis_val,
-                    "descripcion": desc_val,
-                    "tipo": tipo_val,
-                    "fecha": fecha_prop.get("start", ""),
-                })
-            if not resp.get("has_more"):
-                break
-            cursor = resp.get("next_cursor")
+        vistos: set = set()
+        for db_id in db_ids:
+            cursor = None
+            while True:
+                kwargs: dict = {"page_size": 100}
+                if cursor:
+                    kwargs["start_cursor"] = cursor
+                resp = _query_bbdd(db_id, **kwargs)
+                for pagina in resp.get("results", []):
+                    if pagina["id"] in vistos:
+                        continue
+                    vistos.add(pagina["id"])
+                    props = pagina.get("properties", {})
+                    titulo_val = "".join(
+                        p.get("plain_text", "") for p in (props.get("Name", {}).get("title") or [])
+                    ).strip()
+                    ca_val = "".join(
+                        p.get("plain_text", "") for p in (props.get("CA", {}).get("rich_text") or [])
+                    ).strip()
+                    kpis_val = "".join(
+                        p.get("plain_text", "") for p in (props.get("KPIs", {}).get("rich_text") or [])
+                    ).strip()
+                    desc_val = "".join(
+                        p.get("plain_text", "") for p in (props.get("Descripcion", {}).get("rich_text") or [])
+                    ).strip()
+                    tipo_val = "".join(
+                        p.get("plain_text", "") for p in (props.get("Tipo", {}).get("rich_text") or [])
+                    ).strip()
+                    fecha_prop = props.get("Fecha", {}).get("date") or {}
+                    resultados.append({
+                        "page_id": pagina["id"],
+                        "titulo": titulo_val,
+                        "ca": ca_val,
+                        "kpis": kpis_val,
+                        "descripcion": desc_val,
+                        "tipo": tipo_val,
+                        "fecha": fecha_prop.get("start", ""),
+                    })
+                if not resp.get("has_more"):
+                    break
+                cursor = resp.get("next_cursor")
         resultados.sort(key=lambda x: x["fecha"] or "", reverse=True)
         return resultados
     except Exception:
@@ -3723,12 +3769,14 @@ PREGUNTAS_PERSONALES_DEFAULT = {
     "topic_objetivos": "Objetivos",
     "topic_dificultades": "Dificultades",
     "topic_trayectoria": "Trayectoria",
+    "topic_otro": "Otro",
 }
 
 # Claves añadidas después del despliegue inicial: se siembran en BDs "Preguntas" ya existentes
 # para que el admin pueda editarlas en Notion (una vez por proceso, respetando borrados manuales).
 _CLAVES_PERSONAL_NUEVAS = (
     "pregunta_tipo", "topic_cttf", "topic_objetivos", "topic_dificultades", "topic_trayectoria",
+    "topic_otro",
 )
 
 _mensaje_inicial_migrado: set = set()

@@ -209,6 +209,7 @@ TEXTOS: dict[str, dict[str, str]] = {
     "bp.topic_objetivos": {"es": "Objetivos", "en": "Goals"},
     "bp.topic_dificultades": {"es": "Dificultades", "en": "Difficulties"},
     "bp.topic_trayectoria": {"es": "Trayectoria", "en": "Trajectory"},
+    "bp.topic_otro": {"es": "Otro", "en": "Other"},
     "bp.opportunity_share": {"es": "Esta es tu oportunidad para compartir tu progreso", "en": "This is your chance to share your progress"},
     "bp.btn_save_yes": {"es": "✅ Sí, guardar", "en": "✅ Yes, save"},
     "bp.err_save": {"es": "⚠️ No se pudo guardar en Notion. Revisa los permisos o contacta con soporte.", "en": "⚠️ Could not save to Notion. Check permissions or contact support."},
@@ -295,8 +296,8 @@ TEXTOS: dict[str, dict[str, str]] = {
     "pe.err_not_your_project": {"es": "Este proyecto no es tuyo o no está activo.", "en": "This project isn't yours or isn't active."},
     # --- Recordatorios de evaluaciones de proyecto (DM de Slack) ---
     "rec.reminder": {
-        "es": "👋 ¡Hola! Tienes *{n}* evaluación(es) pendiente(s) del proyecto *{proyecto}*:\n{lista}\n\nPor favor, entra en la web y rellénalas. ¡Gracias! 🙏",
-        "en": "👋 Hi! You have *{n}* pending evaluation(s) for the project *{proyecto}*:\n{lista}\n\nPlease log in to the web app and complete them. Thanks! 🙏",
+        "es": "Tu manager de proyecto *{manager}* te recuerda que tienes *{n}* evaluación(es) pendiente(s) del proyecto *{proyecto}*:\n{lista}\nEntra en la web y rellénalas. ¡Gracias!",
+        "en": "Your project manager *{manager}* reminds you that you have *{n}* pending evaluation(s) for the project *{proyecto}*:\n{lista}\nLog in to the web app and complete them. Thanks!",
     },
     "rec.item_self": {"es": "tu autoevaluación", "en": "your self-evaluation"},
     "rec.item_eval": {"es": "la evaluación de {nombre}", "en": "the evaluation of {nombre}"},

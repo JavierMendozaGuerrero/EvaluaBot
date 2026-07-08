@@ -1,3 +1,5 @@
+from datetime import datetime, timedelta, timezone
+
 from fastapi import APIRouter, Body, Depends
 from fastapi.responses import JSONResponse
 
@@ -15,6 +17,7 @@ from ...project_evals import (
     obtener_equipo_proyecto,
     obtener_estado_evaluaciones_proyecto,
     obtener_evals_completadas_proyecto,
+    obtener_evaluaciones_proyecto_por_evaluador,
     obtener_preguntas_tipo,
     obtener_progreso_proyectos_empleado,
     obtener_proyectos_activos_empleado,
@@ -63,6 +66,15 @@ def equipo_proyecto(proyecto: str = "", session=Depends(require_session)):
 def proyectos_manager(session=Depends(require_session)):
     persona = session.get("persona", "")
     return {"proyectos": obtener_proyectos_manager(persona)}
+
+
+@router.get("/api/mis-evaluaciones-proyecto-realizadas")
+def mis_evaluaciones_proyecto_realizadas(session=Depends(require_session)):
+    """Proyectos de los que la persona ha realizado evals de proyecto en los últimos 2 años,
+    cada uno con la lista de evaluaciones que hizo."""
+    persona = session.get("persona", "")
+    desde = (datetime.now(timezone.utc) - timedelta(days=365 * 2)).date().isoformat()
+    return {"proyectos": obtener_evaluaciones_proyecto_por_evaluador(persona, desde)}
 
 
 @router.get("/api/estado-proyecto")
@@ -117,7 +129,7 @@ def recordatorio_proyecto(datos: dict = Body(default={}), session=Depends(requir
     proyectos_mgr = {p["nombre_proyecto"] for p in obtener_proyectos_manager(manager)}
     if proyecto not in proyectos_mgr:
         return JSONResponse({"error": t("pe.err_not_your_project", idi)}, status_code=403)
-    resultado = enviar_recordatorios_proyecto(proyecto)
+    resultado = enviar_recordatorios_proyecto(proyecto, manager)
     return {"ok": True, **resultado}
 
 

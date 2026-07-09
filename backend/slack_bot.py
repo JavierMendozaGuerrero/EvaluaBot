@@ -367,6 +367,30 @@ def _enviar_pregunta_texto(channel: str, thread_ts: str, texto: str, estado: dic
         slack_app.client.chat_postMessage(channel=channel, thread_ts=thread_ts, text=texto)
 
 
+def _enviar_pedir_primer_miembro(channel: str, thread_ts: str, texto: str, estado: dict, idioma: str = "es") -> None:
+    """Primer '¿a quién evalúas?' tras elegir proyecto. Incluye el botón de autoevaluación
+    para quien está solo en el proyecto (única vía habilitada para autoevaluarse)."""
+    elementos = [
+        {
+            "type": "button",
+            "text": {"type": "plain_text", "text": t("bm.btn_alone_project", idioma), "emoji": True},
+            "value": "solo",
+            "action_id": "autoeval_solo",
+        },
+    ]
+    if estado is not None and tiene_historial(estado):
+        elementos.append(boton_atras("atras_negocio", "bm.back_btn", idioma))
+    slack_app.client.chat_postMessage(
+        channel=channel,
+        thread_ts=thread_ts,
+        text=texto,
+        blocks=[
+            {"type": "section", "text": {"type": "mrkdwn", "text": texto}},
+            {"type": "actions", "elements": elementos},
+        ],
+    )
+
+
 def _enviar_pregunta_situacion(channel: str, thread_ts: str, idioma: str, estado: dict) -> None:
     slack_app.client.chat_postMessage(
         channel=channel,
@@ -806,6 +830,129 @@ def _handle_sugerencia_interactiva(ack, body, client, logger):
             _enviar_pregunta_texto(dm_channel, thread_ts, pregunta, estado, estado.get("idioma", "es"))
     except Exception:
         logger.exception("Error procesando sugerencia de empleado")
+
+
+@slack_app.action("autoeval_solo")
+def _handle_autoeval_solo(ack, body, client, logger):
+    """El evaluador declara estar solo en el proyecto y se autoevalúa (autor == evaluado).
+    Es la única vía habilitada para autoevaluarse; usa las mismas preguntas que evaluar a otro."""
+    ack()
+    try:
+        user_id = body["user"]["id"]
+        channel = body["channel"]["id"]
+        msg = body.get("message", {})
+        thread_ts = msg.get("thread_ts") or msg.get("ts", "")
+        dm_channel = evaluacion_dm_canal.get(user_id, channel)
+
+        def reply(text):
+            client.chat_postMessage(channel=dm_channel, thread_ts=thread_ts, text=text)
+
+        _idi = idioma_por_slack_id(user_id)
+
+        with lock:
+            es_activo = user_id in evaluaciones_dm_activas
+            estado = conversaciones.get(user_id)
+            if not es_activo or not estado or estado.get("modo") != "esperando_persona":
+                return
+            _cargo_ev_peek = estado.get("cargo_evaluador")
+            _area_peek = estado.get("area", "negocio")
+            _proyecto_peek = estado.get("proyecto_actual", "")
+
+        _nombre_propio = obtener_nombre_por_id_usuario(user_id) or _nombre_real(user_id, logger)
+        if not _nombre_propio:
+            reply(t("bm.err_temp_data", _idi))
+            return
+
+        # Ya te autoevaluaste en esta sesión para este proyecto
+        clave_ev = (normalizar_nombre(_proyecto_peek), normalizar_nombre(_nombre_propio))
+        with lock:
+            estado = conversaciones.get(user_id)
+            if estado and clave_ev in estado.get("evaluados_en_sesion", set()):
+                reply(t("bm.already_evaluated", _idi, emp=_nombre_propio, proy=_proyecto_peek or '?'))
+                return
+
+        # Refleja la elección en el mensaje del botón
+        try:
+            client.chat_update(
+                channel=channel,
+                ts=msg["ts"],
+                blocks=[{"type": "section", "text": {"type": "mrkdwn", "text": t("bm.self_eval_selected", _idi)}}],
+                text=t("bm.self_eval_selected", _idi),
+            )
+        except Exception:
+            logger.warning("No se pudo actualizar el mensaje de autoevaluación")
+
+        # Carga de preguntas por área (las mismas que evaluar a un compañero);
+        # la relación con uno mismo es "igual".
+        _cargo_evaluador = _cargo_ev_peek
+        _relacion = "igual"
+        _preguntas_pre = {}
+        _preguntas_area_pre = []
+
+        if _area_peek == "palantir":
+            if _cargo_ev_peek is None:
+                _cargo_evaluador = obtener_cargo_por_slack_id(user_id)
+            _preguntas_area_pre = obtener_preguntas_palantir(tipo_relacion(_relacion), _idi)
+        elif _area_peek == "middleoffice":
+            _preguntas_area_pre = obtener_preguntas_mo(_idi)
+        else:
+            if _cargo_ev_peek is None:
+                _cargo_evaluador = obtener_cargo_por_slack_id(user_id)
+            _preguntas_pre = obtener_preguntas_desde_notion(tipo_relacion(_relacion), _idi)
+
+        accion = None
+        pregunta = None
+        with lock:
+            estado = conversaciones.get(user_id)
+            if not estado or estado.get("modo") != "esperando_persona":
+                return
+            push_historial(estado)
+            estado["respuestas"]["evaluado"] = _nombre_propio
+            estado["es_autoevaluacion"] = True
+            if _cargo_evaluador and _cargo_evaluador != _cargo_ev_peek:
+                estado["cargo_evaluador"] = _cargo_evaluador
+            estado["relacion_jerarquica"] = _relacion
+            _area_actual = estado.get("area", "negocio")
+            if _area_actual in ("middleoffice", "palantir"):
+                for _k in [k for k in estado["respuestas"] if k not in ("evaluado", "proyecto")]:
+                    del estado["respuestas"][_k]
+                _preguntas_inyectadas = [
+                    {**q, "texto": _resolver_texto_q1(q["texto"], _relacion, _nombre_propio)}
+                    if q["clave"] == "q1"
+                    else q
+                    for q in _preguntas_area_pre
+                ]
+                estado["preguntas_area"] = _preguntas_inyectadas
+                estado["pregunta_actual"] = 0
+                estado["modo"] = "preguntando_area_secuencial"
+                _primera = _preguntas_inyectadas[0] if _preguntas_inyectadas else None
+                if _primera and _primera["clave"] in _VALORACION_CLAVES:
+                    accion = "preguntar_valoracion"
+                    pregunta = _primera["texto"]
+                else:
+                    accion = "preguntar"
+                    pregunta = _primera["texto"] if _primera else t("bm.no_questions_area", _idi)
+            else:
+                preguntas = _preguntas_negocio(_relacion, _preguntas_pre, nombre_evaluado=_nombre_propio)
+                for _k in [k for k in estado["respuestas"] if k not in ("evaluado", "proyecto")]:
+                    del estado["respuestas"][_k]
+                estado["preguntas_area"] = preguntas
+                estado["pregunta_actual"] = 0
+                estado["modo"] = "preguntando_area_secuencial"
+                accion = "preguntar_valoracion"
+                pregunta = preguntas[0]["texto"]
+
+        if accion == "preguntar_valoracion":
+            client.chat_postMessage(
+                channel=dm_channel,
+                thread_ts=thread_ts,
+                blocks=_bloques_valoracion(pregunta, user_id, estado=estado),
+                text=pregunta,
+            )
+        elif pregunta:
+            _enviar_pregunta_texto(dm_channel, thread_ts, pregunta, estado, estado.get("idioma", "es"))
+    except Exception:
+        logger.exception("Error procesando autoevaluación en solitario")
 
 
 def _normalizar_valoracion(texto: str) -> str | None:
@@ -1524,7 +1671,7 @@ def handle_message_events(event, logger):
                 estado["respuestas"]["proyecto"] = texto
                 estado["proyecto_actual"] = texto
                 estado["modo"] = "esperando_persona"
-                accion = "pedir_persona"
+                accion = "pedir_primer_miembro"
                 pregunta = t("bm.project_ok", estado["idioma"], proy=texto)
             else:
                 accion = "pedir_proyecto"
@@ -1896,6 +2043,9 @@ def handle_message_events(event, logger):
     if accion in _ACCIONES_PREGUNTA_SIN_ATRAS:
         reply(pregunta if pregunta else "")
         return
+    if accion == "pedir_primer_miembro":
+        _enviar_pedir_primer_miembro(dm_channel, thread_ts, pregunta if pregunta else "", estado, estado.get("idioma", "es"))
+        return
     if accion in _ACCIONES_PREGUNTA:
         _enviar_pregunta_texto(dm_channel, thread_ts, pregunta if pregunta else "", estado, estado.get("idioma", "es"))
         return
@@ -1947,7 +2097,10 @@ def handle_message_events(event, logger):
                     normalizar_nombre(respuestas_finales.get("evaluado", "")),
                 )
                 estado.setdefault("evaluados_en_sesion", set()).add(clave_guardada)
-                estado["modo"] = "preguntar_mas_personas"
+                # Si estabas solo en el proyecto (autoevaluación), no hay más miembros a
+                # los que evaluar: pasamos directos a "¿algún otro proyecto?".
+                _fue_autoevaluacion = estado.pop("es_autoevaluacion", False)
+                estado["modo"] = "preguntar_mas_proyectos" if _fue_autoevaluacion else "preguntar_mas_personas"
                 limpiar_historial(estado)
                 estado.setdefault("evaluaciones_guardadas", []).append({
                     "page_id": page_id,
@@ -1961,7 +2114,10 @@ def handle_message_events(event, logger):
                 })
             quitar_pendiente("mensual", user_id)
             marcar_completada_por_slack_id(user_id, "mensual")
-            _enviar_mas_miembros(dm_channel, thread_ts, estado.get("idioma", "es"), estado=estado)
+            if _fue_autoevaluacion:
+                _enviar_mas_proyectos(dm_channel, thread_ts, estado.get("idioma", "es"), estado=estado)
+            else:
+                _enviar_mas_miembros(dm_channel, thread_ts, estado.get("idioma", "es"), estado=estado)
             return
         reply(t("bm.err_save_notion", estado.get("idioma", "es")))
         return
@@ -2058,7 +2214,10 @@ def handle_proyecto_confirmar(ack, body, logger):
                 normalizar_nombre(respuestas_finales.get("evaluado", "")),
             )
             estado.setdefault("evaluados_en_sesion", set()).add(clave_guardada)
-            estado["modo"] = "preguntar_mas_personas"
+            # Si estabas solo en el proyecto (autoevaluación), no hay más miembros a
+            # los que evaluar: pasamos directos a "¿algún otro proyecto?".
+            _fue_autoevaluacion = estado.pop("es_autoevaluacion", False)
+            estado["modo"] = "preguntar_mas_proyectos" if _fue_autoevaluacion else "preguntar_mas_personas"
             limpiar_historial(estado)
             estado.setdefault("evaluaciones_guardadas", []).append({
                 "page_id": page_id,
@@ -2072,7 +2231,10 @@ def handle_proyecto_confirmar(ack, body, logger):
             })
         quitar_pendiente("mensual", user_id)
         marcar_completada_por_slack_id(user_id, "mensual")
-        _enviar_mas_miembros(dm_channel, thread_ts, estado.get("idioma", "es"), estado=estado)
+        if _fue_autoevaluacion:
+            _enviar_mas_proyectos(dm_channel, thread_ts, estado.get("idioma", "es"), estado=estado)
+        else:
+            _enviar_mas_miembros(dm_channel, thread_ts, estado.get("idioma", "es"), estado=estado)
         return
     reply(t("bm.err_save_notion", estado.get("idioma", "es")))
 

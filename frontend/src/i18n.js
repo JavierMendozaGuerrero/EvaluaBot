@@ -533,7 +533,7 @@ export const STRINGS = {
   "eaw.err_write_points": { es: "Escribe tus puntos antes de enviar.", en: "Write your points before sending." },
   "eaw.eyebrow": { es: "Evaluación anual asistida", en: "Assisted annual evaluation" },
   "eaw.generating": { es: "Generando…", en: "Generating…" },
-  "eaw.full_info": { es: "Info completa", en: "Full info" },
+  "eaw.full_info": { es: "Info recopilada de {nombre}", en: "Info collected on {nombre}" },
   "eaw.reset_all": { es: "Eliminar y empezar de 0", en: "Delete and start over" },
   "eaw.resetting": { es: "Eliminando…", en: "Deleting…" },
   "eaw.reset_confirm": { es: "¿Seguro que quieres eliminar todo el progreso de este informe (conversaciones y áreas confirmadas) y empezar de cero? Esta acción no se puede deshacer.", en: "Are you sure you want to delete all progress on this report (conversations and confirmed areas) and start over? This action cannot be undone." },

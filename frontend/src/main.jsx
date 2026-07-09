@@ -5507,7 +5507,7 @@ function EvaluacionAnualWizard({ token, advisee, onBack }) {
               </button>
             )}
             <button className="secondary" onClick={descargarInfoCompleta} disabled={descInfo}>
-              {descInfo ? t("eaw.generating") : t("eaw.full_info")}
+              {descInfo ? t("eaw.generating") : t("eaw.full_info", { nombre })}
             </button>
             {infoOk && (
               <span style={{ display: "inline-flex", alignItems: "center", gap: 6, color: "#166534", alignSelf: "center" }}>

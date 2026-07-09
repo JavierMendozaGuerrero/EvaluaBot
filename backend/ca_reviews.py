@@ -1176,6 +1176,12 @@ def manejar_mensaje_ca(event, logger) -> None:
             if sin_novedades:
                 _reply_lista_advisees(t("bc.no_new_evals", _idi, advisee=advisee) + "\n\n")
             else:
+                # Intro: anunciamos que vamos a mostrar toda la información del advisee.
+                slack_app.client.chat_postMessage(
+                    channel=channel,
+                    thread_ts=thread_ts,
+                    text=t("bc.info_intro", _idi, advisee=advisee),
+                )
                 # Siempre los tres tipos separados; los que no tengan nada salen como "sin novedades".
                 for _tipo, _txt in tipos:
                     _blocks = _bloques_resumen_colapsado(_tipo, advisee, _idi) if _txt else _bloques_resumen_vacio(_tipo, advisee, _idi)

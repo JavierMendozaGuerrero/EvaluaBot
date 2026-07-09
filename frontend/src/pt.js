@@ -243,7 +243,7 @@ export const PT = {
   "eaw.err_start": "Não foi possível iniciar a avaliação.",
   "eaw.err_write_points": "Escreve os teus pontos antes de enviar.",
   "eaw.eyebrow": "Avaliação anual assistida",
-  "eaw.full_info": "Informação completa",
+  "eaw.full_info": "Informação recolhida de {nombre}",
   "eaw.reset_all": "Eliminar e começar do zero",
   "eaw.resetting": "A eliminar…",
   "eaw.reset_confirm": "De certeza que queres eliminar todo o progresso deste relatório (conversas e áreas confirmadas) e começar do zero? Esta ação não pode ser desfeita.",

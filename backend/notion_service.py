@@ -4049,9 +4049,9 @@ def obtener_preguntas_personales(idioma: str = "es", con_fallback_es: bool = Tru
 
 
 PREGUNTAS_CA_DEFAULT = {
-    "opinion": "¿Qué opinas de las evaluaciones?",
-    "opinion_sin_claude": "¿Qué comentario deseas registrar sobre las evaluaciones de tu advisee?",
-    "opinion_con_claude": "¿Qué opinas de esto?",
+    "opinion": "Añade a continuación tus opiniones/puntos a añadir sobre esta información.",
+    "opinion_sin_claude": "¿Te gustaría opinar o comentar algo extra sobre la información disponible para hacer seguimiento de tu advisee?",
+    "opinion_con_claude": "Añade a continuación tus opiniones/puntos a añadir sobre esta información.",
 }
 
 _NOMBRE_PREGUNTAS_CA = "Preguntas seguimiento CA"

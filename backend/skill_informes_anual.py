@@ -1408,18 +1408,33 @@ def _celda_emp(cell, label, valor, w):
         _dxr(cell.paragraphs[0], valor or "", size=9)
 
 
-def guardar_informe_anual_word(emp_data: dict, comentarios: dict, cargo: str = "", idioma: str = "es") -> str:
+def guardar_informe_anual_word(emp_data: dict, comentarios: dict, cargo: str = "", idioma: str = "es",
+                               valores_ca: dict | None = None, nombre_archivo: str = "") -> str:
     """Genera el .docx replicando la plantilla oficial de EVALUACIÓN ANUAL de IGENERIS.
 
     Campos que el sistema no posee (CA '26, salarios, % variable, promoción, deadlines,
     y la NOTA por dimensión) se dejan en blanco para que el CA los rellene, igual que en
     la plantilla. Los comentarios por dimensión sí los redacta Claude, con sus citas a Notion.
+
+    `valores_ca`: valores de esos huecos rellenados por el CA en el borrador web
+    (claves: caSiguiente, salarioActual, notas{clave}, retribucion{...}, resultadoEval{...},
+    objetivos[{texto,deadline}]). Si falta una clave, su hueco se queda en blanco.
+    `nombre_archivo`: nombre del .docx a escribir en CARPETA_WEB (por defecto
+    informe_anual_{slug}.docx).
     """
     if Document is None:
         raise RuntimeError("Instala python-docx: pip install python-docx")
 
     from docx.shared import Cm, Pt
     from docx.enum.text import WD_ALIGN_PARAGRAPH
+
+    vca = valores_ca or {}
+    notas_ca = vca.get("notas") or {}
+    ret_ca = vca.get("retribucion") or {}
+    res_ca = vca.get("resultadoEval") or {}
+
+    def _v(d, clave):
+        return str(d.get(clave) or "").strip()
 
     fuentes = comentarios.get("_fuentes", {})
     ahora = datetime.now(timezone.utc)
@@ -1448,7 +1463,7 @@ def guardar_informe_anual_word(emp_data: dict, comentarios: dict, cargo: str = "
     filas_emp = [
         (t("anual.employee", idioma), emp_data["empleado"], t("anual.date", idioma), fecha_txt),
         (f"CA {yy}", emp_data.get("ca", ""), t("anual.current_position", idioma), cargo or ""),
-        (f"CA {yy_sig}", "", t("anual.current_salary", idioma), ""),
+        (f"CA {yy_sig}", _v(vca, "caSiguiente"), t("anual.current_salary", idioma), _v(vca, "salarioActual")),
     ]
     t_emp = doc.add_table(rows=len(filas_emp), cols=4)
     t_emp.style = "Table Grid"
@@ -1483,16 +1498,22 @@ def guardar_informe_anual_word(emp_data: dict, comentarios: dict, cargo: str = "
         _dxb(c1); _dxw(c1, w_nota)
         _dxb(c2); _dxw(c2, w_com)
         _dxr(c0.paragraphs[0], _dim_label(clave, etiqueta, idioma), size=9)
-        # NOTA: en blanco, la rellena el CA
+        # NOTA: en blanco salvo que el CA la haya rellenado en el borrador web
+        nota_dim = _v(notas_ca, clave)
+        if nota_dim:
+            _dxr(c1.paragraphs[0], nota_dim, size=9, center=True)
         _dx_bullets_por_nivel(c2, comentarios.get(clave, ""), fuentes, idioma=idioma)
     doc.add_paragraph()
 
     # ── Notas finales / retribución ───────────────────────────────────────────
     wc1, wc2, wc3, wc4 = 2.9, 0.7, 1.5, _CONTENT_W_IN - 2.9 - 0.7 - 1.5
+    total_var = t("anual.total_variable", idioma, yy=yy)
+    if _v(ret_ca, "totalVariable"):
+        total_var += f" {_v(ret_ca, 'totalVariable')}"
     filas_ret = [
-        (t("anual.final_projects", idioma), "", t("anual.variable_60", idioma), ""),
-        (t("anual.final_contrib", idioma), "", t("anual.variable", idioma), ""),
-        (t("anual.corp_objectives", idioma), "", t("anual.variable_30", idioma), t("anual.total_variable", idioma, yy=yy)),
+        (t("anual.final_projects", idioma), _v(ret_ca, "notaProyectos"), t("anual.variable_60", idioma), _v(ret_ca, "variable60")),
+        (t("anual.final_contrib", idioma), _v(ret_ca, "notaContribucion"), t("anual.variable", idioma), _v(ret_ca, "variable")),
+        (t("anual.corp_objectives", idioma), _v(ret_ca, "objetivosCorporativos"), t("anual.variable_30", idioma), total_var),
     ]
     t_ret = doc.add_table(rows=len(filas_ret), cols=4)
     t_ret.style = "Table Grid"
@@ -1503,7 +1524,7 @@ def guardar_informe_anual_word(emp_data: dict, comentarios: dict, cargo: str = "
         _dxr(c0.paragraphs[0], l1, bold=True, size=9)
         _dxr(c1.paragraphs[0], v1, size=9, center=True)
         _dxr(c2.paragraphs[0], l2, size=9)
-        _dxr(c3.paragraphs[0], v2, bold=bool(v2), size=9)
+        _dxr(c3.paragraphs[0], v2, bold=(i == len(filas_ret) - 1 and bool(v2)), size=9)
     doc.add_paragraph()
 
     # ── RESULTADO EVAL {año} ──────────────────────────────────────────────────
@@ -1512,8 +1533,12 @@ def guardar_informe_anual_word(emp_data: dict, comentarios: dict, cargo: str = "
     t_res = doc.add_table(rows=1, cols=5)
     t_res.style = "Table Grid"
     cells = t_res.rows[0].cells
-    textos_res = [(t("anual.promotion", idioma), True, False), ("", False, True), (t("anual.position_next", idioma, yy=yy_sig), True, False),
-                  ("", False, True), (t("anual.new_fixed_salary", idioma), True, False)]
+    salario_nuevo = t("anual.new_fixed_salary", idioma)
+    if _v(res_ca, "nuevoSalarioFijo"):
+        salario_nuevo += f" {_v(res_ca, 'nuevoSalarioFijo')}"
+    textos_res = [(t("anual.promotion", idioma), True, False), (_v(res_ca, "promocion"), False, True),
+                  (t("anual.position_next", idioma, yy=yy_sig), True, False),
+                  (_v(res_ca, "cargoSiguiente"), False, True), (salario_nuevo, True, False)]
     for c, w, (txt, bold, ctr) in zip(cells, wr, textos_res):
         _dxb(c); _dxw(c, w)
         _dxr(c.paragraphs[0], txt, bold=bold, size=9, center=ctr)
@@ -1522,7 +1547,8 @@ def guardar_informe_anual_word(emp_data: dict, comentarios: dict, cargo: str = "
     # ── OPORTUNIDADES DE MEJORA / OBJETIVOS {año+1} ───────────────────────────
     _dxt(doc, t("anual.improvement_objectives", idioma, yy=yy_sig))
     objetivos = emp_data.get("objetivos", [])
-    n_filas = max(3, len(objetivos))
+    objetivos_ca = vca.get("objetivos")  # [{texto, deadline}] editados en el borrador web
+    n_filas = max(3, len(objetivos_ca) if objetivos_ca is not None else len(objetivos))
     w_obj, w_dl = _CONTENT_W_IN - 0.9, 0.9
     t_obj = doc.add_table(rows=n_filas + 1, cols=2)
     t_obj.style = "Table Grid"
@@ -1535,11 +1561,17 @@ def guardar_informe_anual_word(emp_data: dict, comentarios: dict, cargo: str = "
         c0, c1 = t_obj.rows[i + 1].cells
         _dxb(c0); _dxw(c0, w_obj)
         _dxb(c1); _dxw(c1, w_dl)
-        texto_obj = ""
-        if i < len(objetivos):
+        texto_obj, deadline_obj = "", ""
+        if objetivos_ca is not None:
+            if i < len(objetivos_ca):
+                texto_obj = str(objetivos_ca[i].get("texto") or "").strip()
+                deadline_obj = str(objetivos_ca[i].get("deadline") or "").strip()
+        elif i < len(objetivos):
             o = objetivos[i]
             texto_obj = o.get("titulo") or o.get("descripcion") or ""
         _dxr(c0.paragraphs[0], f"{i + 1}.  {texto_obj}".rstrip(), size=9)
+        if deadline_obj:
+            _dxr(c1.paragraphs[0], deadline_obj, size=9, center=True)
 
     # ── FUENTES / EVIDENCIA (anexo, cada cita salta aquí) ─────────────────────
     if fuentes:
@@ -1568,7 +1600,7 @@ def guardar_informe_anual_word(emp_data: dict, comentarios: dict, cargo: str = "
     # ── Guardar ───────────────────────────────────────────────────────────────
     os.makedirs(config.CARPETA_WEB, exist_ok=True)
     slug = slug_archivo(emp_data["empleado"])
-    ruta = os.path.join(config.CARPETA_WEB, f"informe_anual_{slug}.docx")
+    ruta = os.path.join(config.CARPETA_WEB, nombre_archivo or f"informe_anual_{slug}.docx")
     doc.save(ruta)
     logging.info("Informe anual guardado: %s", ruta)
     return slug

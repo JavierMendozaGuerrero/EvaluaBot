@@ -41,6 +41,9 @@ personal_dm_canal: dict = {}
 personal_hora: dict = {}
 personal_ultimo_recordatorio: dict = {}
 conversaciones_personal: dict = {}
+# user_id -> {"channel", "ts", "expanded": set(), "idioma"}: mensaje de ejemplos
+# desplegables publicado en el hilo tras pulsar "Sí" en el DM inicial.
+_personal_ejemplos_hilo: dict = {}
 
 _RECORDATORIO_SEGUNDOS = 7 * 24 * 60 * 60  # 1 semana
 
@@ -176,20 +179,22 @@ def _bloques_dm_personal(idioma, enlace_pendientes=None):
         },
         {"type": "section", "text": {"type": "mrkdwn", "text": t("bp.pending_body", idioma)}},
         {"type": "context", "elements": [{"type": "mrkdwn", "text": t("bot.no_inteligente", idioma)}]},
-        {"type": "section", "text": {"type": "mrkdwn", "text": t("bp.example_label", idioma)}},
+        {"type": "section", "text": {"type": "mrkdwn", "text": t("bot.example_q", idioma)}},
         {
             "type": "actions",
             "elements": [
                 {
                     "type": "button",
-                    "text": {"type": "plain_text", "text": t("bp.see_example", idioma)},
-                    "action_id": "personal_ver_ejemplo",
+                    "text": {"type": "plain_text", "text": t("bm.yes_btn", idioma), "emoji": True},
+                    "style": "primary",
+                    "action_id": "personal_ejemplo_si",
+                },
+                {
+                    "type": "button",
+                    "text": {"type": "plain_text", "text": t("bm.no_btn", idioma), "emoji": True},
+                    "action_id": "personal_ejemplo_no",
                 },
             ],
-        },
-        {
-            "type": "section",
-            "text": {"type": "mrkdwn", "text": t("bp.send_to_start", idioma)},
         },
     ]
     if enlace_pendientes:
@@ -922,6 +927,33 @@ def _traducir_apartado(nombre: str, idioma: str) -> str:
     return _TRAD_APARTADO.get(nombre.strip().lower(), {}).get(idioma, nombre)
 
 
+def _bloques_items_ejemplos_personal(personales: dict, expanded: set, idioma: str, action_id: str) -> list:
+    """Bloques desplegables (uno por apartado), con botón Ver/Ocultar. Compartido
+    entre el modal de ejemplos y el mensaje de ejemplos en el hilo; `action_id`
+    distingue quién debe manejar el toggle en cada contexto."""
+    blocks: list = []
+    for tipo, ejemplo in personales.items():
+        is_expanded = tipo in expanded
+        nombre = _traducir_apartado(_nombre_apartado_ejemplo(tipo), idioma)
+        blocks.append({
+            "type": "section",
+            "text": {"type": "mrkdwn", "text": f"*{nombre}*"},
+            "accessory": {
+                "type": "button",
+                "text": {"type": "plain_text", "text": t("bm.btn_hide_item", idioma) if is_expanded else t("bm.btn_show_item", idioma)},
+                "action_id": action_id,
+                "value": tipo,  # clave exacta de Notion para el toggle
+            },
+        })
+        if is_expanded:
+            blocks.append({
+                "type": "section",
+                "text": {"type": "mrkdwn", "text": ejemplo[:3000] if ejemplo else t("bm.no_example", idioma)},
+            })
+            blocks.append({"type": "divider"})
+    return blocks
+
+
 def _build_ejemplos_personal_view(ejemplos: dict, expanded: set, idioma: str = "es") -> dict:
     # Filtrar entradas de Notion cuyo tipo contenga "personal" (case-insensitive)
     personales = {k: v for k, v in ejemplos.items() if "personal" in k.lower()}
@@ -933,31 +965,7 @@ def _build_ejemplos_personal_view(ejemplos: dict, expanded: set, idioma: str = "
         },
         {"type": "divider"},
     ]
-    for tipo, ejemplo in personales.items():
-        is_expanded = tipo in expanded
-        # Mostrar nombre limpio: quitar prefijo "Personal - " o "Personal-" si existe
-        nombre = tipo
-        for prefijo in ("Personal - ", "Personal-", "personal - ", "personal-"):
-            if nombre.startswith(prefijo):
-                nombre = nombre[len(prefijo):].strip()
-                break
-        nombre = _traducir_apartado(nombre, idioma)
-        blocks.append({
-            "type": "section",
-            "text": {"type": "mrkdwn", "text": f"*{nombre}*"},
-            "accessory": {
-                "type": "button",
-                "text": {"type": "plain_text", "text": t("bm.btn_hide_item", idioma) if is_expanded else t("bm.btn_show_item", idioma)},
-                "action_id": "ejemplo_personal_toggle",
-                "value": tipo,  # clave exacta de Notion para el toggle
-            },
-        })
-        if is_expanded:
-            blocks.append({
-                "type": "section",
-                "text": {"type": "mrkdwn", "text": ejemplo[:3000] if ejemplo else t("bm.no_example", idioma)},
-            })
-            blocks.append({"type": "divider"})
+    blocks.extend(_bloques_items_ejemplos_personal(personales, expanded, idioma, "ejemplo_personal_toggle"))
 
     if not personales:
         blocks.append({
@@ -973,6 +981,23 @@ def _build_ejemplos_personal_view(ejemplos: dict, expanded: set, idioma: str = "
         "close": {"type": "plain_text", "text": t("bm.close", idioma)},
         "blocks": blocks[:100],
     }
+
+
+def _bloques_ejemplos_personal_hilo(ejemplos: dict, expanded: set, idioma: str = "es") -> list:
+    """Bloques del mensaje de ejemplos publicado en el hilo (apartados desplegables,
+    igual que el modal antiguo, pero en el propio hilo)."""
+    personales = {k: v for k, v in ejemplos.items() if "personal" in k.lower()}
+    blocks: list = [
+        {"type": "section", "text": {"type": "mrkdwn", "text": t("bp.examples_header", idioma)}},
+        {"type": "divider"},
+    ]
+    blocks.extend(_bloques_items_ejemplos_personal(personales, expanded, idioma, "personal_ejemplo_toggle_hilo"))
+    if not personales:
+        blocks.append({
+            "type": "section",
+            "text": {"type": "mrkdwn", "text": t("bp.no_personal_examples", idioma)},
+        })
+    return blocks[:50]
 
 
 def _nombre_apartado_ejemplo(tipo: str) -> str:
@@ -1129,6 +1154,88 @@ def _handle_ejemplo_personal_toggle(ack, body, logger):
         )
     except Exception:
         logger.exception("Error actualizando ejemplos personal para tipo '%s'", tipo)
+
+
+def _arrancar_personal_desde_boton(body, logger, con_ejemplo):
+    """Botones Sí/No del DM inicial personal. 'Sí' publica los ejemplos de guía en
+    el hilo; ambos arrancan la evaluación inyectando el evento que antes generaba
+    el primer mensaje del usuario. Si la conversación ya está en marcha, 'Sí' solo
+    muestra los ejemplos y 'No' no hace nada."""
+    user_id = body.get("user", {}).get("id", "")
+    channel = (body.get("channel") or {}).get("id") or (body.get("container") or {}).get("channel_id")
+    msg = body.get("message") or {}
+    thread_ts = msg.get("thread_ts") or msg.get("ts")
+    if not (user_id and channel and thread_ts):
+        return
+    with _lock:
+        es_activo = user_id in personal_dm_activas and thread_ts == personal_dm_ts.get(user_id)
+        estado = conversaciones_personal.get(user_id)
+        ya_empezada = estado is not None and estado.get("modo", "pre_inicial") != "pre_inicial"
+    if not es_activo:
+        return
+    idioma = idioma_por_slack_id(user_id)
+    if con_ejemplo:
+        with AnimacionCargando(channel, thread_ts, idioma):
+            ejemplos = obtener_ejemplos_guia(idioma)
+        expanded: set = set()
+        resp = slack_app.client.chat_postMessage(
+            channel=channel,
+            thread_ts=thread_ts,
+            text=t("bp.examples_header", idioma),
+            blocks=_bloques_ejemplos_personal_hilo(ejemplos, expanded, idioma),
+        )
+        with _lock:
+            _personal_ejemplos_hilo[user_id] = {
+                "channel": channel, "ts": resp["ts"], "expanded": expanded, "idioma": idioma,
+            }
+    if ya_empezada:
+        return
+    manejar_mensaje_personal({"user": user_id, "channel": channel, "thread_ts": thread_ts, "text": ""}, logger)
+
+
+@slack_app.action("personal_ejemplo_toggle_hilo")
+def _handle_personal_ejemplo_toggle_hilo(ack, body, logger):
+    ack()
+    user_id = body.get("user", {}).get("id", "")
+    tipo = (body.get("actions") or [{}])[0].get("value", "")
+    try:
+        with _lock:
+            estado = _personal_ejemplos_hilo.get(user_id)
+            if estado is None:
+                return
+            expanded = estado["expanded"]
+            if tipo in expanded:
+                expanded.discard(tipo)
+            else:
+                expanded.add(tipo)
+            channel, ts, idioma = estado["channel"], estado["ts"], estado["idioma"]
+        ejemplos = obtener_ejemplos_guia(idioma)
+        slack_app.client.chat_update(
+            channel=channel,
+            ts=ts,
+            text=t("bp.examples_header", idioma),
+            blocks=_bloques_ejemplos_personal_hilo(ejemplos, expanded, idioma),
+        )
+    except Exception:
+        logger.exception("Error actualizando ejemplos personal en el hilo para tipo '%s'", tipo)
+
+
+@slack_app.action("personal_ejemplo_si")
+def _handle_personal_ejemplo_si(ack, body, logger):
+    ack()
+    try:
+        _arrancar_personal_desde_boton(body, logger, con_ejemplo=True)
+    except Exception:
+        logger.exception("Error arrancando evaluación personal desde el botón Sí")
+
+
+@slack_app.action("personal_ejemplo_no")
+def _handle_personal_ejemplo_no(ack, body, logger):
+    ack()
+    try:
+        _arrancar_personal_desde_boton(body, logger, con_ejemplo=False)
+    except Exception:
+        logger.exception("Error arrancando evaluación personal desde el botón No")
 
 
 def ciclo_envio_personal() -> None:

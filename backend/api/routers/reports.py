@@ -12,8 +12,9 @@ except ImportError:
     mammoth = None
 
 from ... import config
+from ... import eval_anual_sesion
 from ..deps import exigir_acceso_advisee, require_session
-from ..files import url_archivo
+from ..files import envolver_informe_final_html, url_archivo
 from ...anonimato import cargar_config as cargar_anonimato, evaluadores_visibles_para_advisee
 from ...notion_service import (
     advisee_tiene_acceso_individual,
@@ -185,33 +186,30 @@ def trayectoria(datos: dict = Body(default={}), session=Depends(require_session)
     return {"total": total, "htmlUrl": url_archivo(f"trayectoria_{slug}.html", evaluado)}
 
 
-@router.post("/api/subir-informe-final")
-def subir_informe_final(
-    evaluado: str = Form(...),
-    archivo: UploadFile = File(...),
-    session=Depends(require_session),
-):
+def _exigir_ca_del_advisee(session, evaluado: str) -> None:
     advisees_ca = obtener_advisees(
         session.get("persona", ""),
         ca_aliases=[session.get("username", ""), session.get("email", "")],
     )
     if not session.get("is_admin") and normalizar_nombre(evaluado) not in [normalizar_nombre(a) for a in advisees_ca]:
         raise PermissionError("Solo puedes subir informes para tus advisees.")
-    slug_ev = slug_archivo(evaluado)
-    ts = int(time.time())
-    docx_filename = f"informe_final_{slug_ev}_{ts}.docx"
+
+
+def _publicar_informe_final(evaluado: str, docx_filename: str, session) -> dict:
+    """Convierte el .docx a HTML, lo registra en Notion como informe final y devuelve las URLs."""
     docx_path = os.path.join(config.CARPETA_WEB, docx_filename)
-    with open(docx_path, "wb") as f:
-        f.write(archivo.file.read())
     html_filename = ""
     if mammoth:
         try:
-            html_filename = f"informe_final_{slug_ev}_{ts}.html"
+            html_filename = docx_filename[: -len(".docx")] + ".html"
             html_path = os.path.join(config.CARPETA_WEB, html_filename)
             with open(docx_path, "rb") as df:
                 resultado_html = mammoth.convert_to_html(df)
+            documento = envolver_informe_final_html(
+                resultado_html.value, f"Informe final · {evaluado}" if evaluado else "Informe final"
+            )
             with open(html_path, "w", encoding="utf-8") as hf:
-                hf.write(resultado_html.value)
+                hf.write(documento)
         except Exception:
             logging.exception("Error convirtiendo docx a HTML")
             html_filename = ""
@@ -231,3 +229,36 @@ def subir_informe_final(
     if html_filename:
         resp_data["htmlUrl"] = url_archivo(html_filename, evaluado)
     return resp_data
+
+
+@router.post("/api/subir-informe-final")
+def subir_informe_final(
+    evaluado: str = Form(...),
+    archivo: UploadFile = File(...),
+    session=Depends(require_session),
+):
+    _exigir_ca_del_advisee(session, evaluado)
+    slug_ev = slug_archivo(evaluado)
+    ts = int(time.time())
+    docx_filename = f"informe_final_{slug_ev}_{ts}.docx"
+    docx_path = os.path.join(config.CARPETA_WEB, docx_filename)
+    with open(docx_path, "wb") as f:
+        f.write(archivo.file.read())
+    return _publicar_informe_final(evaluado, docx_filename, session)
+
+
+@router.post("/api/eval-anual/subir-borrador")
+def subir_borrador_informe_final(datos: dict = Body(default={}), session=Depends(require_session)):
+    """Genera el .docx oficial desde el borrador web editado y lo publica como informe
+    final (mismo flujo que /api/subir-informe-final, sin exportar ni subir archivos)."""
+    evaluado = (datos.get("evaluado") or "").strip()
+    if not evaluado:
+        return JSONResponse({"error": "Falta el campo evaluado."}, status_code=400)
+    _exigir_ca_del_advisee(session, evaluado)
+    if isinstance(datos.get("borrador"), dict):
+        eval_anual_sesion.guardar_borrador(evaluado, datos["borrador"])
+    slug_ev = slug_archivo(evaluado)
+    ts = int(time.time())
+    docx_filename = f"informe_final_{slug_ev}_{ts}.docx"
+    eval_anual_sesion.generar_docx_borrador(evaluado, docx_filename)
+    return _publicar_informe_final(evaluado, docx_filename, session)

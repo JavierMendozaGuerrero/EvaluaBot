@@ -38,18 +38,14 @@
 > _Esta evaluación es totalmente privada, solo podrás verla tú._
 > _Si en algún momento quieres cancelar, escribe SOS en el hilo._
 
-Seguido de una sección con botón **"Ver ejemplo"** (`action_id: ca_ver_ejemplo`):
-> :point_right: Ejemplo:  [Ver ejemplo]
+Seguido de la pregunta con dos botones (y un `divider`):
+> :point_right: *¿Quieres ver un ejemplo antes de empezar?*  [✅ Sí] [❌ No]
 
-Y una sección final:
-> :point_right: *Envía cualquier mensaje en el hilo para comenzar la evaluación*
+**✅ Sí** (`action_id: ca_ejemplo_si`) publica el ejemplo de guía CA en el hilo y arranca la evaluación; **❌ No** (`action_id: ca_ejemplo_no`) la arranca directamente (`_arrancar_ca_desde_boton`). Ya no hace falta escribir un mensaje para comenzar, aunque escribir en el hilo sigue funcionando. El handler antiguo `ca_ver_ejemplo` (modal, ver `_build_ejemplo_ca_view` / `_handle_ca_ver_ejemplo`) se conserva para los DMs enviados antes del cambio.
 
-(y un `divider`). El botón "Ver ejemplo" abre un modal con el ejemplo de guía para CA (ver `_build_ejemplo_ca_view` / `_handle_ca_ver_ejemplo`).
+> 📷 **[Captura pendiente: DM inicial de notificación CA con botones Sí / No del ejemplo]**
 
-> 📷 **[Captura pendiente: DM inicial de notificación CA con botón "Ver ejemplo"]**
-> 📷 **[Captura pendiente: modal "Ejemplo de guía — Evaluación CA"]**
-
-**2. El CA envía cualquier mensaje en el hilo** → estado pasa de `pre_inicial` a `esperando_advisee`, acción `pedir_advisee`. El bot muestra la **lista de advisees pendientes como botones** (`_reply_lista_advisees`, [L717](../backend/ca_reviews.py#L717)):
+**2. El CA pulsa Sí o No (o envía cualquier mensaje en el hilo)** → estado pasa de `pre_inicial` a `esperando_advisee`, acción `pedir_advisee`. El bot muestra la **lista de advisees pendientes como botones** (`_reply_lista_advisees`, [L717](../backend/ca_reviews.py#L717)):
 > ¿De qué advisee te gustaría hacer seguimiento?  [Nombre1] [Nombre2] … [❌ Terminar]
 
 Cada botón de advisee tiene `action_id: ca_advisee_{i}`; el de terminar es `ca_advisee_no`. Si ya se opinó sobre todos los advisees, en su lugar aparece:

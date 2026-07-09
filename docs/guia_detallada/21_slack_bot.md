@@ -34,19 +34,15 @@ El scheduler envía por DM un mensaje con este texto ([enviar_una_evaluacion, l�
 > _Esta evaluación es totalmente privada, solo podrá verla el CA de la persona evaluada._
 > _Si en algún momento quieres cancelar, escribe SOS en el hilo._
 
-Debajo aparece un bloque con el botón **Ver ejemplo** (action `mensual_ver_ejemplo`), y otro que indica:
+Debajo aparece la pregunta **"👉 ¿Quieres ver un ejemplo antes de empezar?"** con dos botones: **✅ Sí** (action `mensual_ejemplo_si`) y **❌ No** (action `mensual_ejemplo_no`).
 
-> :point_right: *Envía cualquier mensaje en el hilo para comenzar la evaluación*
+> 📷 **[Captura pendiente: DM inicial con el texto de evaluación pendiente y los botones Sí / No del ejemplo]**
 
-> 📷 **[Captura pendiente: DM inicial con el texto de evaluación pendiente, el botón "Ver ejemplo" y la instrucción de escribir en el hilo]**
-
-Al pulsar **Ver ejemplo** se abre un modal "Ejemplo de guía — Evaluación Mensual" con el ejemplo obtenido de Notico ([_build_ejemplo_mensual_view, 2031](../backend/slack_bot.py#L2031)).
-
-> 📷 **[Captura pendiente: modal "Ejemplo de guía — Evaluación Mensual" con el texto de ejemplo]**
+Al pulsar **✅ Sí** el bot publica en el hilo el ejemplo de guía obtenido de Notion y a continuación arranca la evaluación; al pulsar **❌ No** la evaluación arranca directamente. Ya no hace falta escribir un mensaje para comenzar (aunque escribir en el hilo sigue funcionando como antes). Ambos botones inyectan el mismo evento que generaba el primer mensaje del usuario (`_arrancar_mensual_desde_boton`); si la conversación ya está en marcha, **Sí** solo muestra el ejemplo y **No** no hace nada. El handler antiguo `mensual_ver_ejemplo` (modal) se conserva para los DMs enviados antes del cambio.
 
 ### 2. Elección de área
 
-El usuario escribe cualquier mensaje en el hilo. El bot responde con **"¿A qué área perteneces?"** y tres botones ([_bloques_area, 284](../backend/slack_bot.py#L284)): **Negocio**, **MiddleOffice**, **Palantir**. También acepta la respuesta escrita (1/uno/negocio, 2/dos/middleoffice/mo, 3/tres/palantir — mapa en [líneas 1132-1137](../backend/slack_bot.py#L1132)). Si no se reconoce responde: "Por favor, pulsa el botón del área al que perteneces 😊".
+El usuario pulsa **Sí** o **No** (o escribe cualquier mensaje en el hilo). El bot responde con **"¿A qué área perteneces?"** y tres botones ([_bloques_area, 284](../backend/slack_bot.py#L284)): **Negocio**, **MiddleOffice**, **Palantir**. También acepta la respuesta escrita (1/uno/negocio, 2/dos/middleoffice/mo, 3/tres/palantir — mapa en [líneas 1132-1137](../backend/slack_bot.py#L1132)). Si no se reconoce responde: "Por favor, pulsa el botón del área al que perteneces 😊".
 
 > 📷 **[Captura pendiente: pregunta "¿A qué área perteneces?" con botones Negocio / MiddleOffice / Palantir]**
 

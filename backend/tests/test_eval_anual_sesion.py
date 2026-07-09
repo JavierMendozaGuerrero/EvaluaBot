@@ -21,7 +21,6 @@ def entorno_aislado(tmp_path, monkeypatch):
     monkeypatch.setattr(ea.sk, "_formatear_contexto", lambda emp_data: ("", {}))
     monkeypatch.setattr(ea, "_cargo_de", lambda advisee: "Manager")
     monkeypatch.setattr(ea, "_criterios_area", lambda *a, **k: [])
-    monkeypatch.setattr(ea, "_generar_diagnostico", lambda *a, **k: "")
     monkeypatch.setattr(ea.sk, "guardar_informe_anual_word", lambda *a, **k: None)
     monkeypatch.setattr(ea.sk, "guardar_informe_anual_html", lambda *a, **k: None)
     monkeypatch.setattr(ea, "guardar_log_evaluacion_anual", lambda *a, **k: None)

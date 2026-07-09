@@ -152,7 +152,10 @@ Como empleado interactúas con EvaluaBot de dos formas equivalentes: **por Slack
 > 📍 *Tienes una evaluación mensual pendiente.*
 > _Esta evaluación es totalmente privada, solo podrá verla el CA de la persona evaluada._
 > _Si en algún momento quieres cancelar, escribe SOS en el hilo._
-> Envía cualquier mensaje en el hilo para comenzar.
+> 👉 *¿Quieres ver un ejemplo antes de empezar?* [✅ Sí] [❌ No]
+
+Pulsa **✅ Sí** para ver el ejemplo en el propio hilo y empezar, o **❌ No** para
+empezar directamente (no hace falta escribir ningún mensaje para arrancar).
 
 **Pasos:**
 

@@ -54,6 +54,16 @@ def test_objetivos_get_permitido_si_es_advisee_del_ca(client, as_session, user_s
     assert r.json() == {"objetivos": [{"titulo": "Meta 1"}]}
 
 
+def test_objetivos_get_permitido_para_los_propios_objetivos(client, as_session, user_session, monkeypatch):
+    """Cualquiera puede ver sus propios objetivos aunque no figure como su propio CA."""
+    as_session(user_session)
+    monkeypatch.setattr(deps, "obtener_advisees", lambda *a, **k: ["Otra Persona"])
+    monkeypatch.setattr(ca_router, "obtener_objetivos_persona", lambda nombre: [{"titulo": "Meta propia"}])
+    r = client.get("/api/objetivos", params={"nombre": user_session["persona"]})
+    assert r.status_code == 200
+    assert r.json() == {"objetivos": [{"titulo": "Meta propia"}]}
+
+
 def test_objetivos_delete_sin_nombre_da_400(client, as_session, user_session):
     """Ahora el borrado exige `nombre` para poder comprobar permisos."""
     as_session(user_session)

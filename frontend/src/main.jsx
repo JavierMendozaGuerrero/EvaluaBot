@@ -5333,10 +5333,15 @@ function EvaluacionAnualWizard({ token, advisee, onBack }) {
   const [area, setArea] = useState(null);
   const [input, setInput] = useState("");
   const [evidOpen, setEvidOpen] = useState(true);
-  const [finUrls, setFinUrls] = useState(null);
+  const [borr, setBorr] = useState(null);       // borrador editable del informe final
+  const [borrBusy, setBorrBusy] = useState(false);
+  const [borrSaved, setBorrSaved] = useState(false);
+  const [subiendo, setSubiendo] = useState(false);
+  const [subida, setSubida] = useState(null);   // respuesta de la subida (urls)
   const [descInfo, setDescInfo] = useState(false);
   const [infoOk, setInfoOk] = useState(false);
   const [citaSel, setCitaSel] = useState(null);  // cid de la cita abierta en el chat
+  const [resumenBusy, setResumenBusy] = useState(false); // sugerencia final del área
   const [resetting, setResetting] = useState(false);
   const [reloadNonce, setReloadNonce] = useState(0);
   const [plan, setPlan] = useState(null);        // plan de acción sugerido (texto)
@@ -5351,6 +5356,7 @@ function EvaluacionAnualWizard({ token, advisee, onBack }) {
         if (!alive) return;
         setEst(data);
         if (!data.identidadConfirmada) setStep("identidad");
+        else if (data.estado === "completada") setStep("borrador");
         else if (data.seccionesConfirmadas >= data.totalSecciones) setStep("resumen");
         else { const i = data.secciones.findIndex((s) => !s.confirmada); setSecIdx(i < 0 ? 0 : i); setStep("loop"); }
       })
@@ -5384,7 +5390,8 @@ function EvaluacionAnualWizard({ token, advisee, onBack }) {
     setBusy(true); setError("");
     try {
       const r = await apiRequest("/api/eval-anual/responder-area", { token, method: "POST", body: { evaluado: nombre, clave: area.clave, texto: input } });
-      setArea((a) => ({ ...a, conversacion: r.conversacion, propuesta: r.propuesta, diagnostico: r.diagnostico ?? a.diagnostico }));
+      // La conversación avanza → la sugerencia final anterior queda obsoleta (el backend la borra).
+      setArea((a) => ({ ...a, conversacion: r.conversacion, propuesta: r.propuesta, resumen: [] }));
       // El backend desconfirma el área si ya estaba confirmada (reabrir + editar la
       // deja pendiente de volver a confirmar) -- reflejamos eso al momento en el stepper.
       setEst((e) => e && ({
@@ -5393,6 +5400,16 @@ function EvaluacionAnualWizard({ token, advisee, onBack }) {
       }));
       setInput(""); setEvidOpen(false);
     } catch (e) { setError(e.message); } finally { setBusy(false); }
+  }
+
+  // Sugerencia final del área, criterio a criterio. SOLO bajo demanda (botón):
+  // no se genera al empezar a hablar ni al responder la IA.
+  async function pedirResumenFinal() {
+    setResumenBusy(true); setError("");
+    try {
+      const r = await apiRequest("/api/eval-anual/resumen-area", { token, method: "POST", body: { evaluado: nombre, clave: area.clave } });
+      setArea((a) => ({ ...a, resumen: r.resumen || [] }));
+    } catch (e) { setError(e.message); } finally { setResumenBusy(false); }
   }
 
   async function confirmarArea() {
@@ -5408,10 +5425,51 @@ function EvaluacionAnualWizard({ token, advisee, onBack }) {
   async function finalizar() {
     setBusy(true); setError("");
     try {
-      const r = await apiRequest("/api/eval-anual/finalizar", { token, method: "POST", body: { evaluado: nombre } });
-      setFinUrls({ html: r.htmlUrl, docx: r.docxUrl });
-      setStep("hecho");
+      await apiRequest("/api/eval-anual/finalizar", { token, method: "POST", body: { evaluado: nombre } });
+      setBorr(null); setSubida(null);   // fuerza la recarga del borrador recién (re)generado
+      setStep("borrador");
     } catch (e) { setError(e.message); } finally { setBusy(false); }
+  }
+
+  // Carga el borrador editable al entrar en el paso "borrador".
+  useEffect(() => {
+    if (step !== "borrador" || borr !== null) return;
+    apiRequest(`/api/eval-anual/borrador?evaluado=${encodeURIComponent(nombre)}`, { token })
+      .then((r) => setBorr(r.borrador))
+      .catch((e) => setError(e.message));
+  }, [step, borr, token, nombre]);
+
+  async function guardarBorrador() {
+    setBorrBusy(true); setError(""); setBorrSaved(false);
+    try {
+      const r = await apiRequest("/api/eval-anual/borrador-guardar", { token, method: "POST", body: { evaluado: nombre, borrador: borr } });
+      if (r.borrador) setBorr(r.borrador);
+      setBorrSaved(true);
+      setTimeout(() => setBorrSaved(false), 2600);
+    } catch (e) { setError(e.message); } finally { setBorrBusy(false); }
+  }
+
+  async function subirInformeFinal() {
+    if (!window.confirm(t("eaw.upload_confirm"))) return;
+    setSubiendo(true); setError("");
+    try {
+      const r = await apiRequest("/api/eval-anual/subir-borrador", { token, method: "POST", body: { evaluado: nombre, borrador: borr } });
+      setSubida(r);
+    } catch (e) { setError(e.message); } finally { setSubiendo(false); }
+  }
+
+  async function descargarDocxFinal(path) {
+    try {
+      const response = await fetch(apiUrl(path), { headers: { Authorization: `Bearer ${token}` } });
+      if (!response.ok) throw new Error(t("admin.err_download"));
+      const blob = await response.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `informe_final_${nombre.replace(/\s+/g, "_")}.docx`;
+      a.click();
+      URL.revokeObjectURL(url);
+    } catch (e) { setError(e.message); }
   }
 
   // Plan de acción sugerido (paso final): se genera al entrar en el resumen.
@@ -5440,10 +5498,6 @@ function EvaluacionAnualWizard({ token, advisee, onBack }) {
     } catch (e) { setError(e.message); } finally { setPlanBusy(false); }
   }
 
-  function abrirHtml(path) {
-    openAuthedFile(path, token);
-  }
-
   // Borra por completo la sesión (conversaciones, áreas confirmadas y borradores)
   // y vuelve a arrancar el asistente desde cero.
   async function eliminarYEmpezarDeCero() {
@@ -5451,7 +5505,7 @@ function EvaluacionAnualWizard({ token, advisee, onBack }) {
     setResetting(true); setError("");
     try {
       await apiRequest("/api/eval-anual/eliminar", { token, method: "POST", body: { evaluado: nombre } });
-      setEst(null); setArea(null); setInput(""); setFinUrls(null);
+      setEst(null); setArea(null); setInput(""); setBorr(null); setSubida(null);
       setSecIdx(0); setCitaSel(null); setStep("loading");
       setReloadNonce((n) => n + 1);
     } catch (e) {
@@ -5596,10 +5650,6 @@ function EvaluacionAnualWizard({ token, advisee, onBack }) {
           <summary style={{ cursor: "pointer", fontWeight: 700, fontSize: 14 }}>
             {t("eaw.criteria_panel")}{area.cargo ? ` · ${area.cargo}` : ""}
           </summary>
-          {/* El diagnóstico (nivel + gaps) solo aparece tras enviar tu opinión inicial. */}
-          {area.diagnostico && (
-            <p style={{ margin: "10px 0 0", whiteSpace: "pre-line", fontSize: 14 }}>{renderCitas(area.diagnostico)}</p>
-          )}
           {(area.criterios || []).map((c, i) => (
             <div key={i} style={{ marginTop: 10 }}>
               <p className="fine" style={{ margin: 0, fontWeight: 700 }}>{c.nivel}</p>
@@ -5608,7 +5658,7 @@ function EvaluacionAnualWizard({ token, advisee, onBack }) {
               </ul>
             </div>
           ))}
-          {(!area.criterios || area.criterios.length === 0) && !area.diagnostico && (
+          {(!area.criterios || area.criterios.length === 0) && (
             <p className="fine" style={{ margin: "10px 0 0" }}>{t("eaw.no_criteria_position")}</p>
           )}
         </details>
@@ -5663,14 +5713,47 @@ function EvaluacionAnualWizard({ token, advisee, onBack }) {
           placeholder={tieneConv ? t("eaw.ph_respond_ai") : t("eaw.ph_main_points")} />
         <div className="actions" style={{ marginTop: 10 }}>
           <button onClick={enviar} disabled={busy}>{busy ? t("eaw.sending") : tieneConv ? t("eaw.respond") : t("eaw.send_to_ai")}</button>
-          {tieneConv && (
-            <button className="secondary" onClick={confirmarArea} disabled={busy}>{t("eaw.confirm_area")}</button>
-          )}
         </div>
-        <div className="actions" style={{ marginTop: 10 }}>
+
+        {/* Sugerencia final del área: al final de la conversación y solo si el CA la pide. */}
+        {tieneConv && (
+          <div style={{ marginTop: 22, borderTop: "1px solid #e2e2dd", paddingTop: 16 }}>
+            {(area.resumen || []).length === 0 ? (
+              <>
+                <p className="fine" style={{ margin: "0 0 8px" }}>{t("eaw.final_summary_hint")}</p>
+                <button className="secondary" onClick={pedirResumenFinal} disabled={busy || resumenBusy}>
+                  {resumenBusy ? t("eaw.generating") : t("eaw.final_summary_btn")}
+                </button>
+              </>
+            ) : (
+              <>
+                <h3 style={{ margin: "0 0 4px" }}>{t("eaw.final_summary_title")}</h3>
+                <p className="fine" style={{ margin: "0 0 12px" }}>{t("eaw.final_summary_desc")}</p>
+                {area.resumen.map((r, i) => (
+                  <div key={i} className="card"
+                    style={{ marginBottom: 8, ...(r.evaluable ? {} : { borderLeft: "3px solid #d9a300", background: "#fffdf5" }) }}>
+                    <p style={{ margin: 0, fontWeight: 700, fontSize: 14 }}>{r.criterio}</p>
+                    <p className="fine" style={{ margin: "4px 0 0", whiteSpace: "pre-line", ...(r.evaluable ? {} : { color: "#8a6d00" }) }}>
+                      {r.evaluable ? renderCitas(r.valoracion) : r.valoracion}
+                    </p>
+                  </div>
+                ))}
+                <button className="secondary" onClick={pedirResumenFinal} disabled={busy || resumenBusy} style={{ marginTop: 4 }}>
+                  {resumenBusy ? t("eaw.generating") : t("eaw.final_summary_refresh")}
+                </button>
+              </>
+            )}
+          </div>
+        )}
+
+        {/* Navegación entre áreas: debajo de la sugerencia final. */}
+        <div className="actions" style={{ marginTop: 22 }}>
           <button className="secondary" onClick={() => setSecIdx((i) => i - 1)} disabled={busy || secIdx === 0}>
             {t("eaw.prev_area")}
           </button>
+          {tieneConv && (
+            <button className="secondary" onClick={confirmarArea} disabled={busy}>{t("eaw.confirm_area")}</button>
+          )}
         </div>
       </section>
     );
@@ -5730,14 +5813,152 @@ function EvaluacionAnualWizard({ token, advisee, onBack }) {
     );
   }
 
-  if (step === "hecho") {
+  if (step === "borrador") {
+    if (!borr) return shell(<p className="fine">{t("common.loading")}</p>);
+    const yy = `'${String(borr.anio).slice(-2)}`;
+    const yySig = `'${String(borr.anioSiguiente).slice(-2)}`;
+    const td = { border: "1px solid #101010", padding: "8px 10px", verticalAlign: "top", fontSize: 14 };
+    const tdLabel = { ...td, fontWeight: 700, background: "#f7f7f4", width: 140 };
+    const tabla = { width: "100%", borderCollapse: "collapse", marginBottom: 20 };
+    const secTitle = { fontSize: 13, textTransform: "uppercase", letterSpacing: ".08em", borderBottom: "2px solid #101010", paddingBottom: 6, margin: "26px 0 12px" };
+    const inCell = { width: "100%", border: "none", background: "transparent", padding: 0, margin: 0, minHeight: 0, height: "auto", fontSize: 14, outline: "none" };
+    const taCell = { ...inCell, resize: "vertical", fontFamily: "inherit", lineHeight: 1.45 };
+    const setDim = (clave, patch) => setBorr((b) => ({ ...b, dimensiones: b.dimensiones.map((d) => (d.clave === clave ? { ...d, ...patch } : d)) }));
+    const setRet = (k, v) => setBorr((b) => ({ ...b, retribucion: { ...b.retribucion, [k]: v } }));
+    const setRes = (k, v) => setBorr((b) => ({ ...b, resultadoEval: { ...b.resultadoEval, [k]: v } }));
+    const setObj = (i, patch) => setBorr((b) => ({ ...b, objetivos: b.objetivos.map((o, j) => (j === i ? { ...o, ...patch } : o)) }));
     return shell(
       <section className="panel">
-        <SavedOk text={t("eaw.draft_done")} color="#000" />
-        <p className="fine" style={{ textAlign: "center" }}>{t("eaw.draft_desc")}</p>
-        <div className="actions" style={{ marginTop: 16, justifyContent: "center" }}>
-          {finUrls?.html && <button onClick={() => abrirHtml(finUrls.html)}>{t("eaw.view_draft")}</button>}
-          <button className="secondary" onClick={onBack}>{t("auth.back_word")}</button>
+        <h2 style={{ marginTop: 0, textAlign: "center", textDecoration: "underline" }}>{t("anualdoc.title")}</h2>
+        <p className="fine" style={{ marginBottom: 18 }}>{t("eaw.draft_step_desc")}</p>
+
+        <table style={tabla}><tbody>
+          <tr>
+            <td style={tdLabel}>{t("anualdoc.employee")}</td><td style={td}>{borr.empleado}</td>
+            <td style={tdLabel}>{t("anualdoc.date")}</td><td style={td}>{borr.fecha}</td>
+          </tr>
+          <tr>
+            <td style={tdLabel}>{`CA ${yy}`}</td><td style={td}>{borr.caActual || "—"}</td>
+            <td style={tdLabel}>{t("anualdoc.current_position")}</td><td style={td}>{borr.cargo || "—"}</td>
+          </tr>
+          <tr>
+            <td style={tdLabel}>{`CA ${yySig}`}</td>
+            <td style={td}><input style={inCell} value={borr.caSiguiente} onChange={(e) => setBorr((b) => ({ ...b, caSiguiente: e.target.value }))} /></td>
+            <td style={tdLabel}>{t("anualdoc.current_salary")}</td>
+            <td style={td}><input style={inCell} value={borr.salarioActual} onChange={(e) => setBorr((b) => ({ ...b, salarioActual: e.target.value }))} /></td>
+          </tr>
+        </tbody></table>
+
+        <h3 style={secTitle}>{t("anualdoc.rating_year", { anio: borr.anio })}</h3>
+        <table style={tabla}>
+          <thead><tr>
+            <th style={{ ...tdLabel, width: 170 }}>{t("anualdoc.projects")}</th>
+            <th style={{ ...tdLabel, width: 60, textAlign: "center" }}>{t("anualdoc.score")}</th>
+            <th style={tdLabel}>{t("anualdoc.comments")}</th>
+          </tr></thead>
+          <tbody>
+            {borr.dimensiones.map((d) => (
+              <tr key={d.clave}>
+                <td style={{ ...td, fontWeight: 500 }}>{d.etiqueta}</td>
+                <td style={{ ...td, textAlign: "center" }}>
+                  <input style={{ ...inCell, textAlign: "center" }} value={d.nota} onChange={(e) => setDim(d.clave, { nota: e.target.value })} />
+                </td>
+                <td style={td}>
+                  <textarea rows={Math.max(3, (d.comentarios || "").split("\n").length)} style={taCell}
+                    value={d.comentarios} onChange={(e) => setDim(d.clave, { comentarios: e.target.value })} />
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+
+        <table style={tabla}><tbody>
+          <tr>
+            <td style={{ ...tdLabel, width: "34%" }}>{t("anualdoc.final_projects")}</td>
+            <td style={{ ...td, width: "12%" }}><input style={inCell} value={borr.retribucion.notaProyectos} onChange={(e) => setRet("notaProyectos", e.target.value)} /></td>
+            <td style={{ ...td, width: "20%" }}>{t("anualdoc.variable_60")}</td>
+            <td style={td}><input style={inCell} value={borr.retribucion.variable60} onChange={(e) => setRet("variable60", e.target.value)} /></td>
+          </tr>
+          <tr>
+            <td style={tdLabel}>{t("anualdoc.final_contrib")}</td>
+            <td style={td}><input style={inCell} value={borr.retribucion.notaContribucion} onChange={(e) => setRet("notaContribucion", e.target.value)} /></td>
+            <td style={td}>{t("anualdoc.variable")}</td>
+            <td style={td}><input style={inCell} value={borr.retribucion.variable} onChange={(e) => setRet("variable", e.target.value)} /></td>
+          </tr>
+          <tr>
+            <td style={tdLabel}>{t("anualdoc.corp_objectives")}</td>
+            <td style={td}><input style={inCell} value={borr.retribucion.objetivosCorporativos} onChange={(e) => setRet("objetivosCorporativos", e.target.value)} /></td>
+            <td style={{ ...td, fontWeight: 700 }}>{t("anualdoc.total_variable", { yy })}</td>
+            <td style={td}><input style={inCell} value={borr.retribucion.totalVariable} onChange={(e) => setRet("totalVariable", e.target.value)} /></td>
+          </tr>
+        </tbody></table>
+
+        <h3 style={secTitle}>{t("anualdoc.eval_result", { yy })}</h3>
+        <table style={tabla}><tbody>
+          <tr>
+            <td style={{ ...tdLabel, width: "18%" }}>{t("anualdoc.promotion")}</td>
+            <td style={{ ...td, width: "15%" }}><input style={inCell} value={borr.resultadoEval.promocion} onChange={(e) => setRes("promocion", e.target.value)} /></td>
+            <td style={{ ...tdLabel, width: "18%" }}>{t("anualdoc.position_next", { yy: yySig })}</td>
+            <td style={{ ...td, width: "15%" }}><input style={inCell} value={borr.resultadoEval.cargoSiguiente} onChange={(e) => setRes("cargoSiguiente", e.target.value)} /></td>
+            <td style={tdLabel}>{t("anualdoc.new_fixed_salary")}
+              <input style={{ ...inCell, fontWeight: 400, marginTop: 4 }} value={borr.resultadoEval.nuevoSalarioFijo} onChange={(e) => setRes("nuevoSalarioFijo", e.target.value)} />
+            </td>
+          </tr>
+        </tbody></table>
+
+        <h3 style={secTitle}>{t("anualdoc.improvement_objectives", { yy: yySig })}</h3>
+        <table style={tabla}>
+          <thead><tr>
+            <th style={tdLabel}></th>
+            <th style={{ ...tdLabel, width: 110, textAlign: "center" }}>{t("anualdoc.deadline")}</th>
+          </tr></thead>
+          <tbody>
+            {borr.objetivos.map((o, i) => (
+              <tr key={i}>
+                <td style={td}>
+                  <div style={{ display: "flex", gap: 6 }}>
+                    <span style={{ fontSize: 14 }}>{i + 1}.</span>
+                    <textarea rows={Math.max(1, (o.texto || "").split("\n").length)} style={taCell}
+                      value={o.texto} onChange={(e) => setObj(i, { texto: e.target.value })} />
+                  </div>
+                </td>
+                <td style={td}>
+                  <input style={{ ...inCell, textAlign: "center" }} value={o.deadline} onChange={(e) => setObj(i, { deadline: e.target.value })} />
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+        <button className="secondary" style={{ marginBottom: 20 }}
+          onClick={() => setBorr((b) => ({ ...b, objetivos: [...b.objetivos, { texto: "", deadline: "" }] }))}>
+          {t("eaw.add_objective")}
+        </button>
+
+        {subida && (
+          <div style={{ marginBottom: 16 }}>
+            <SavedOk text={t("eaw.uploaded_ok")} color="#000" />
+            <div className="actions" style={{ justifyContent: "center" }}>
+              {subida.htmlUrl && <button className="secondary" onClick={() => openAuthedFile(subida.htmlUrl, token)}>{t("dash.open_web_version")}</button>}
+              {subida.docxUrl && <button className="secondary" onClick={() => descargarDocxFinal(subida.docxUrl)}>{t("admin.download_word")}</button>}
+            </div>
+          </div>
+        )}
+
+        <div className="actions">
+          <button onClick={subirInformeFinal} disabled={subiendo || borrBusy}>
+            {subiendo ? t("eaw.uploading") : t("eaw.upload_final")}
+          </button>
+          <button className="secondary" onClick={guardarBorrador} disabled={borrBusy || subiendo}>
+            {borrBusy ? t("common.saving") : t("eaw.save_draft")}
+          </button>
+          {borrSaved && (
+            <span style={{ display: "inline-flex", alignItems: "center", gap: 6, color: "#166534" }}>
+              <DrawCheck size={20} color="#166534" /> {t("eaw.draft_saved")}
+            </span>
+          )}
+        </div>
+        <div className="actions" style={{ marginTop: 10 }}>
+          <button className="secondary" onClick={() => setStep("resumen")}>{t("eaw.back_to_areas")}</button>
         </div>
       </section>
     );

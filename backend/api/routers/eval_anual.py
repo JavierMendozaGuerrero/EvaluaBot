@@ -106,6 +106,15 @@ def eval_anual_responder_area(datos: dict = Body(default={}), session=Depends(re
     return eval_sesion.responder_area(evaluado, datos.get("clave", "").strip(), datos.get("texto", ""))
 
 
+@router.post("/api/eval-anual/resumen-area")
+def eval_anual_resumen_area(datos: dict = Body(default={}), session=Depends(require_session)):
+    """Sugerencia final del área (criterio a criterio), generada solo cuando el CA la pide."""
+    evaluado = _requiere_evaluado(datos.get("evaluado", ""), session)
+    if evaluado is None:
+        return JSONResponse({"error": "Falta el campo evaluado."}, status_code=400)
+    return eval_sesion.generar_resumen_area(evaluado, datos.get("clave", "").strip())
+
+
 @router.post("/api/eval-anual/confirmar-area")
 def eval_anual_confirmar_area(datos: dict = Body(default={}), session=Depends(require_session)):
     evaluado = _requiere_evaluado(datos.get("evaluado", ""), session)
@@ -128,6 +137,22 @@ def eval_anual_plan_guardar(datos: dict = Body(default={}), session=Depends(requ
     if evaluado is None:
         return JSONResponse({"error": "Falta el campo evaluado."}, status_code=400)
     return eval_sesion.guardar_plan_accion(evaluado, datos.get("texto", ""))
+
+
+@router.get("/api/eval-anual/borrador")
+def eval_anual_borrador(evaluado: str = "", session=Depends(require_session)):
+    evaluado = _requiere_evaluado(evaluado, session)
+    if evaluado is None:
+        return JSONResponse({"error": "Falta el parámetro evaluado."}, status_code=400)
+    return eval_sesion.obtener_borrador(evaluado)
+
+
+@router.post("/api/eval-anual/borrador-guardar")
+def eval_anual_borrador_guardar(datos: dict = Body(default={}), session=Depends(require_session)):
+    evaluado = _requiere_evaluado(datos.get("evaluado", ""), session)
+    if evaluado is None:
+        return JSONResponse({"error": "Falta el campo evaluado."}, status_code=400)
+    return eval_sesion.guardar_borrador(evaluado, datos.get("borrador") or {})
 
 
 @router.post("/api/eval-anual/finalizar")

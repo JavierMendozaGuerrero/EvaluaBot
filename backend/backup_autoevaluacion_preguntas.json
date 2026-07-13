@@ -1,0 +1,56 @@
+[
+  {
+    "page_id": "fc4a294d-76b3-8367-8093-81db991f9e6f",
+    "Texto": "Grau de satisfação consigo próprio",
+    "Categoria": "",
+    "Tipo": "escala_1_5",
+    "Opciones": "",
+    "Orden": 1,
+    "Idioma": "PT"
+  },
+  {
+    "page_id": "74ca294d-76b3-8300-b91e-01b0b1bf99a6",
+    "Texto": "Degree of satisfaction with yourself",
+    "Categoria": "",
+    "Tipo": "escala_1_5",
+    "Opciones": "",
+    "Orden": 1,
+    "Idioma": "EN"
+  },
+  {
+    "page_id": "19ea294d-76b3-821c-ba01-81ed6bba1c35",
+    "Texto": "Grado de satisfacción contigo mismo",
+    "Categoria": "",
+    "Tipo": "escala_1_5",
+    "Opciones": "",
+    "Orden": 1,
+    "Idioma": "ES"
+  },
+  {
+    "page_id": "d83a294d-76b3-837b-a6a9-819eed8ce916",
+    "Texto": "Justify your answer",
+    "Categoria": "",
+    "Tipo": "abierta",
+    "Opciones": "",
+    "Orden": 2,
+    "Idioma": "EN"
+  },
+  {
+    "page_id": "b21a294d-76b3-823a-b922-0154a4a980e1",
+    "Texto": "Justifica a tua resposta",
+    "Categoria": "",
+    "Tipo": "abierta",
+    "Opciones": "",
+    "Orden": 2,
+    "Idioma": "PT"
+  },
+  {
+    "page_id": "ddca294d-76b3-82b9-b316-01910fa2d7cf",
+    "Texto": "Justifica tu respuesta",
+    "Categoria": "",
+    "Tipo": "abierta",
+    "Opciones": "",
+    "Orden": 2,
+    "Idioma": "ES"
+  }
+]

@@ -2797,17 +2797,23 @@ function Dashboard({ token, user, onLogout, onNavigate, onBackToRoleSelect = nul
 
   useEffect(() => {
     if (isAdmin) return;
-    apiRequest("/api/evaluaciones-proyecto-activas", { token })
-      .then((d) => setProyectosActivos(d.proyectos || []))
+    // Cacheado (SWR): pinta al instante lo último conocido y revalida en segundo
+    // plano. Recorrer los proyectos de Notion tarda, así que evitamos el waterfall
+    // en cada remontaje del dashboard.
+    const applyActivos = (d) => setProyectosActivos(d.proyectos || []);
+    apiRequestCached("/api/evaluaciones-proyecto-activas", { token }, applyActivos)
+      .then(applyActivos)
       .catch(() => {});
-    apiRequest("/api/proyectos-manager", { token })
-      .then((d) => setProyectosManager(d.proyectos || []))
+    const applyManager = (d) => setProyectosManager(d.proyectos || []);
+    apiRequestCached("/api/proyectos-manager", { token }, applyManager)
+      .then(applyManager)
       .catch(() => setProyectosManager([]));
   }, [token, isAdmin, proyectosVersion]);
 
   useEffect(() => {
-    apiRequest("/api/evaluaciones-extra-pendientes", { token })
-      .then((d) => setEvaluacionesExtraPendientes(d.pendientes || []))
+    const apply = (d) => setEvaluacionesExtraPendientes(d.pendientes || []);
+    apiRequestCached("/api/evaluaciones-extra-pendientes", { token }, apply)
+      .then(apply)
       .catch(() => setEvaluacionesExtraPendientes([]));
   }, [token]);
 
@@ -2825,8 +2831,9 @@ function Dashboard({ token, user, onLogout, onNavigate, onBackToRoleSelect = nul
 
   useEffect(() => {
     if (isAdmin) { setTareasSlack({ pendientes: [], url: "" }); return; }
-    apiRequest("/api/tareas-slack", { token })
-      .then((d) => setTareasSlack({ pendientes: d.pendientes || [], url: d.slackUrl || "" }))
+    const apply = (d) => setTareasSlack({ pendientes: d.pendientes || [], url: d.slackUrl || "" });
+    apiRequestCached("/api/tareas-slack", { token }, apply)
+      .then(apply)
       .catch(() => {});
   }, [token, isAdmin]);
 
@@ -3325,7 +3332,7 @@ function Dashboard({ token, user, onLogout, onNavigate, onBackToRoleSelect = nul
                 {evalsRecibidas === null ? (
                   <p className="fine">{t("common.loading")}</p>
                 ) : evalsRecibidas.length === 0 ? (
-                  <p style={{ fontStyle: "italic", color: "var(--accent)", fontSize: 13, margin: 0 }}>{t("dash.received_empty")}</p>
+                  <p className="fine" style={{ fontStyle: "italic", paddingLeft: 14, margin: 0 }}>{t("dash.received_empty")}</p>
                 ) : (
                   <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
                     {evalsRecibidas.map((ev, i) => (
@@ -3579,52 +3586,60 @@ function SubirInformePage({ token, advisee, onBack }) {
         <a className="brand" href="/"><img src="/src/logo.png" alt="igeneris" className="brand-logo" /></a>
         <NavBack onBack={onBack} />
       </nav>
-      <section className="hero dashboard-hero">
-        <div>
-          {advisee.foto
-            ? <img src={advisee.foto} alt={advisee.nombre} className="objetivos-foto" />
-            : <div className="objetivos-foto objetivos-foto-placeholder">{advisee.nombre.charAt(0)}</div>
-          }
-          <p className="kicker">{t("dash.final_report")}</p>
-          <h1>{advisee.nombre}</h1>
-        </div>
-        {informeActual && (
-          <div className="panel" style={{ marginBottom: "24px" }}>
-            <h2>{t("subir.current_version")}</h2>
-            <p className="fine">{t("subir.current_desc")}</p>
-            <div className="actions">
-              {informeActual.htmlUrl && <button onClick={() => openFile(informeActual.htmlUrl, "informe_final.html")}>{t("dash.open_web_version")}</button>}
-              {informeActual.docxUrl && <button className="secondary" onClick={() => openFile(informeActual.docxUrl, "informe_final.docx")}>{t("admin.download_word")}</button>}
+      <div className="profile-wrap" style={{ flex: 1 }}>
+        <div className="dash-layout">
+
+          {/* LEFT — perfil del advisee (mismo panel que la página de advisee) */}
+          <aside className="dash-profile">
+            <p className="eyebrow" style={{ color: "var(--fg)", textAlign: "center", fontWeight: 500, margin: 0 }}>{t("ad.eyebrow")}</p>
+            <div className="profile-photo-wrap">
+              {advisee.foto
+                ? <img src={advisee.foto} alt={advisee.nombre} className="profile-photo" />
+                : <div className="profile-photo-placeholder">{advisee.nombre.charAt(0)}</div>
+              }
+              <div className="profile-id">
+                <h1 className="profile-name">{advisee.nombre}</h1>
+                {advisee.cargo && <p className="profile-cargo">{advisee.cargo}</p>}
+              </div>
             </div>
+          </aside>
+
+          {/* RIGHT — subir informe final + versión anterior */}
+          <div className="dash-main">
+            <section>
+              <h2 style={{ marginBottom: 8 }}>{t("subir.upload_final")}</h2>
+              <p className="fine" style={{ marginBottom: 24, maxWidth: 640 }}>{t("subir.upload_desc")}</p>
+
+              <form onSubmit={subir}>
+                <label>{t("subir.word_file")}</label>
+                <input
+                  type="file"
+                  accept=".doc,.docx,application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+                  onChange={(e) => setFile(e.target.files?.[0] || null)}
+                  required
+                />
+                {status && <p className={[t("subir.uploading"), t("subir.uploaded_ok")].includes(status) ? "fine" : "error"} style={{ marginTop: 8 }}>{status}</p>}
+                <div className="actions">
+                  <button type="submit" disabled={uploading || !file}>
+                    {uploading ? t("subir.uploading_btn") : t("subir.upload_btn")}
+                  </button>
+                </div>
+              </form>
+
+              {informeActual && (
+                <div style={{ marginTop: 36, borderTop: "1px solid var(--border)", paddingTop: 24 }}>
+                  <h2>{t("subir.current_version")}</h2>
+                  <p className="fine">{t("subir.current_desc")}</p>
+                  <div className="actions">
+                    {informeActual.htmlUrl && <button onClick={() => openFile(informeActual.htmlUrl, "informe_final.html")}>{t("dash.open_web_version")}</button>}
+                    {informeActual.docxUrl && <button className="secondary" onClick={() => openFile(informeActual.docxUrl, "informe_final.docx")}>{t("admin.download_word")}</button>}
+                  </div>
+                </div>
+              )}
+            </section>
           </div>
-        )}
-        <form className="panel" onSubmit={subir}>
-          <h2>{t("subir.upload_final")}</h2>
-          <p>{t("subir.upload_desc")}</p>
-          <label>{t("subir.word_file")}</label>
-          <input
-            type="file"
-            accept=".doc,.docx,application/vnd.openxmlformats-officedocument.wordprocessingml.document"
-            onChange={(e) => setFile(e.target.files?.[0] || null)}
-            required
-          />
-          {status && <p className={[t("subir.uploading"), t("subir.uploaded_ok")].includes(status) ? "fine" : "error"}>{status}</p>}
-          <div className="actions">
-            <button type="submit" disabled={uploading || !file}>
-              {uploading ? t("subir.uploading_btn") : t("subir.upload_btn")}
-            </button>
-          </div>
-        </form>
-      </section>
-      {links && (
-        <section className="result panel">
-          <h2>{t("subir.uploaded")}</h2>
-          <div className="actions">
-            {links.htmlUrl && <button onClick={() => openFile(links.htmlUrl, "informe_final.html")}>{t("dash.open_web_version")}</button>}
-            {links.docxUrl && <button className="secondary" onClick={() => openFile(links.docxUrl, "informe_final.docx")}>{t("admin.download_word")}</button>}
-          </div>
-        </section>
-      )}
+        </div>
+      </div>
       <Footer />
     </main>
   );
@@ -3677,7 +3692,7 @@ function AdviseeNavGroup({ label, open, onToggle, children }) {
           <polyline points="18 15 12 9 6 15" />
         </svg>
       </div>
-      {open && <div style={{ paddingTop: 4, paddingBottom: 14, paddingLeft: 16 }}>{children}</div>}
+      {open && <div className="advisee-nav-children" style={{ paddingTop: 4, paddingBottom: 14, paddingLeft: 16 }}>{children}</div>}
     </div>
   );
 }
@@ -4155,7 +4170,7 @@ function AdviseeDetail({ token, advisee, advisees, onBack, onNavigate }) {
                   <div className="advisee-gestion" style={{ border: "none", padding: 0 }}>
                     <AdviseeNavGroup label={t("ad.make_final")} open={realizarOpen} onToggle={() => setRealizarOpen((v) => !v)}>
                       <DashNavItem
-                        label={t("ad.with_claude")}
+                        label={<>{t("ad.with_claude")}<span style={{ fontStyle: "italic", fontWeight: 200, marginLeft: 8, fontSize: 11, color: "var(--text-55)" }}>— {t("ad.recommended")}</span></>}
                         onClick={() => onNavigate({ type: "eval-anual", advisee, advisees, from: "advisee-detail" })}
                         external
                       />
@@ -4175,17 +4190,28 @@ function AdviseeDetail({ token, advisee, advisees, onBack, onNavigate }) {
                       onClick={() => onNavigate({ type: "subir-informe", advisee, from: "advisee-detail", advisees })}
                       external
                     />
-                    <DashNavItem
-                      label={togglingAccesoIndividual ? t("common.saving") : accesoIndividual ? t("ad.access_active_revoke") : t("ad.give_access")}
-                      onClick={toggleAccesoIndividual}
-                      disabled={togglingAccesoIndividual}
-                    />
+                    <div style={{ display: "flex", alignItems: "center", marginTop: 8 }}>
+                      <span className="dash-dot" />
+                      <button
+                        className="secondary"
+                        onClick={toggleAccesoIndividual}
+                        disabled={togglingAccesoIndividual}
+                        style={{ height: 30, minHeight: "auto", padding: "0 14px", fontSize: 12 }}
+                      >
+                        {togglingAccesoIndividual
+                          ? t("common.saving")
+                          : accesoIndividual
+                          ? t("ad.access_active_revoke")
+                          : t("ad.give_access")}
+                      </button>
+                    </div>
                   </div>
                 </AdviseeNavGroup>
 
                 <DashNavItem
                   label={t("ad.meetings_log")}
                   onClick={() => onNavigate({ type: "registro-comentarios", advisee, advisees, from: "advisee-detail" })}
+                  external
                 />
               </nav>
             </section>
@@ -4245,7 +4271,12 @@ function PlanAccionPage({ token, advisee, advisees, onBack, onNavigate }) {
   const [editando, setEditando] = useState(false);
   const [borrador, setBorrador] = useState("");
   const [busy, setBusy] = useState(false);
+  const [generando, setGenerando] = useState(false);
   const [error, setError] = useState("");
+  const [chatOpen, setChatOpen] = useState(false);
+  const [chatMsgs, setChatMsgs] = useState([]);   // {rol, texto}
+  const [chatInput, setChatInput] = useState("");
+  const [chatBusy, setChatBusy] = useState(false);
 
   useEffect(() => {
     apiRequest(`/api/eval-anual/plan-guardado?evaluado=${encodeURIComponent(advisee.nombre)}`, { token })
@@ -4253,10 +4284,46 @@ function PlanAccionPage({ token, advisee, advisees, onBack, onNavigate }) {
       .catch(() => setPlan(""));
   }, [token, advisee.nombre]);
 
-  function empezarEdicion(desdeCero) {
-    setBorrador(desdeCero ? "" : (plan || ""));
+  // Chat de dudas (Haiku) sobre el plan y las evaluaciones del advisee.
+  async function preguntar(e) {
+    e.preventDefault();
+    const q = chatInput.trim();
+    if (!q || chatBusy) return;
+    const nuevos = [...chatMsgs, { rol: "user", texto: q }];
+    setChatMsgs(nuevos);
+    setChatInput("");
+    setChatBusy(true);
+    try {
+      const r = await apiRequest("/api/eval-anual/plan-chat", {
+        token, method: "POST", body: { evaluado: advisee.nombre, mensajes: nuevos },
+      });
+      setChatMsgs([...nuevos, { rol: "assistant", texto: r.respuesta || "—" }]);
+    } catch (err) {
+      setChatMsgs([...nuevos, { rol: "assistant", texto: err.message }]);
+    } finally {
+      setChatBusy(false);
+    }
+  }
+
+  function editar() {
+    setBorrador(plan || "");
     setError("");
     setEditando(true);
+  }
+
+  // Genera un plan nuevo con Claude (la parte de plan de acción del informe final,
+  // sin recorrer todo el asistente) y entra en edición con el resultado.
+  async function crearNuevo() {
+    setGenerando(true); setError("");
+    try {
+      const r = await apiRequest(`/api/eval-anual/plan?evaluado=${encodeURIComponent(advisee.nombre)}&forzar=1`, { token });
+      setBorrador(r.plan || "");
+      setEditando(true);
+    } catch (e) {
+      setError(e.message);
+    } finally {
+      setGenerando(false);
+    }
   }
 
   async function guardar() {
@@ -4271,6 +4338,36 @@ function PlanAccionPage({ token, advisee, advisees, onBack, onNavigate }) {
       setBusy(false);
     }
   }
+
+  // Botón para abrir/cerrar el chat de dudas (disponible tanto viendo como editando el plan).
+  const botonDudas = (
+    <button className="secondary" type="button" onClick={() => setChatOpen((v) => !v)}>
+      {chatOpen ? t("adplan.ask_close") : t("adplan.ask")}
+    </button>
+  );
+
+  const panelDudas = chatOpen && (
+    <div style={{ marginTop: 20, border: "1px solid var(--border)", borderRadius: "var(--radius-lg)", overflow: "hidden", maxWidth: 720 }}>
+      <div style={{ padding: "16px", display: "flex", flexDirection: "column", gap: 12, maxHeight: 360, overflowY: "auto" }}>
+        {chatMsgs.length === 0 && <p className="fine" style={{ margin: 0 }}>{t("adplan.chat_intro")}</p>}
+        {chatMsgs.map((m, i) => (
+          <div key={i} style={{ alignSelf: m.rol === "user" ? "flex-end" : "flex-start", maxWidth: "88%" }}>
+            <div className={m.rol === "user" ? "chat-bubble-user" : "chat-bubble-bot"} style={{ whiteSpace: "pre-wrap" }}>{m.texto}</div>
+          </div>
+        ))}
+        {chatBusy && <p className="fine" style={{ margin: 0 }}>{t("adplan.chat_thinking")}</p>}
+      </div>
+      <form onSubmit={preguntar} style={{ display: "flex", gap: 8, borderTop: "1px solid var(--border)", padding: 10, background: "var(--bg)" }}>
+        <input
+          className="chat-input"
+          value={chatInput}
+          onChange={(e) => setChatInput(e.target.value)}
+          placeholder={t("adplan.chat_placeholder")}
+        />
+        <button type="submit" disabled={chatBusy || !chatInput.trim()}>{t("adplan.chat_send")}</button>
+      </form>
+    </div>
+  );
 
   return (
     <main className="page">
@@ -4299,11 +4396,16 @@ function PlanAccionPage({ token, advisee, advisees, onBack, onNavigate }) {
           {/* RIGHT — plan de acción */}
           <div className="dash-main">
             <section>
-              <h1 style={{ marginBottom: 8 }}>{t("adplan.page_title")}</h1>
+              <h2 style={{ marginBottom: 8 }}>{t("adplan.page_title")}</h2>
               <p className="fine" style={{ marginBottom: 24, maxWidth: 640 }}>{t("adplan.page_desc")}</p>
 
               {plan === null ? (
                 <p className="fine">{t("common.loading")}</p>
+              ) : generando ? (
+                <div style={{ display: "flex", alignItems: "center", gap: 12, paddingTop: 8 }}>
+                  <span className="spinner" style={{ width: 18, height: 18, border: "2px solid var(--border)", borderTopColor: "var(--accent)", borderRadius: "50%", display: "inline-block", animation: "spin 0.8s linear infinite" }} />
+                  <p className="fine" style={{ margin: 0 }}>{t("adplan.generating")}</p>
+                </div>
               ) : editando ? (
                 <>
                   <textarea
@@ -4322,17 +4424,23 @@ function PlanAccionPage({ token, advisee, advisees, onBack, onNavigate }) {
                     <button className="secondary" onClick={() => setEditando(false)} disabled={busy}>
                       {t("common.cancel")}
                     </button>
+                    {botonDudas}
                   </div>
+                  {panelDudas}
                 </>
               ) : plan ? (
                 <>
                   <div style={{ border: "1px solid var(--border)", borderRadius: "var(--radius-lg)", padding: "18px 20px", background: "var(--bg)", whiteSpace: "pre-wrap", fontSize: 15, lineHeight: 1.6, color: "#000" }}>
                     {plan}
                   </div>
+                  <p className="fine" style={{ marginTop: 10, maxWidth: 640 }}>{t("adplan.source_note")}</p>
                   <div className="actions">
-                    <button onClick={() => empezarEdicion(false)}>{t("adplan.edit")}</button>
-                    <button className="secondary" onClick={() => empezarEdicion(true)}>{t("adplan.create_new")}</button>
+                    <button onClick={editar}>{t("adplan.edit")}</button>
+                    <button className="secondary" onClick={crearNuevo}>{t("adplan.create_new")}</button>
+                    {botonDudas}
                   </div>
+                  {panelDudas}
+                  {error && <p className="error" style={{ marginTop: 12 }}>{error}</p>}
                 </>
               ) : (
                 <>
@@ -4340,8 +4448,9 @@ function PlanAccionPage({ token, advisee, advisees, onBack, onNavigate }) {
                     {t("adplan.none", { nombre: advisee.nombre })}
                   </p>
                   <div className="actions">
-                    <button onClick={() => empezarEdicion(true)}>{t("adplan.create_new")}</button>
+                    <button onClick={crearNuevo}>{t("adplan.create_new")}</button>
                   </div>
+                  {error && <p className="error" style={{ marginTop: 12 }}>{error}</p>}
                 </>
               )}
             </section>

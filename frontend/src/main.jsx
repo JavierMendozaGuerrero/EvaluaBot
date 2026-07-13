@@ -3,13 +3,13 @@ import { createRoot } from "react-dom/client";
 import "./styles/globals.css";
 import "./styles/components.css";
 import "./styles.css";
-import privacidadMd from "./legal/privacidad.md?raw";
-import terminosMd from "./legal/terminos.md?raw";
 import { t, setLang, setLangManual, getLang, subscribeLang, nombreMes } from "./i18n";
 
+// El texto de cada documento legal se carga bajo demanda (import dinámico) al abrir
+// la página, para no arrastrar el markdown en el bundle inicial.
 const LEGAL_DOCS = {
-  privacidad: { titulo: "Política de privacidad", texto: privacidadMd },
-  terminos: { titulo: "Términos y condiciones", texto: terminosMd },
+  privacidad: { titulo: "Política de privacidad", load: () => import("./legal/privacidad.md?raw") },
+  terminos: { titulo: "Términos y condiciones", load: () => import("./legal/terminos.md?raw") },
 };
 
 function getLegalDoc() {
@@ -469,7 +469,18 @@ function NavBack({ onBack, style }) {
 
 function LegalPage({ doc, onBack }) {
   const data = LEGAL_DOCS[doc];
+  const [texto, setTexto] = useState(null);
   useEffect(() => { window.scrollTo(0, 0); }, [doc]);
+  useEffect(() => {
+    let vivo = true;
+    setTexto(null);
+    if (data) {
+      data.load()
+        .then((m) => { if (vivo) setTexto(m.default); })
+        .catch(() => { if (vivo) setTexto(""); });
+    }
+    return () => { vivo = false; };
+  }, [doc]);
   return (
     <main className="page">
       <nav className="nav">
@@ -477,7 +488,9 @@ function LegalPage({ doc, onBack }) {
         <NavBack onBack={onBack} />
       </nav>
       <div className="legal-wrap">
-        {data ? <LegalContent texto={data.texto} /> : <p>{t("legal.unavailable")}</p>}
+        {!data ? <p>{t("legal.unavailable")}</p>
+          : texto == null ? <SkeletonForm rows={8} />
+          : <LegalContent texto={texto} />}
       </div>
       <Footer />
     </main>
@@ -1280,7 +1293,7 @@ function AuthScreen({ onLogin }) {
         setMode("login");
         setMessage(t("auth.pw_updated"));
       } else {
-        const data = await apiRequest("/api/login", { method: "POST", body: form });
+        const data = await apiRequest("/api/login", { method: "POST", body: { ...form, remember: rememberMe } });
         if (rememberMe) {
           localStorage.setItem("evaluabot_token", data.token);
           sessionStorage.removeItem("evaluabot_token");
@@ -2672,6 +2685,24 @@ function Dashboard({ token, user, onLogout, onNavigate, onBackToRoleSelect = nul
   const [tareasProyecto, setTareasProyecto] = useState([]);
   const [tareasSlack, setTareasSlack] = useState({ pendientes: [], url: "" });
   const [evaluacionesExtraPendientes, setEvaluacionesExtraPendientes] = useState([]);
+  // Evaluaciones de proyecto RECIBIDAS y liberadas para la persona (solo top-to-bottom,
+  // de alguien por encima en la jerarquía de empresa). Las bottom-to-top nunca llegan aquí.
+  const [evalsRecibidas, setEvalsRecibidas] = useState(null);
+
+  useEffect(() => {
+    if (isAdmin) { setEvalsRecibidas([]); return; }
+    let cancelado = false;
+    // Cacheado en sessionStorage: pinta al instante lo último conocido y refresca
+    // en segundo plano (recorrer los proyectos de Notion tarda).
+    apiRequestCached(
+      "/api/mis-evaluaciones-proyecto-recibidas",
+      { token },
+      (fresh) => { if (!cancelado) setEvalsRecibidas(fresh.evaluaciones || []); },
+    )
+      .then((d) => { if (!cancelado) setEvalsRecibidas(d.evaluaciones || []); })
+      .catch(() => { if (!cancelado) setEvalsRecibidas([]); });
+    return () => { cancelado = true; };
+  }, [token, isAdmin]);
 
   useEffect(() => {
     const apply = (data) => { setEvaluados(data.evaluados || []); setEvaluado(data.evaluados?.[0]?.value || ""); };
@@ -2801,7 +2832,6 @@ function Dashboard({ token, user, onLogout, onNavigate, onBackToRoleSelect = nul
 
   useEffect(() => {
     if (isAdmin || !proyectosActivos.length) { setProyectosProgreso({}); setTareasProyecto([]); return; }
-    const persona = user?.persona || user?.username || "";
     let cancelado = false;
     // Una sola petición: el servidor devuelve equipo + evals completadas de cada proyecto
     // activo (antes eran 1 + 2N peticiones en cascada desde el navegador).
@@ -2814,12 +2844,13 @@ function Dashboard({ token, user, onLogout, onNavigate, onBackToRoleSelect = nul
         const progreso = {};
         const tareas = [];
         (data.proyectos || []).forEach((p) => {
-          const equipo = p.equipo || [];
           const completadasKeys = (p.completadas || []).map((c) => `${c.tipo}:${norm(c.evaluado)}`);
-          const lista = construirEvaluacionesProyectoAHacer(persona, p.activado_por || "", equipo);
+          // La lista de evaluaciones a hacer viene calculada del servidor por
+          // JERARQUÍA DE EMPRESA (cargo en Notion), no por rol en el proyecto.
+          const lista = p.a_hacer || [];
           const pendientes = lista
             .filter((it) => !completadasKeys.includes(`${it.tipo}:${norm(it.evaluado)}`))
-            .map((it) => ({ proyecto: p.nombre_proyecto, tipo: it.tipo, evaluado: it.evaluado, label: it.label, fecha_limite: p.fecha_limite || "" }));
+            .map((it) => ({ proyecto: p.nombre_proyecto, tipo: it.tipo, evaluado: it.evaluado, label: labelEvaluacionProyecto(it.tipo, it.evaluado), fecha_limite: p.fecha_limite || "" }));
           progreso[p.nombre_proyecto] = { done: lista.length - pendientes.length, total: lista.length };
           pendientes.forEach((it) => tareas.push(it));
         });
@@ -3287,6 +3318,35 @@ function Dashboard({ token, user, onLogout, onNavigate, onBackToRoleSelect = nul
                 <p style={{ fontStyle: "italic", color: "var(--text-55)", fontSize: 13, margin: 0, paddingLeft: 16 }}>{t("dash.no_reports")}</p>
               )}
             </div>
+            {/* ── EVALUACIONES DE PROYECTO RECIBIDAS (solo top-to-bottom liberadas) ── */}
+            {!isAdmin && (
+              <div>
+                <p className="eyebrow" style={{ margin: "0 0 6px", fontSize: "0.7rem" }}>{t("dash.received_evals")}</p>
+                {evalsRecibidas === null ? (
+                  <p className="fine">{t("common.loading")}</p>
+                ) : evalsRecibidas.length === 0 ? (
+                  <p style={{ fontStyle: "italic", color: "var(--accent)", fontSize: 13, margin: 0 }}>{t("dash.received_empty")}</p>
+                ) : (
+                  <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+                    {evalsRecibidas.map((ev, i) => (
+                      <div
+                        key={ev.page_id || ev.url || i}
+                        role="button"
+                        tabIndex={0}
+                        onClick={() => onNavigate({ type: "detalle-evaluacion-realizada", ev: { ...ev, evaluado: ev.evaluador }, proyecto: ev.proyecto })}
+                        style={{ display: "flex", flexDirection: "column", gap: 1, fontSize: 12.5, color: "#000", cursor: "pointer" }}
+                      >
+                        <span style={{ fontWeight: 400 }}>
+                          <span style={{ display: "inline-block", width: 4, height: 4, borderRadius: "50%", background: "var(--accent)", marginRight: 10, verticalAlign: "middle" }} />
+                          {ev.proyecto}{ev.evaluador ? ` · ${ev.evaluador}` : ""}
+                        </span>
+                        {ev.fecha && <span style={{ fontSize: 11, color: "rgba(0,0,0,.5)", marginLeft: 14 }}>{ev.fecha}</span>}
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
             {/* ── PROYECTOS TERMINADOS ── */}
             {!isAdmin && (
               <>
@@ -4094,56 +4154,32 @@ function AdviseeDetail({ token, advisee, advisees, onBack, onNavigate }) {
                 <AdviseeNavGroup label={t("ad.manage_report")} open={gestionOpen} onToggle={() => setGestionOpen((v) => !v)}>
                   <div className="advisee-gestion" style={{ border: "none", padding: 0 }}>
                     <AdviseeNavGroup label={t("ad.make_final")} open={realizarOpen} onToggle={() => setRealizarOpen((v) => !v)}>
-                      <div className="opiniones-doc-opciones">
-                        <button className="secondary" onClick={() => onNavigate({ type: "eval-anual", advisee, advisees, from: "advisee-detail" })}>
-                          {t("ad.with_claude")}
-                        </button>
-                        <button className="secondary" onClick={() => setManualOpen((v) => !v)}>
-                          {manualOpen ? t("ad.close_manual") : t("ad.manual")}
-                        </button>
-                        {manualOpen && (
-                          <div className="opiniones-doc-opciones">
-                            <button className="secondary" disabled={!!generandoFuente}
-                              onClick={() => descargarFuentePdf("/api/generar-opiniones-ca", "opiniones")}>
-                              {generandoFuente === "/api/generar-opiniones-ca" ? t("ad.generating") : t("ad.dl_opinions")}
-                            </button>
-                            <button className="secondary" disabled={!!generandoFuente}
-                              onClick={() => descargarFuentePdf("/api/generar-pdf-evals-proyecto", "evals_proyecto")}>
-                              {generandoFuente === "/api/generar-pdf-evals-proyecto" ? t("ad.generating") : t("ad.dl_proj_evals")}
-                            </button>
-                            <button className="secondary" disabled={!!generandoFuente}
-                              onClick={() => descargarFuentePdf("/api/generar-pdf-seguimiento", "seguimiento_personal")}>
-                              {generandoFuente === "/api/generar-pdf-seguimiento" ? t("ad.generating") : t("ad.dl_personal_tracking")}
-                            </button>
-                            <button className="secondary" disabled={!!generandoFuente}
-                              onClick={() => descargarFuentePdf("/api/generar-pdf-evals-mensuales", "evals_mensuales")}>
-                              {generandoFuente === "/api/generar-pdf-evals-mensuales" ? t("ad.generating") : t("ad.dl_monthly_evals")}
-                            </button>
-                            {tieneEvaluacionesExtra && (
-                              <button className="secondary" disabled={!!generandoFuente}
-                                onClick={() => descargarFuentePdf("/api/generar-pdf-evals-extra", "evals_extra")}>
-                                {generandoFuente === "/api/generar-pdf-evals-extra" ? t("ad.generating") : t("ad.dl_extra_evals")}
-                              </button>
-                            )}
-                            {fuenteError && <p className="form-error">{fuenteError}</p>}
-                          </div>
+                      <DashNavItem
+                        label={t("ad.with_claude")}
+                        onClick={() => onNavigate({ type: "eval-anual", advisee, advisees, from: "advisee-detail" })}
+                        external
+                      />
+                      <AdviseeNavGroup label={t("ad.manual")} open={manualOpen} onToggle={() => setManualOpen((v) => !v)}>
+                        <DashNavItem label={generandoFuente === "/api/generar-opiniones-ca" ? t("ad.generating") : t("ad.dl_opinions")} onClick={() => descargarFuentePdf("/api/generar-opiniones-ca", "opiniones")} disabled={!!generandoFuente} download />
+                        <DashNavItem label={generandoFuente === "/api/generar-pdf-evals-proyecto" ? t("ad.generating") : t("ad.dl_proj_evals")} onClick={() => descargarFuentePdf("/api/generar-pdf-evals-proyecto", "evals_proyecto")} disabled={!!generandoFuente} download />
+                        <DashNavItem label={generandoFuente === "/api/generar-pdf-seguimiento" ? t("ad.generating") : t("ad.dl_personal_tracking")} onClick={() => descargarFuentePdf("/api/generar-pdf-seguimiento", "seguimiento_personal")} disabled={!!generandoFuente} download />
+                        <DashNavItem label={generandoFuente === "/api/generar-pdf-evals-mensuales" ? t("ad.generating") : t("ad.dl_monthly_evals")} onClick={() => descargarFuentePdf("/api/generar-pdf-evals-mensuales", "evals_mensuales")} disabled={!!generandoFuente} download />
+                        {tieneEvaluacionesExtra && (
+                          <DashNavItem label={generandoFuente === "/api/generar-pdf-evals-extra" ? t("ad.generating") : t("ad.dl_extra_evals")} onClick={() => descargarFuentePdf("/api/generar-pdf-evals-extra", "evals_extra")} disabled={!!generandoFuente} download />
                         )}
-                      </div>
+                        {fuenteError && <p className="form-error">{fuenteError}</p>}
+                      </AdviseeNavGroup>
                     </AdviseeNavGroup>
-                    <button className="secondary" onClick={() => onNavigate({ type: "subir-informe", advisee, from: "advisee-detail", advisees })}>
-                      {t("ad.upload_final")}
-                    </button>
-                    <button
-                      className={accesoIndividual ? "" : "secondary"}
+                    <DashNavItem
+                      label={t("ad.upload_final")}
+                      onClick={() => onNavigate({ type: "subir-informe", advisee, from: "advisee-detail", advisees })}
+                      external
+                    />
+                    <DashNavItem
+                      label={togglingAccesoIndividual ? t("common.saving") : accesoIndividual ? t("ad.access_active_revoke") : t("ad.give_access")}
                       onClick={toggleAccesoIndividual}
                       disabled={togglingAccesoIndividual}
-                    >
-                      {togglingAccesoIndividual
-                        ? t("common.saving")
-                        : accesoIndividual
-                        ? t("ad.access_active_revoke")
-                        : t("ad.give_access")}
-                    </button>
+                    />
                   </div>
                 </AdviseeNavGroup>
 
@@ -4820,26 +4856,22 @@ const TIPOS_EVAL_INFO = [
   { tipo: "manager_a_miembros", label: "Evaluación de managers a miembros del equipo", desc: "Evalúa el desempeño de un miembro de tu equipo." },
 ];
 
-function construirEvaluacionesProyectoAHacer(persona, managerDelProyecto, equipo) {
-  if (!equipo.length) return [];
-  const personaNorm = persona.toLowerCase().trim();
-  const managerNorm = managerDelProyecto.toLowerCase().trim();
-  const esManager = personaNorm === managerNorm;
-  const lista = [{ tipo: "autoevaluacion", evaluado: persona, label: "Autoevaluación" }];
-  if (esManager) {
-    equipo.filter((m) => m.toLowerCase().trim() !== managerNorm)
-      .forEach((m) => lista.push({ tipo: "manager_a_miembros", evaluado: m, label: `Evaluación a miembro — ${m}` }));
-  } else {
-    lista.push({ tipo: "miembros_a_manager", evaluado: managerDelProyecto, label: `Evaluación al responsable — ${managerDelProyecto}` });
-    equipo.filter((m) => m.toLowerCase().trim() !== personaNorm && m.toLowerCase().trim() !== managerNorm)
-      .forEach((m) => lista.push({ tipo: "mismos_miembros", evaluado: m, label: `Evaluación a compañero — ${m}` }));
-  }
-  return lista;
+// La lista de evaluaciones a hacer (y su tipo de plantilla) la decide el SERVIDOR
+// por jerarquía de empresa (GET /api/evaluaciones-proyecto-a-hacer y el campo
+// `a_hacer` de /api/proyectos-progreso). Aquí solo se construye la etiqueta visible.
+function labelEvaluacionProyecto(tipo, evaluado) {
+  if (tipo === "autoevaluacion") return t("fep.label_auto");
+  const base = tipo === "miembros_a_manager"
+    ? t("fep.label_manager")
+    : tipo === "mismos_miembros"
+      ? t("fep.label_peer")
+      : t("fep.label_member");
+  return `${base} — ${evaluado}`;
 }
 
 function EvaluacionesProyectoPage({ token, user, proyectos, onBack, onNavigate, completedEvals = {}, initialProyecto }) {
   const [proyectoSeleccionado, setProyectoSeleccionado] = useState(initialProyecto || proyectos[0]?.nombre_proyecto || "");
-  const [equipo, setEquipo] = useState([]);
+  const [evaluacionesAHacer, setEvaluacionesAHacer] = useState([]);
   const [loadingEquipo, setLoadingEquipo] = useState(false);
   const [completadasNotion, setCompletadasNotion] = useState([]);
   const [progresoProyectos, setProgresoProyectos] = useState({});
@@ -4851,11 +4883,13 @@ function EvaluacionesProyectoPage({ token, user, proyectos, onBack, onNavigate, 
     setLoadingEquipo(true);
     setCompletadasNotion([]);
     Promise.all([
-      apiRequest(`/api/equipo-proyecto?proyecto=${encodeURIComponent(proyectoSeleccionado)}`, { token }),
+      // El servidor decide qué evaluación corresponde a cada compañero según la
+      // JERARQUÍA DE EMPRESA (cargo en Notion), no según el rol en el proyecto.
+      apiRequest(`/api/evaluaciones-proyecto-a-hacer?proyecto=${encodeURIComponent(proyectoSeleccionado)}`, { token }),
       apiRequest(`/api/evaluaciones-proyecto-completadas?proyecto=${encodeURIComponent(proyectoSeleccionado)}`, { token }),
     ])
-      .then(([equipoData, completadasData]) => {
-        setEquipo(equipoData.empleados || []);
+      .then(([aHacerData, completadasData]) => {
+        setEvaluacionesAHacer(aHacerData.evaluaciones || []);
         setCompletadasNotion((completadasData.completadas || []).map((c) => `${c.tipo}:${c.evaluado}`));
       })
       .catch(() => {})
@@ -4872,9 +4906,8 @@ function EvaluacionesProyectoPage({ token, user, proyectos, onBack, onNavigate, 
         const norm = (s) => (s || "").normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase().trim();
         const prog = {};
         (data.proyectos || []).forEach((p) => {
-          const equipo = p.equipo || [];
           const hechas = (p.completadas || []).map((c) => `${c.tipo}:${norm(c.evaluado)}`);
-          const lista = construirEvaluacionesProyectoAHacer(persona, p.activado_por || "", equipo);
+          const lista = p.a_hacer || [];
           const done = lista.filter((it) => hechas.includes(`${it.tipo}:${norm(it.evaluado)}`)).length;
           prog[p.nombre_proyecto] = { done, total: lista.length };
         });
@@ -4884,17 +4917,12 @@ function EvaluacionesProyectoPage({ token, user, proyectos, onBack, onNavigate, 
     return () => { cancelado = true; };
   }, [token, persona]);
 
-  const evaluacionesAHacer = useMemo(
-    () => construirEvaluacionesProyectoAHacer(persona, managerDelProyecto, equipo),
-    [equipo, persona, managerDelProyecto]
-  );
-
-  const items = evaluacionesAHacer.map(({ tipo, evaluado, label }) => {
+  const items = evaluacionesAHacer.map(({ tipo, evaluado, relacion }) => {
     const evalKey = `${tipo}:${evaluado}`;
     const completado =
       (completedEvals[proyectoSeleccionado] || []).includes(evalKey) ||
       completadasNotion.includes(evalKey);
-    return { tipo, evaluado, label, evalKey, completado };
+    return { tipo, evaluado, relacion, evalKey, completado };
   });
   const totalEvals = items.length;
   const doneEvals = items.filter((i) => i.completado).length;
@@ -4920,7 +4948,7 @@ function EvaluacionesProyectoPage({ token, user, proyectos, onBack, onNavigate, 
   }, [progresoProyectos, proyectoSeleccionado]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const abrirFormulario = (it) =>
-    onNavigate({ type: "formulario-evaluacion-proyecto", proyecto: proyectoSeleccionado, tipo: it.tipo, evaluado: it.evaluado, manager: managerDelProyecto, proyectos });
+    onNavigate({ type: "formulario-evaluacion-proyecto", proyecto: proyectoSeleccionado, tipo: it.tipo, evaluado: it.evaluado, relacion: it.relacion, manager: managerDelProyecto, proyectos });
   const abrirHistorial = (it) =>
     onNavigate({ type: "historial-evaluaciones", evaluado: it.evaluado, evaluador: persona, proyecto: proyectoSeleccionado, from: "evaluaciones-proyecto", proyectos });
 
@@ -5023,9 +5051,11 @@ function EvaluacionesProyectoPage({ token, user, proyectos, onBack, onNavigate, 
 // Formulario de evaluación de proyecto
 // ---------------------------------------------------------------------------
 
-function FormularioEvaluacionProyecto({ token, user, proyecto, tipo, manager, evaluadoProp, onBack, onEnviado }) {
+function FormularioEvaluacionProyecto({ token, user, proyecto, tipo, manager, evaluadoProp, relacion = "", onBack, onEnviado }) {
   const persona = user?.persona || user?.username || "";
-  const draftKey = `evaluabot_borrador:${persona}:${proyecto}:${tipo}`;
+  // La clave incluye al evaluado: sin él, los borradores de dos compañeros distintos
+  // del mismo tipo se pisaban entre sí.
+  const draftKey = `evaluabot_borrador:${persona}:${proyecto}:${tipo}:${evaluadoProp || ""}`;
 
   // Lee el borrador guardado una sola vez, en el primer render, para inicializar
   // el estado directamente (evita carreras con los efectos de autoguardado).
@@ -5050,6 +5080,15 @@ function FormularioEvaluacionProyecto({ token, user, proyecto, tipo, manager, ev
   const [enviado, setEnviado] = useState(false);
   const [borradorMsg, setBorradorMsg] = useState("");
   const [borradorRestaurado, setBorradorRestaurado] = useState(Boolean(borradorInicial));
+  const [confirmando, setConfirmando] = useState(false);
+  // Si el usuario ya empezó a escribir, el borrador del servidor (que llega async)
+  // no debe pisar lo que tiene en pantalla.
+  const usuarioTocoRef = React.useRef(false);
+
+  // Top-to-bottom: el evaluador está por ENCIMA del evaluado en la jerarquía de
+  // empresa. Solo en este caso la evaluación se libera al evaluado y hay que
+  // confirmar el envío.
+  const esTopToBottom = relacion === "superior" && tipo !== "autoevaluacion";
 
   const LABELS_TIPOS = {
     autoevaluacion: t("fep.label_auto"),
@@ -5070,6 +5109,27 @@ function FormularioEvaluacionProyecto({ token, user, proyecto, tipo, manager, ev
       .catch(() => setPreguntas([]));
   }, [token, tipo]);
 
+  // Borrador del SERVIDOR (fuente de verdad, disponible desde cualquier dispositivo).
+  // Se aplica solo si es más reciente que el local y el usuario aún no ha escrito.
+  useEffect(() => {
+    let cancelado = false;
+    apiRequest(`/api/borrador-evaluacion-proyecto?proyecto=${encodeURIComponent(proyecto)}&tipo=${encodeURIComponent(tipo)}&evaluado=${encodeURIComponent(evaluadoProp || "")}`, { token })
+      .then((d) => {
+        if (cancelado || usuarioTocoRef.current) return;
+        const serv = d.borrador;
+        if (!serv || !serv.respuestas || Object.keys(serv.respuestas).length === 0) return;
+        const tsServidor = serv.actualizado ? Date.parse(serv.actualizado) || 0 : 0;
+        const tsLocal = borradorInicial?.ts || 0;
+        if (tsServidor >= tsLocal) {
+          setRespuestas(serv.respuestas);
+          setBorradorRestaurado(true);
+        }
+      })
+      .catch(() => { /* sin borrador remoto o sin conexión: seguimos con el local */ });
+    return () => { cancelado = true; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [token, proyecto, tipo, evaluadoProp]);
+
   useEffect(() => {
     if (!necesitaSelector) return;
     apiRequest("/api/todos-empleados", { token })
@@ -5089,13 +5149,23 @@ function FormularioEvaluacionProyecto({ token, user, proyecto, tipo, manager, ev
   }, [respuestas, evaluado, draftKey, enviado]);
 
   function setRespuesta(id, valor) {
+    usuarioTocoRef.current = true;
     setRespuestas((prev) => ({ ...prev, [id]: valor }));
   }
 
-  function guardarProgreso() {
+  const evaluadoFinal = necesitaSelector ? evaluado : evaluadoFijo;
+
+  async function guardarProgreso() {
     try {
       localStorage.setItem(draftKey, JSON.stringify({ evaluado, respuestas, ts: Date.now() }));
-      setStatus("");
+    } catch { /* almacenamiento no disponible */ }
+    setStatus("");
+    try {
+      await apiRequest("/api/borrador-evaluacion-proyecto", {
+        token,
+        method: "POST",
+        body: { proyecto, tipo, evaluado: evaluadoProp || evaluadoFinal || "", respuestas },
+      });
       setBorradorMsg(t("fep.progress_saved"));
     } catch {
       setBorradorMsg(t("fep.err_save"));
@@ -5104,14 +5174,17 @@ function FormularioEvaluacionProyecto({ token, user, proyecto, tipo, manager, ev
 
   function descartarBorrador() {
     try { localStorage.removeItem(draftKey); } catch { /* noop */ }
+    apiRequest("/api/borrador-evaluacion-proyecto/eliminar", {
+      token,
+      method: "POST",
+      body: { proyecto, tipo, evaluado: evaluadoProp || "" },
+    }).catch(() => {});
     setRespuestas({});
     setEvaluado("");
     setBorradorRestaurado(false);
     setBorradorMsg("");
     setStatus("");
   }
-
-  const evaluadoFinal = necesitaSelector ? evaluado : evaluadoFijo;
 
   async function enviar(e) {
     e.preventDefault();
@@ -5120,6 +5193,22 @@ function FormularioEvaluacionProyecto({ token, user, proyecto, tipo, manager, ev
       setStatus(t("fep.err_required"));
       return;
     }
+    // Top-to-bottom: el evaluado podrá VER esta evaluación, así que el envío nunca
+    // es directo — primero el aviso con "Guardar borrador" / "Enviar".
+    if (esTopToBottom) {
+      setStatus("");
+      setConfirmando(true);
+      return;
+    }
+    await realizarEnvio();
+  }
+
+  async function guardarBorradorDesdeAviso() {
+    setConfirmando(false);
+    await guardarProgreso();
+  }
+
+  async function realizarEnvio() {
     setEnviando(true);
     setStatus("");
     setBorradorMsg("");
@@ -5130,14 +5219,17 @@ function FormularioEvaluacionProyecto({ token, user, proyecto, tipo, manager, ev
         body: { proyecto, tipo, evaluado: evaluadoFinal, respuestas },
       });
       if (data.ok) {
+        setConfirmando(false);
         setEnviado(true);
         setStatus(t("fep.saved_notion"));
         try { localStorage.removeItem(draftKey); } catch { /* noop */ }
         if (onEnviado) onEnviado();
       } else {
+        setConfirmando(false);
         setStatus(data.error || t("fep.err_save"));
       }
     } catch (err) {
+      setConfirmando(false);
       setStatus(err.message);
     } finally {
       setEnviando(false);
@@ -5335,10 +5427,32 @@ function FormularioEvaluacionProyecto({ token, user, proyecto, tipo, manager, ev
               onClick={guardarProgreso}
               disabled={enviando || Object.keys(respuestas).length === 0}
             >
-              {t("fep.save_progress")}
+              {esTopToBottom ? t("fep.save_draft") : t("fep.save_progress")}
             </button>
           </div>
         </form>
+      )}
+
+      {confirmando && (
+        <div
+          role="dialog"
+          aria-modal="true"
+          style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,.45)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 1000, padding: 16 }}
+        >
+          <div style={{ background: "#FFFFFF", borderRadius: 12, padding: "28px 26px", maxWidth: 520, width: "100%", boxShadow: "0 12px 40px rgba(0,0,0,.25)" }}>
+            <p style={{ fontSize: 15, lineHeight: 1.6, color: "#000", margin: 0 }}>
+              {t("fep.confirm_send_text", { nombre: evaluadoFinal })}
+            </p>
+            <div className="actions" style={{ marginTop: 22 }}>
+              <button type="button" onClick={realizarEnvio} disabled={enviando}>
+                {enviando ? t("common.saving") : t("fep.send")}
+              </button>
+              <button type="button" className="secondary" onClick={guardarBorradorDesdeAviso} disabled={enviando}>
+                {t("fep.save_draft")}
+              </button>
+            </div>
+          </div>
+        </div>
       )}
       <Footer />
     </main>
@@ -6470,7 +6584,7 @@ function App() {
   } else if (page?.type === "eval-anual") {
     content = <EvaluacionAnualWizard token={token} advisee={page.advisee} onBack={backTo(page)} />;
   } else if (page?.type === "activar-evaluaciones-proyecto") {
-    content = <ActivarEvaluacionesProyectoPage token={token} user={user} onBack={() => navigate(null)} onActivado={() => setProyectosVersion((v) => v + 1)} />;
+    content = <ActivarEvaluacionesProyectoPage token={token} user={user} onBack={() => navigate(null)} />;
   } else if (page?.type === "mis-proyectos-activos") {
     content = <MisProyectosActivosPage token={token} user={user} onBack={() => navigate(null)} />;
   } else if (page?.type === "evaluaciones-proyecto") {
@@ -6538,6 +6652,7 @@ function App() {
         proyecto={page.proyecto}
         tipo={page.tipo}
         evaluadoProp={page.evaluado}
+        relacion={page.relacion || ""}
         manager={page.manager}
         onBack={() => navigate({ type: "evaluaciones-proyecto", proyectos: page.proyectos || [], initialProyecto: page.proyecto })}
         onEnviado={() => setCompletedEvals((prev) => {

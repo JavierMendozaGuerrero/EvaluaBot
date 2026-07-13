@@ -30,6 +30,8 @@ _cache_users_database_id = None
 # Caducidad de sesión: una sesión inactiva/antigua deja de ser válida pasado este
 # tiempo, aunque el token siga circulando. Antes las sesiones vivían para siempre.
 SESSION_TTL = timedelta(hours=12)
+# Caducidad cuando el usuario marca "Recuérdame" en el login.
+SESSION_TTL_REMEMBER = timedelta(days=30)
 
 # Registro: el alta se confirma con un código de 6 dígitos enviado al email del
 # empleado, para probar que quien se registra es el dueño de ese buzón.
@@ -39,6 +41,54 @@ REGISTRO_MAX_INTENTOS = 5
 
 def _ruta_usuarios():
     return os.path.join(config.CARPETA_WEB, "users.json")
+
+
+def _ruta_sesiones():
+    return os.path.join(config.CARPETA_WEB, "sesiones.json")
+
+
+def _hash_token(token):
+    return hashlib.sha256((token or "").encode("utf-8")).hexdigest()
+
+
+def _guardar_sesiones_local():
+    """Persiste las sesiones activas a disco para que sobrevivan a un reinicio
+    del backend. Guarda solo el hash del token (nunca el token en claro): si
+    este archivo se filtra no sirve para suplantar a nadie, igual que un
+    password_hash no sirve para loguearse sin la contraseña."""
+    os.makedirs(config.CARPETA_WEB, exist_ok=True)
+    ruta = _ruta_sesiones()
+    datos = {
+        h: {**sesion, "expira": sesiones_expira[h].isoformat()}
+        for h, sesion in sesiones_web.items()
+        if h in sesiones_expira
+    }
+    with tempfile.NamedTemporaryFile("w", dir=config.CARPETA_WEB, delete=False, suffix=".tmp", encoding="utf-8") as f:
+        json.dump(datos, f, ensure_ascii=False, indent=2)
+        tmp = f.name
+    os.replace(tmp, ruta)
+
+
+def _cargar_sesiones_local():
+    """Recupera al arrancar el proceso las sesiones persistidas en el último
+    guardado, descartando las ya caducadas."""
+    ruta = _ruta_sesiones()
+    if not os.path.exists(ruta):
+        return
+    try:
+        with open(ruta, "r", encoding="utf-8") as f:
+            datos = json.load(f)
+    except Exception:
+        logging.exception("No se pudieron cargar las sesiones persistidas")
+        return
+    ahora = datetime.now(timezone.utc)
+    with lock:
+        for h, sesion in datos.items():
+            expira = datetime.fromisoformat(sesion["expira"])
+            if expira < ahora:
+                continue
+            sesiones_expira[h] = expira
+            sesiones_web[h] = {k: v for k, v in sesion.items() if k != "expira"}
 
 
 def _propiedades_usuarios():
@@ -518,24 +568,29 @@ def autenticar_usuario(username, password):
     return usuario
 
 
-def crear_sesion(usuario):
+def crear_sesion(usuario, remember=False):
     token = secrets.token_urlsafe(32)
+    h = _hash_token(token)
+    ttl = SESSION_TTL_REMEMBER if remember else SESSION_TTL
     with lock:
-        sesiones_web[token] = {
+        sesiones_web[h] = {
             "username": usuario["username"],
             "persona": usuario["persona"],
             "email": usuario.get("email", ""),
             "is_admin": bool(usuario.get("is_admin")),
         }
-        sesiones_expira[token] = datetime.now(timezone.utc) + SESSION_TTL
+        sesiones_expira[h] = datetime.now(timezone.utc) + ttl
+        _guardar_sesiones_local()
     return token
 
 
 def cerrar_sesion(token):
     """Invalida un token de sesión (logout del lado servidor)."""
+    h = _hash_token(token)
     with lock:
-        sesiones_web.pop(token, None)
-        sesiones_expira.pop(token, None)
+        sesiones_web.pop(h, None)
+        sesiones_expira.pop(h, None)
+        _guardar_sesiones_local()
 
 
 def invalidar_sesiones_de_usuario(username):
@@ -543,12 +598,13 @@ def invalidar_sesiones_de_usuario(username):
     clave = normalizar_nombre(username)
     with lock:
         tokens = [
-            t for t, s in sesiones_web.items()
+            h for h, s in sesiones_web.items()
             if normalizar_nombre(s.get("username")) == clave
         ]
-        for t in tokens:
-            sesiones_web.pop(t, None)
-            sesiones_expira.pop(t, None)
+        for h in tokens:
+            sesiones_web.pop(h, None)
+            sesiones_expira.pop(h, None)
+        _guardar_sesiones_local()
 
 
 def obtener_cookie(headers, nombre):
@@ -569,14 +625,16 @@ def obtener_sesion(headers):
 def obtener_sesion_por_token(token):
     if not token:
         return None
+    h = _hash_token(token)
     with lock:
-        expira = sesiones_expira.get(token)
+        expira = sesiones_expira.get(h)
         if expira is not None and expira < datetime.now(timezone.utc):
             # Sesión caducada: la eliminamos y la tratamos como inexistente.
-            sesiones_web.pop(token, None)
-            sesiones_expira.pop(token, None)
+            sesiones_web.pop(h, None)
+            sesiones_expira.pop(h, None)
+            _guardar_sesiones_local()
             return None
-        return sesiones_web.get(token)
+        return sesiones_web.get(h)
 
 
 def validar_acceso_sesion(sesion, evaluado, extra_permitidos=None):
@@ -589,3 +647,7 @@ def validar_acceso_sesion(sesion, evaluado, extra_permitidos=None):
     if extra_permitidos and normalizar_nombre(evaluado) in [normalizar_nombre(n) for n in extra_permitidos]:
         return
     raise PermissionError("Solo puedes ver las evaluaciones hechas sobre ti.")
+
+
+# Al arrancar el proceso, recupera las sesiones que sobrevivieron a un reinicio.
+_cargar_sesiones_local()

@@ -62,7 +62,7 @@ def logout(request: Request):
 @router.post("/api/login")
 def login(datos: dict = Body(default={})):
     usuario = autenticar_usuario(datos.get("username", ""), datos.get("password", ""))
-    token = crear_sesion(usuario)
+    token = crear_sesion(usuario, remember=bool(datos.get("remember")))
     sesion = obtener_sesion_por_token(token)
     sesion_con_idioma = {**sesion, "idioma": idioma_por_sesion(sesion)}
     return {"token": token, "user": sesion_con_idioma}

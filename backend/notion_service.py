@@ -1268,43 +1268,62 @@ def obtener_preguntas_palantir(tipo: str, idioma: str = "es") -> list[dict]:
         )
 
 
+_lock_bbdd_evaluado = threading.Lock()
+
+
 def obtener_o_crear_bbdd_evaluado(nombre_evaluado):
     nombre_limpio = " ".join(nombre_evaluado.split()).strip() or "Sin nombre"
     titulo = _titulo_bbdd(nombre_limpio)
-    with lock:
-        cacheada = bbdd_por_evaluado.get(titulo)
-    if cacheada:
-        return cacheada
+    # Lock mantenido durante toda la búsqueda/creación para que dos hilos
+    # concurrentes no creen dos BDs para el mismo evaluado.
+    with _lock_bbdd_evaluado:
+        with lock:
+            cacheada = bbdd_por_evaluado.get(titulo)
+        if cacheada:
+            return cacheada
 
-    parent = _parent_bbdd_referencia()
-    parent_evaluaciones = _parent_bbdd_en_pagina(config.NOTION_INDIVIDUAL_EVALUATIONS_PAGE_NAME, crear=True)
-    resultado = notion.search(query=titulo, filter={"value": _tipo_objeto_busqueda_bbdd(), "property": "object"}, page_size=100)
-    for bbdd in resultado.get("results", []):
-        if _extraer_titulo_bbdd(bbdd) == titulo and (
-            _coincide_parent_bbdd(bbdd, parent) or _coincide_parent_bbdd(bbdd, parent_evaluaciones)
-        ):
-            database_id = _data_source_id(bbdd)
+        parent = _parent_bbdd_referencia()
+        parent_evaluaciones = _parent_bbdd_en_pagina(config.NOTION_INDIVIDUAL_EVALUATIONS_PAGE_NAME, crear=True)
+
+        # 1) Escanear los hijos de la página de evaluaciones mensuales: consistencia
+        #    inmediata frente al lag de indexación de notion.search.
+        database_id = None
+        if parent_evaluaciones.get("type") == "page_id":
+            database_id = _buscar_bbdd_en_pagina_id(parent_evaluaciones["page_id"], titulo)
+
+        # 2) Fallback: búsqueda global. Si falla, se propaga: no crear a ciegas.
+        if not database_id:
+            resultado = notion.search(query=titulo, filter={"value": _tipo_objeto_busqueda_bbdd(), "property": "object"}, page_size=100)
+            for bbdd in resultado.get("results", []):
+                if _extraer_titulo_bbdd(bbdd) == titulo and (
+                    _coincide_parent_bbdd(bbdd, parent) or _coincide_parent_bbdd(bbdd, parent_evaluaciones)
+                ):
+                    database_id = _data_source_id(bbdd)
+                    break
+
+        if database_id:
             asegurar_propiedades_bbdd(database_id)
             with lock:
                 bbdd_por_evaluado[titulo] = database_id
             return database_id
 
-    if _usa_data_sources():
-        nueva = notion.databases.create(
-            parent=parent_evaluaciones,
-            title=[{"type": "text", "text": {"content": titulo}}],
-            initial_data_source={"title": [{"type": "text", "text": {"content": titulo}}], "properties": _propiedades_bbdd_evaluaciones()},
-        )
-        nueva = notion.databases.retrieve(database_id=nueva["id"])
-    else:
-        nueva = notion.databases.create(parent=parent_evaluaciones, title=[{"type": "text", "text": {"content": titulo}}], properties=_propiedades_bbdd_evaluaciones())
+        # 3) Crear solo si de verdad no existe.
+        if _usa_data_sources():
+            nueva = notion.databases.create(
+                parent=parent_evaluaciones,
+                title=[{"type": "text", "text": {"content": titulo}}],
+                initial_data_source={"title": [{"type": "text", "text": {"content": titulo}}], "properties": _propiedades_bbdd_evaluaciones()},
+            )
+            nueva = notion.databases.retrieve(database_id=nueva["id"])
+        else:
+            nueva = notion.databases.create(parent=parent_evaluaciones, title=[{"type": "text", "text": {"content": titulo}}], properties=_propiedades_bbdd_evaluaciones())
 
-    database_id = _data_source_id(nueva)
-    asegurar_propiedades_bbdd(database_id)
-    with lock:
-        bbdd_por_evaluado[titulo] = database_id
-    logging.info(f"Base de datos creada en Notion: {titulo}")
-    return database_id
+        database_id = _data_source_id(nueva)
+        asegurar_propiedades_bbdd(database_id)
+        with lock:
+            bbdd_por_evaluado[titulo] = database_id
+        logging.info(f"Base de datos creada en Notion: {titulo}")
+        return database_id
 
 
 def guardar_en_notion(nombre, respuestas, relacion="igual", area="Negocio"):
@@ -1473,22 +1492,32 @@ def obtener_barbecho_por_empleado(nombre: str) -> list[dict]:
 
 
 _cache_bbdd_sesiones_anual: dict = {"db_id": None}
+_lock_bbdd_sesiones_anual = threading.Lock()
 
 
 def _obtener_o_crear_bbdd_sesiones_anual() -> str | None:
-    with lock:
-        db_id = _cache_bbdd_sesiones_anual["db_id"]
+    with _lock_bbdd_sesiones_anual:
+        return _obtener_o_crear_bbdd_sesiones_anual_locked()
+
+
+def _obtener_o_crear_bbdd_sesiones_anual_locked() -> str | None:
+    db_id = _cache_bbdd_sesiones_anual["db_id"]
     if db_id:
         return db_id
     parent = _parent_bbdd_referencia()
     titulo = "Log evaluacion anual asistida"
     try:
+        # 1) Escanear los hijos de la raíz (donde la crea este código): consistencia
+        #    inmediata frente al lag de indexación de notion.search.
+        found_id = _buscar_bbdd_en_pagina_id(parent["page_id"], titulo)
+        if found_id:
+            _cache_bbdd_sesiones_anual["db_id"] = found_id
+            return found_id
         resultado = notion.search(query=titulo, filter={"value": _tipo_objeto_busqueda_bbdd(), "property": "object"}, page_size=50)
         for bbdd in resultado.get("results", []):
             if _extraer_titulo_bbdd(bbdd) == titulo and _coincide_parent_bbdd(bbdd, parent):
                 found_id = _data_source_id(bbdd)
-                with lock:
-                    _cache_bbdd_sesiones_anual["db_id"] = found_id
+                _cache_bbdd_sesiones_anual["db_id"] = found_id
                 return found_id
         props = {
             "Name": {"title": {}},
@@ -3425,6 +3454,9 @@ def obtener_ca_de_empleado(empleado_nombre: str) -> str | None:
 
 
 _cache_acceso_ca_db: dict = {"db_id": None}
+# Lock mantenido durante TODA la búsqueda/creación: dos peticiones web concurrentes
+# no deben poder crear dos BDs 'Acceso CA'.
+_lock_acceso_ca = threading.Lock()
 
 
 def _norm_ca(nombre: str) -> str:
@@ -3433,42 +3465,54 @@ def _norm_ca(nombre: str) -> str:
 
 
 def _obtener_o_crear_bbdd_acceso_ca() -> str:
-    with lock:
-        db_id = _cache_acceso_ca_db["db_id"]
-    if db_id:
-        return db_id
-    titulo = "Acceso CA"
-    resultado = notion.search(
-        query=titulo,
-        filter={"value": _tipo_objeto_busqueda_bbdd(), "property": "object"},
-        page_size=10,
-    )
-    for bbdd in resultado.get("results", []):
-        if normalizar_nombre(_extraer_titulo_bbdd(bbdd)) == "acceso ca":
-            db_id = _data_source_id(bbdd)
-            with lock:
-                _cache_acceso_ca_db["db_id"] = db_id
-            return db_id
-    parent = _parent_bbdd_en_pagina(config.NOTION_ACTIVACIONES_PERMISOS_PAGE_NAME, crear=True)
-    props = {"Name": {"title": {}}, "Activo": {"checkbox": {}}}
-    if _usa_data_sources():
-        nueva = notion.databases.create(
-            parent=parent,
-            title=[{"type": "text", "text": {"content": titulo}}],
-            initial_data_source={"title": [{"type": "text", "text": {"content": titulo}}], "properties": props},
-        )
-        nueva = notion.databases.retrieve(database_id=nueva["id"])
-    else:
-        nueva = notion.databases.create(
-            parent=parent,
-            title=[{"type": "text", "text": {"content": titulo}}],
-            properties=props,
-        )
-    db_id = _data_source_id(nueva)
-    with lock:
+    with _lock_acceso_ca:
+        if _cache_acceso_ca_db["db_id"]:
+            return _cache_acceso_ca_db["db_id"]
+        titulo = "Acceso CA"
+
+        # 1) Escanear los hijos de la página esperada: children.list es consistente
+        #    al instante, mientras que notion.search puede no devolver BDs migradas
+        #    o recién creadas y provocar duplicados vacíos.
+        db_id = None
+        parent = _parent_bbdd_en_pagina(config.NOTION_ACTIVACIONES_PERMISOS_PAGE_NAME, crear=False)
+        if parent.get("type") == "page_id":
+            db_id = _buscar_bbdd_en_pagina_id(parent["page_id"], titulo)
+
+        # 2) Fallback: búsqueda global. Si falla, se propaga la excepción: un error
+        #    de búsqueda no significa que la BD no exista.
+        if not db_id:
+            resultado = notion.search(
+                query=titulo,
+                filter={"value": _tipo_objeto_busqueda_bbdd(), "property": "object"},
+                page_size=10,
+            )
+            for bbdd in resultado.get("results", []):
+                if normalizar_nombre(_extraer_titulo_bbdd(bbdd)) == "acceso ca":
+                    db_id = _data_source_id(bbdd)
+                    break
+
+        # 3) Crear solo si de verdad no existe.
+        if not db_id:
+            parent = _parent_bbdd_en_pagina(config.NOTION_ACTIVACIONES_PERMISOS_PAGE_NAME, crear=True)
+            props = {"Name": {"title": {}}, "Activo": {"checkbox": {}}}
+            if _usa_data_sources():
+                nueva = notion.databases.create(
+                    parent=parent,
+                    title=[{"type": "text", "text": {"content": titulo}}],
+                    initial_data_source={"title": [{"type": "text", "text": {"content": titulo}}], "properties": props},
+                )
+                nueva = notion.databases.retrieve(database_id=nueva["id"])
+            else:
+                nueva = notion.databases.create(
+                    parent=parent,
+                    title=[{"type": "text", "text": {"content": titulo}}],
+                    properties=props,
+                )
+            db_id = _data_source_id(nueva)
+            logging.info("Base de datos 'Acceso CA' creada en Notion")
+
         _cache_acceso_ca_db["db_id"] = db_id
-    logging.info("Base de datos 'Acceso CA' creada en Notion")
-    return db_id
+        return db_id
 
 
 def _acceso_ca_fila(db_id: str, ca_keys: set) -> dict | None:
@@ -3524,45 +3568,59 @@ def toggle_acceso_advisees(ca_nombre: str, activo: bool, ca_aliases=None) -> boo
 # ---------------------------------------------------------------------------
 
 _cache_acceso_individual_db: dict = {"db_id": None}
+_lock_acceso_individual = threading.Lock()
 
 
 def _obtener_o_crear_bbdd_acceso_individual() -> str:
-    with lock:
-        db_id = _cache_acceso_individual_db["db_id"]
-    if db_id:
-        return db_id
-    titulo = "Acceso Individual Advisee"
-    resultado = notion.search(
-        query=titulo,
-        filter={"value": _tipo_objeto_busqueda_bbdd(), "property": "object"},
-        page_size=10,
-    )
-    for bbdd in resultado.get("results", []):
-        if normalizar_nombre(_extraer_titulo_bbdd(bbdd)) == normalizar_nombre(titulo):
-            db_id = _data_source_id(bbdd)
-            with lock:
-                _cache_acceso_individual_db["db_id"] = db_id
-            return db_id
-    parent = _parent_bbdd_referencia()
-    props = {"Name": {"title": {}}, "CA": {"rich_text": {}}, "Activo": {"checkbox": {}}}
-    if _usa_data_sources():
-        nueva = notion.databases.create(
-            parent=parent,
-            title=[{"type": "text", "text": {"content": titulo}}],
-            initial_data_source={"title": [{"type": "text", "text": {"content": titulo}}], "properties": props},
-        )
-        nueva = notion.databases.retrieve(database_id=nueva["id"])
-    else:
-        nueva = notion.databases.create(
-            parent=parent,
-            title=[{"type": "text", "text": {"content": titulo}}],
-            properties=props,
-        )
-    db_id = _data_source_id(nueva)
-    with lock:
+    with _lock_acceso_individual:
+        if _cache_acceso_individual_db["db_id"]:
+            return _cache_acceso_individual_db["db_id"]
+        titulo = "Acceso Individual Advisee"
+
+        # 1) Escanear hijos de las páginas donde puede vivir (consistencia inmediata):
+        #    'Activaciones de permisos' (ubicación real tras la migración) y la raíz
+        #    (donde la crea este código).
+        db_id = None
+        parent_permisos = _parent_bbdd_en_pagina(config.NOTION_ACTIVACIONES_PERMISOS_PAGE_NAME, crear=False)
+        if parent_permisos.get("type") == "page_id":
+            db_id = _buscar_bbdd_en_pagina_id(parent_permisos["page_id"], titulo)
+        if not db_id:
+            db_id = _buscar_bbdd_en_pagina_id(_parent_bbdd_referencia()["page_id"], titulo)
+
+        # 2) Fallback: búsqueda global. Si falla, se propaga: no crear a ciegas.
+        if not db_id:
+            resultado = notion.search(
+                query=titulo,
+                filter={"value": _tipo_objeto_busqueda_bbdd(), "property": "object"},
+                page_size=10,
+            )
+            for bbdd in resultado.get("results", []):
+                if normalizar_nombre(_extraer_titulo_bbdd(bbdd)) == normalizar_nombre(titulo):
+                    db_id = _data_source_id(bbdd)
+                    break
+
+        # 3) Crear solo si de verdad no existe.
+        if not db_id:
+            parent = _parent_bbdd_referencia()
+            props = {"Name": {"title": {}}, "CA": {"rich_text": {}}, "Activo": {"checkbox": {}}}
+            if _usa_data_sources():
+                nueva = notion.databases.create(
+                    parent=parent,
+                    title=[{"type": "text", "text": {"content": titulo}}],
+                    initial_data_source={"title": [{"type": "text", "text": {"content": titulo}}], "properties": props},
+                )
+                nueva = notion.databases.retrieve(database_id=nueva["id"])
+            else:
+                nueva = notion.databases.create(
+                    parent=parent,
+                    title=[{"type": "text", "text": {"content": titulo}}],
+                    properties=props,
+                )
+            db_id = _data_source_id(nueva)
+            logging.info("Base de datos 'Acceso Individual Advisee' creada en Notion")
+
         _cache_acceso_individual_db["db_id"] = db_id
-    logging.info("Base de datos 'Acceso Individual Advisee' creada en Notion")
-    return db_id
+        return db_id
 
 
 def _acceso_individual_fila(db_id: str, advisee_key: str, ca_key: str) -> dict | None:
@@ -3630,44 +3688,52 @@ _PROPS_INFORMES_FINALES = {
 }
 
 _cache_informes_finales_db: dict = {"db_id": None}
+_lock_informes_finales = threading.Lock()
 
 
 def _obtener_o_crear_bbdd_informes_finales() -> str:
-    with lock:
-        db_id = _cache_informes_finales_db["db_id"]
-    if db_id:
-        return db_id
-    titulo = "Informes Finales"
-    resultado = notion.search(
-        query=titulo,
-        filter={"value": _tipo_objeto_busqueda_bbdd(), "property": "object"},
-        page_size=10,
-    )
-    for bbdd in resultado.get("results", []):
-        if normalizar_nombre(_extraer_titulo_bbdd(bbdd)) == normalizar_nombre(titulo):
-            db_id = _data_source_id(bbdd)
-            with lock:
-                _cache_informes_finales_db["db_id"] = db_id
-            return db_id
-    parent = _parent_bbdd_referencia()
-    if _usa_data_sources():
-        nueva = notion.databases.create(
-            parent=parent,
-            title=[{"type": "text", "text": {"content": titulo}}],
-            initial_data_source={"title": [{"type": "text", "text": {"content": titulo}}], "properties": _PROPS_INFORMES_FINALES},
-        )
-        nueva = notion.databases.retrieve(database_id=nueva["id"])
-    else:
-        nueva = notion.databases.create(
-            parent=parent,
-            title=[{"type": "text", "text": {"content": titulo}}],
-            properties=_PROPS_INFORMES_FINALES,
-        )
-    db_id = _data_source_id(nueva)
-    with lock:
+    with _lock_informes_finales:
+        if _cache_informes_finales_db["db_id"]:
+            return _cache_informes_finales_db["db_id"]
+        titulo = "Informes Finales"
+
+        # 1) Escanear los hijos de la raíz (donde la crea este código): consistencia
+        #    inmediata frente al lag de indexación de notion.search.
+        db_id = _buscar_bbdd_en_pagina_id(_parent_bbdd_referencia()["page_id"], titulo)
+
+        # 2) Fallback: búsqueda global. Si falla, se propaga: no crear a ciegas.
+        if not db_id:
+            resultado = notion.search(
+                query=titulo,
+                filter={"value": _tipo_objeto_busqueda_bbdd(), "property": "object"},
+                page_size=10,
+            )
+            for bbdd in resultado.get("results", []):
+                if normalizar_nombre(_extraer_titulo_bbdd(bbdd)) == normalizar_nombre(titulo):
+                    db_id = _data_source_id(bbdd)
+                    break
+
+        # 3) Crear solo si de verdad no existe.
+        if not db_id:
+            parent = _parent_bbdd_referencia()
+            if _usa_data_sources():
+                nueva = notion.databases.create(
+                    parent=parent,
+                    title=[{"type": "text", "text": {"content": titulo}}],
+                    initial_data_source={"title": [{"type": "text", "text": {"content": titulo}}], "properties": _PROPS_INFORMES_FINALES},
+                )
+                nueva = notion.databases.retrieve(database_id=nueva["id"])
+            else:
+                nueva = notion.databases.create(
+                    parent=parent,
+                    title=[{"type": "text", "text": {"content": titulo}}],
+                    properties=_PROPS_INFORMES_FINALES,
+                )
+            db_id = _data_source_id(nueva)
+            logging.info("Base de datos 'Informes Finales' creada en Notion")
+
         _cache_informes_finales_db["db_id"] = db_id
-    logging.info("Base de datos 'Informes Finales' creada en Notion")
-    return db_id
+        return db_id
 
 
 def guardar_informe_final(ca_nombre: str, advisee: str, docx_filename: str, html_filename: str, url: str) -> None:
@@ -4331,7 +4397,10 @@ def _obtener_o_crear_bbdd_calendario() -> str | None:
                         db_id = _data_source_id(bbdd)
                         break
             except Exception:
-                pass
+                # Un fallo de búsqueda (p.ej. 429 en el arranque) no significa que la
+                # BD no exista: no crear a ciegas, se reintentará en la próxima llamada.
+                logging.exception("Error buscando 'Calendario evaluaciones' en Notion; no se crea por si ya existe")
+                return None
 
         # 3) Crear solo si de verdad no existe.
         if not db_id:
@@ -4665,12 +4734,28 @@ def _obtener_o_crear_pagina_gestion_mo() -> dict:
         return listas_parent
 
 
+_lock_bbdd_mo = threading.Lock()
+
+
 def _obtener_o_crear_bbdd_mo(titulo: str, props: dict, cache: dict, filas_default: list) -> str | None:
-    with lock:
-        if cache["db_id"]:
-            return cache["db_id"]
+    with _lock_bbdd_mo:
+        return _obtener_o_crear_bbdd_mo_locked(titulo, props, cache, filas_default)
+
+
+def _obtener_o_crear_bbdd_mo_locked(titulo: str, props: dict, cache: dict, filas_default: list) -> str | None:
+    if cache["db_id"]:
+        return cache["db_id"]
     parent = _obtener_o_crear_pagina_gestion_mo()
     try:
+        # 1) Escanear los hijos de 'Gestión de MiddleOffice': consistencia inmediata
+        #    frente al lag de indexación de notion.search. Si hay más de una BD con
+        #    el mismo título, el escaneo devuelve la primera en la página (la
+        #    original, anterior a cualquier duplicado añadido al final).
+        if parent.get("type") == "page_id":
+            db_id = _buscar_bbdd_en_pagina_id(parent["page_id"], titulo)
+            if db_id:
+                cache["db_id"] = db_id
+                return db_id
         res = notion.search(
             query=titulo,
             filter={"value": _tipo_objeto_busqueda_bbdd(), "property": "object"},
@@ -4679,8 +4764,7 @@ def _obtener_o_crear_bbdd_mo(titulo: str, props: dict, cache: dict, filas_defaul
         for bbdd in res.get("results", []):
             if _extraer_titulo_bbdd(bbdd) == titulo and _coincide_parent_bbdd(bbdd, parent):
                 db_id = _data_source_id(bbdd)
-                with lock:
-                    cache["db_id"] = db_id
+                cache["db_id"] = db_id
                 return db_id
         if _usa_data_sources():
             nueva = notion.databases.create(

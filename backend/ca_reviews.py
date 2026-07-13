@@ -21,6 +21,7 @@ from .slack_lists import añadir_pendiente, enlace_lista_pendientes, quitar_pend
 from .eval_tracking import registrar_envio_por_slack_id, marcar_completada_por_slack_id
 from .i18n import t, botones_idioma_slack
 from .notion_service import (
+    _buscar_bbdd_en_pagina_id,
     _coincide_parent_bbdd,
     _crear_pagina_en_bbdd,
     _data_source_id,
@@ -121,29 +122,53 @@ def _asegurar_propiedades_ca(database_id: str) -> None:
         logging.exception(f"Error asegurando propiedades de BD CA {database_id}")
 
 
+_lock_bbdd_ca = threading.Lock()
+
+
 def _obtener_o_crear_bbdd_ca(advisee: str) -> str:
     titulo = f"{PREFIJO_BBDD}{advisee.strip()}"
+    # Lock mantenido durante toda la búsqueda/creación para que dos hilos
+    # concurrentes no creen dos BDs para el mismo advisee.
+    with _lock_bbdd_ca:
+        return _obtener_o_crear_bbdd_ca_locked(titulo)
+
+
+def _obtener_o_crear_bbdd_ca_locked(titulo: str) -> str:
     with _lock:
         if titulo in _cache_bbdd:
             return _cache_bbdd[titulo]
 
     parent = _parent_bbdd_referencia()
     parent_ca = _parent_bbdd_en_pagina(config.NOTION_CA_TRACKING_PAGE_NAME, crear=True)
-    resultado = notion.search(
-        query=titulo,
-        filter={"value": _tipo_objeto_busqueda_bbdd(), "property": "object"},
-        page_size=100,
-    )
-    for bbdd in resultado.get("results", []):
-        if _extraer_titulo_bbdd(bbdd) == titulo and (
-            _coincide_parent_bbdd(bbdd, parent) or _coincide_parent_bbdd(bbdd, parent_ca)
-        ):
-            db_id = _data_source_id(bbdd)
-            _asegurar_propiedades_ca(db_id)
-            with _lock:
-                _cache_bbdd[titulo] = db_id
-            return db_id
 
+    # 1) Escanear los hijos de la página de seguimiento CA: consistencia inmediata
+    #    frente al lag de indexación de notion.search (que puede no devolver BDs
+    #    migradas o recién creadas y provocar duplicados).
+    db_id = None
+    if parent_ca.get("type") == "page_id":
+        db_id = _buscar_bbdd_en_pagina_id(parent_ca["page_id"], titulo)
+
+    # 2) Fallback: búsqueda global. Si falla, se propaga: no crear a ciegas.
+    if not db_id:
+        resultado = notion.search(
+            query=titulo,
+            filter={"value": _tipo_objeto_busqueda_bbdd(), "property": "object"},
+            page_size=100,
+        )
+        for bbdd in resultado.get("results", []):
+            if _extraer_titulo_bbdd(bbdd) == titulo and (
+                _coincide_parent_bbdd(bbdd, parent) or _coincide_parent_bbdd(bbdd, parent_ca)
+            ):
+                db_id = _data_source_id(bbdd)
+                break
+
+    if db_id:
+        _asegurar_propiedades_ca(db_id)
+        with _lock:
+            _cache_bbdd[titulo] = db_id
+        return db_id
+
+    # 3) Crear solo si de verdad no existe.
     if _usa_data_sources():
         nueva = notion.databases.create(
             parent=parent_ca,

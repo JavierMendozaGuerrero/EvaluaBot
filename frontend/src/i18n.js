@@ -5,8 +5,6 @@
 // Para anadir un idioma nuevo: sumar su codigo aqui y su traduccion en cada clave.
 // ---------------------------------------------------------------------------
 
-import { PT } from "./pt";
-
 const LANG_KEY = "evaluabot_lang";
 export const IDIOMAS = ["es", "en", "pt"];
 function _norm(l) { return IDIOMAS.includes(l) ? l : "es"; }
@@ -14,11 +12,26 @@ function _norm(l) { return IDIOMAS.includes(l) ? l : "es"; }
 let _lang = "es";
 const _langListeners = new Set();
 
+// Overlay PT cargado bajo demanda: pt.js (461 líneas) solo se descarga cuando el
+// usuario usa portugués, no en el bundle inicial. Mientras carga, t() cae a ES.
+let _ptCargado = false;
+function _ensurePtLoaded() {
+  if (_ptCargado) return;
+  _ptCargado = true;
+  import("./pt").then(({ PT }) => {
+    for (const k in PT) {
+      if (STRINGS[k] && PT[k]) STRINGS[k].pt = PT[k];
+    }
+    _notifyLang();  // re-render para pintar las cadenas PT ya fusionadas
+  }).catch(() => { _ptCargado = false; });
+}
+
 // Al cargar: si hay elección manual guardada, tiene prioridad sobre el idioma de Notion.
 try {
   const guardado = localStorage.getItem(LANG_KEY);
   if (IDIOMAS.includes(guardado)) _lang = guardado;
 } catch {}
+if (_lang === "pt") _ensurePtLoaded();
 
 function _notifyLang() {
   for (const fn of _langListeners) { try { fn(_lang); } catch {} }
@@ -35,6 +48,7 @@ export function hasManualLang() {
 // Fija el idioma SIN persistir (usado por /api/me con el idioma de Notion).
 export function setLang(l) {
   const nl = _norm(l);
+  if (nl === "pt") _ensurePtLoaded();
   if (nl === _lang) return;
   _lang = nl;
   _notifyLang();
@@ -43,6 +57,7 @@ export function setLang(l) {
 // Elección manual del selector: fija, persiste y notifica.
 export function setLangManual(l) {
   const nl = _norm(l);
+  if (nl === "pt") _ensurePtLoaded();
   try { localStorage.setItem(LANG_KEY, nl); } catch {}
   if (nl !== _lang) { _lang = nl; }
   _notifyLang();
@@ -318,6 +333,8 @@ export const STRINGS = {
   "dash.my_goals": { es: "Mis objetivos", en: "My goals" },
   "dash.no_goals": { es: "Sin objetivos definidos.", en: "No goals defined." },
   "dash.my_reports": { es: "Mis informes", en: "My reports" },
+  "dash.received_evals": { es: "Evaluaciones recibidas", en: "Evaluations received" },
+  "dash.received_empty": { es: "Todavía no tienes evaluaciones disponibles.", en: "No evaluations available yet." },
   "dash.no_reports": { es: "No hay informes disponibles", en: "No reports available" },
   "dash.open_web": { es: "Abrir en web", en: "Open in browser" },
   "dash.no_access": { es: "No hay informes disponibles.", en: "No reports available." },
@@ -481,8 +498,8 @@ export const STRINGS = {
   "ep.progress": { es: "Progreso de evaluaciones", en: "Evaluation progress" },
   "ep.progress_stat": { es: "{done} de {total} completadas · {pct}%", en: "{done} of {total} completed · {pct}%" },
   "ep.section_auto": { es: "Autoevaluación", en: "Self-evaluation" },
-  "ep.section_manager": { es: "Evaluaciones a manager", en: "Evaluations to manager" },
-  "ep.section_members": { es: "Evaluaciones a miembros", en: "Evaluations to members" },
+  "ep.section_manager": { es: "Evaluaciones a personas por encima en jerarquía", en: "Evaluations of people above you" },
+  "ep.section_members": { es: "Evaluaciones al resto del equipo", en: "Evaluations of the rest of the team" },
 
   // --- Formulario de evaluacion de proyecto (FormularioEvaluacionProyecto) ---
   "fep.label_auto": { es: "Autoevaluación", en: "Self-evaluation" },
@@ -508,6 +525,12 @@ export const STRINGS = {
   "fep.progress_saved": { es: "Progreso guardado. Puedes volver más tarde para terminar.", en: "Progress saved. You can come back later to finish." },
   "fep.draft_restored": { es: "Hemos restaurado tu progreso guardado.", en: "We restored your saved progress." },
   "fep.discard_draft": { es: "Descartar progreso", en: "Discard progress" },
+  "fep.save_draft": { es: "Guardar borrador", en: "Save draft" },
+  "fep.send": { es: "Enviar", en: "Send" },
+  "fep.confirm_send_text": {
+    es: "Vas a mandar la evaluación a {nombre} y este la va a tener disponible para verla. Recomendamos que te reúnas personalmente con él/ella antes de liberársela. Si todavía no estás listo para mandarla, puedes guardar el borrador y volver más tarde.",
+    en: "You are about to send the evaluation to {nombre}, who will be able to see it. We recommend meeting with them in person before releasing it. If you are not ready to send it yet, you can save the draft and come back later.",
+  },
 
   // --- Solicitar evaluación extra, fuera de proyecto (SolicitarEvaluacionExtraPage) ---
   "sex.kicker": { es: "Evaluación extra", en: "Extra evaluation" },
@@ -636,8 +659,5 @@ export const STRINGS = {
   "anualdoc.deadline": { es: "Deadline", en: "Deadline" },
 };
 
-// Overlay PT: fusiona las traducciones portuguesas generadas (frontend/src/pt.js).
-// Si una clave no tiene PT, t() cae a ES. El generador rellena pt.js.
-for (const k in PT) {
-  if (STRINGS[k] && PT[k]) STRINGS[k].pt = PT[k];
-}
+// El overlay PT (frontend/src/pt.js) ya no se importa aquí de forma estática: se
+// carga bajo demanda vía _ensurePtLoaded() cuando el idioma activo es portugués.

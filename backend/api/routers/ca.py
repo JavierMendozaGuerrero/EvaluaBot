@@ -43,7 +43,11 @@ def opiniones_ca(advisee: str = "", session=Depends(require_session)):
 
 @router.get("/api/objetivos")
 def objetivos_get(nombre: str = "", session=Depends(require_session)):
-    exigir_acceso_advisee(session, nombre)
+    # Una persona siempre puede ver sus propios objetivos (p.ej. sección "Mis
+    # objetivos" de su perfil); si consulta los de otra persona, debe ser su CA (o admin).
+    es_propio = normalizar_nombre(nombre) == normalizar_nombre(session.get("persona", ""))
+    if not es_propio:
+        exigir_acceso_advisee(session, nombre)
     return {"objetivos": obtener_objetivos_persona(nombre)}
 
 

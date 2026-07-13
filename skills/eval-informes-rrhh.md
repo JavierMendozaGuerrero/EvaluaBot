@@ -87,8 +87,13 @@ afirmaciones inventadas, y deja siempre la última palabra al CA:
 ### Estado borrador → publicado (ya existente)
 
 - `informe_anual_{slug}.*` = **borrador**: solo lo ven el CA y admin ([api_server.py] `servir_archivo_protegido`).
-- `informe_final_{slug}_{ts}.*` = **publicado**: el CA lo sube editado vía `/api/subir-informe-final`;
-  lo ve el advisee solo cuando el CA activa el acceso. El control del CA es por diseño.
+- `informe_final_{slug}_{ts}.*` = **publicado**: lo ve el advisee solo cuando el CA activa el acceso.
+  El control del CA es por diseño. Dos vías de publicación:
+  - `/api/subir-informe-final`: el CA sube un `.docx` editado a mano (flujo clásico).
+  - `/api/eval-anual/subir-borrador`: desde la sesión asistida, el CA edita el **borrador web**
+    (misma estructura 1:1 que la plantilla oficial, con los huecos del CA vacíos) y lo publica sin
+    descargar nada; el `.docx` oficial se genera en servidor (`guardar_informe_anual_word` con
+    `valores_ca`, vía `eval_anual_sesion.generar_docx_borrador`).
 
 **Caché automática**: si los datos de Notion no han cambiado (misma huella SHA-256),
 se reutilizan los archivos ya generados sin llamar a Claude ni regenerar el documento.

@@ -1,3 +1,4 @@
+import html
 import os
 import urllib.parse
 
@@ -5,7 +6,12 @@ from fastapi import APIRouter, Depends, Request
 from fastapi.responses import JSONResponse, Response
 
 from .. import config
-from ..notion_service import obtener_advisees, obtener_ca_de_empleado, ca_tiene_acceso_activo
+from ..notion_service import (
+    advisee_tiene_acceso_individual,
+    ca_tiene_acceso_activo,
+    obtener_advisees,
+    obtener_ca_de_empleado,
+)
 from ..utils import normalizar_nombre, slug_archivo
 from .deps import get_session
 
@@ -15,6 +21,45 @@ router = APIRouter()
 def url_archivo(nombre_archivo: str, evaluado: str) -> str:
     query = urllib.parse.urlencode({"evaluado": evaluado})
     return f"/api/files/{urllib.parse.quote(nombre_archivo)}?{query}"
+
+
+def envolver_informe_final_html(fragmento: str, titulo: str = "Informe final") -> str:
+    """Envuelve el fragmento HTML del informe final en un documento completo y con estilo.
+
+    `mammoth.convert_to_html` devuelve solo el cuerpo (<p>, <table>…), SIN <head> ni
+    declaración de codificación. El frontend abre este HTML desde un blob: local (ver
+    `openAuthedFile` en main.jsx), y ahí se pierde la cabecera `Content-Type; charset=utf-8`:
+    el navegador adivina Windows-1252 y el UTF-8 se ve como «EVALUACIÃ"N». Envolverlo con
+    <meta charset="utf-8"> corrige la codificación y, de paso, le da el aspecto de IGENERIS
+    en lugar del HTML pelado por defecto.
+    """
+    titulo_esc = html.escape(titulo)
+    estilos_doc = (
+        ".shell { max-width: 900px; margin: 0 auto; padding-bottom: 60px; }\n"
+        ".doc { padding-top: clamp(28px, 6vw, 56px); }\n"
+        ".doc p { color: var(--ink); line-height: 1.55; margin: 10px 0; }\n"
+        ".doc strong { color: var(--ink); }\n"
+        ".doc table { width: 100%; border-collapse: collapse; margin: 20px 0; font-size: 14px; }\n"
+        ".doc td, .doc th { border: 1px solid var(--ink); padding: 10px 14px; vertical-align: top; text-align: left; }\n"
+        ".doc td:first-child { font-weight: 500; }\n"
+        ".doc a { color: #0563C1; }\n"
+        ".doc ul, .doc ol { margin: 10px 0; padding-left: 22px; line-height: 1.55; }\n"
+        ".doc li { margin-bottom: 4px; }\n"
+    )
+    return (
+        "<!DOCTYPE html>\n<html lang=\"es\">\n<head>\n"
+        "<meta charset=\"utf-8\">\n"
+        "<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\n"
+        f"<title>{titulo_esc}</title>\n"
+        f"<style>\n{config.IGENERIS_CSS}{estilos_doc}</style>\n"
+        "</head>\n<body>\n<main class=\"page shell\">\n"
+        "<nav class=\"nav\">\n"
+        "  <span class=\"brand\">igeneris</span>\n"
+        f"  <span class=\"fine\">{titulo_esc}</span>\n"
+        "</nav>\n"
+        f"<div class=\"doc\">\n{fragmento}\n</div>\n"
+        "</main>\n</body>\n</html>"
+    )
 
 
 @router.get("/api/files/{nombre_archivo:path}")
@@ -52,8 +97,14 @@ def servir_archivo_protegido(
         raise PermissionError("Solo el CA o un administrador pueden ver los documentos generados.")
     if (es_trayectoria or es_final) and not es_admin and not es_ca:
         if es_propio:
+            # Misma regla que /api/informe-final y /api/trayectoria: vale el acceso
+            # global del CA O el acceso individual concedido a este advisee.
             ca_del_evaluado = obtener_ca_de_empleado(evaluado)
-            if not (ca_del_evaluado and ca_tiene_acceso_activo(ca_del_evaluado)):
+            acceso = bool(ca_del_evaluado and (
+                ca_tiene_acceso_activo(ca_del_evaluado)
+                or advisee_tiene_acceso_individual(evaluado, ca_del_evaluado)
+            ))
+            if not acceso:
                 raise PermissionError("Tu CA aún no ha publicado tu informe.")
         else:
             raise PermissionError("No tienes permiso para ver este archivo.")
@@ -93,4 +144,16 @@ def servir_archivo_protegido(
 
     with open(ruta, "rb") as f:
         body = f.read()
+
+    # Red de seguridad para informes finales antiguos: los que se subieron antes de
+    # envolver el HTML se guardaron como fragmento pelado de mammoth (sin <meta charset>).
+    # Al abrirse desde un blob: se veían con la codificación rota. Si el fichero aún no
+    # trae cabecera <meta charset>, lo envolvemos al vuelo. Los nuevos ya vienen envueltos,
+    # así que esta rama no se dispara para ellos (evita doble envoltura).
+    if es_final and base.endswith(".html"):
+        texto = body.decode("utf-8", "replace")
+        if "<meta charset" not in texto[:1000].lower():
+            texto = envolver_informe_final_html(texto, f"Informe final · {evaluado}" if evaluado else "Informe final")
+            body = texto.encode("utf-8")
+
     return Response(content=body, media_type=content_type, headers=headers)

@@ -190,32 +190,86 @@ def _criterios_area(cargo: str, clave: str, etiqueta: str, idioma: str = "es", n
     return _seleccionar(dim_crit) if dim_crit else []
 
 
-def _generar_diagnostico(cargo: str, etiqueta: str, criterios: list, evidencia: list) -> str:
-    """Claude analiza: a qué nivel está en esta área y qué le falta para subir (con citas)."""
-    if not anthropic_client or not evidencia:
-        return ""
-    crit_txt = "\n".join(f"[{c['nivel']}]: " + " / ".join(c['criterios']) for c in criterios) \
-        or "(sin criterios en Notion para esta área)"
-    ev_txt = "\n".join(f"[{e['cid']}] {e['label']} — {e['texto']}" for e in evidencia)
+def _criterios_nivel_panel(sesion: dict, area: dict) -> list[dict]:
+    """Criterios que ve el CA en el panel «Criterios y nivel»: solo los del nivel del
+    cargo actual (el rango completo se conserva en area['criterios'] para otros usos)."""
+    nivel_actual = sk._nivel_cargo(sesion.get("cargo", ""))
+    criterios_full = area.get("criterios", [])
+    if not nivel_actual:
+        return criterios_full
+    return [c for c in criterios_full if sk._nivel_canonico(c.get("nivel", "")) == nivel_actual]
+
+
+_TXT_NO_EVALUABLE = "No se ha podido evaluar este criterio por falta de información suficiente."
+
+
+def _generar_resumen_area(cargo: str, etiqueta: str, bullets: list[str], evidencia: list,
+                          conversacion: list, propuesta: str) -> list[dict]:
+    """Claude valora el área criterio a criterio (los MISMOS bullets del panel).
+
+    Devuelve [{"criterio", "valoracion", "evaluable"}], una entrada por bullet y en el
+    mismo orden. El texto de cada criterio se toma tal cual de la fuente (Notion o
+    fallback): Claude solo aporta la valoración. Si un criterio no se puede valorar,
+    se dice explícitamente (no se omite ni se agrupa)."""
+    if not anthropic_client:
+        raise RuntimeError("La IA no está disponible ahora mismo; inténtalo más tarde.")
+    lista = "\n".join(f"{i}. {b}" for i, b in enumerate(bullets, 1))
+    ev_txt = "\n".join(f"[{e['cid']}] {e['label']} — {e['texto']}" for e in evidencia) or "(sin evidencia)"
+    conv_txt = "\n".join(f"{'CA' if m['rol'] == 'ca' else 'IA'}: {m['texto']}" for m in conversacion) \
+        or "(sin conversación)"
     system = (
         f"Eres el director de RRHH de IGENERIS. La persona tiene el cargo: {cargo or 'no especificado'}. "
-        f"Área: «{etiqueta}». Con los CRITERIOS por nivel (de Notion) y la EVIDENCIA (con citas), evalúa de "
-        "forma BREVE, directa y honesta: (1) a qué nivel está en esta área y POR QUÉ, citando la evidencia "
-        "concreta [X#]; (2) qué le falta (gaps concretos) para consolidar su nivel o para subir al siguiente. "
-        "Devuelve texto plano, 2-4 frases, con las citas [X#] correspondientes. NO inventes: solo lo que "
-        "la evidencia respalde."
+        f"Estás cerrando el área «{etiqueta}» de su evaluación anual. Recibes los CRITERIOS de su nivel "
+        "(numerados), la EVIDENCIA (con citas [X#]) y la CONVERSACIÓN mantenida con su Career Advisor.\n\n"
+        "Para CADA criterio, valora cómo lo ha hecho la persona EN ESE CRITERIO CONCRETO: 1-3 frases "
+        "directas y honestas, citando la evidencia [X#] que lo respalde e incorporando lo acordado en la "
+        "conversación. NO inventes: si para un criterio no hay información suficiente (ni en la evidencia "
+        "ni en la conversación), márcalo como no evaluable en lugar de rellenarlo.\n\n"
+        'Devuelve SOLO un JSON válido: {"valoraciones": [{"i": <número del criterio>, '
+        '"evaluable": true|false, "valoracion": "texto"}]} con EXACTAMENTE una entrada por criterio y en '
+        'el mismo orden. Si "evaluable" es false, deja "valoracion" vacía o indica brevemente qué '
+        "información faltaría."
         + config.INSTRUCCION_ANTIINYECCION
     )
-    user = f"CRITERIOS POR NIVEL:\n{crit_txt}\n\nEVIDENCIA:\n{ev_txt}"
+    user = (f"CRITERIOS ({len(bullets)}):\n{lista}\n\nEVIDENCIA:\n{ev_txt}\n\n"
+            f"CONVERSACIÓN:\n{conv_txt}\n\nPROPUESTA ACORDADA DEL ÁREA:\n{propuesta or '(sin propuesta)'}")
     try:
         resp = anthropic_client.messages.create(
-            model="claude-sonnet-4-6", max_tokens=500, temperature=0, system=system,
+            model="claude-sonnet-4-6", max_tokens=2000, temperature=0, system=system,
             messages=[{"role": "user", "content": user}],
         )
-        return "".join(b.text for b in resp.content if b.type == "text").strip()
+        txt = "".join(b.text for b in resp.content if b.type == "text").strip()
+        if txt.startswith("```"):
+            txt = txt.split("```", 2)[1]
+            if txt.startswith("json"):
+                txt = txt[4:]
+            txt = txt.rsplit("```", 1)[0]
+        data = json.loads(txt.strip())
     except Exception:
-        logging.exception("Fallo generando el diagnóstico del área")
+        logging.exception("Fallo generando el resumen final del área")
+        raise RuntimeError("No se pudo generar la sugerencia final; reinténtalo.")
+    por_indice = {}
+    for v in data.get("valoraciones", []):
+        try:
+            por_indice[int(v.get("i"))] = v
+        except (TypeError, ValueError):
+            continue
+    out = []
+    for i, criterio in enumerate(bullets, 1):
+        v = por_indice.get(i) or {}
+        texto = (v.get("valoracion") or "").strip()
+        evaluable = bool(v.get("evaluable")) and bool(texto)
+        if not evaluable:
+            texto = _TXT_NO_EVALUABLE + (f" ({texto})" if texto else "")
+        out.append({"criterio": criterio, "valoracion": texto, "evaluable": evaluable})
+    return out
+
+
+def _resumen_a_texto(resumen: list | None) -> str:
+    """Aplana el resumen por criterios a texto (para reutilizarlo en otros prompts)."""
+    if not resumen:
         return ""
+    return "\n".join(f"- {r.get('criterio', '')}: {r.get('valoracion', '')}" for r in resumen)
 
 
 # ── API del módulo ────────────────────────────────────────────────────────────
@@ -330,32 +384,25 @@ def obtener_area(advisee: str, clave: str) -> dict:
         clave, {"conversacion": [], "propuesta": "", "confirmada": False})
 
     # Criterios del área (siempre, sin API). Se muestran ANTES de que el CA opine.
-    # El DIAGNÓSTICO (nivel + gaps) NO se genera aquí: solo tras la opinión inicial del CA.
     if not area.get("criterios"):
         area["criterios"] = _criterios_area(sesion.get("cargo", ""), clave, secciones[clave], nombre=sesion.get("advisee", ""))
         if area["criterios"]:
             _guardar(slug, sesion)
-
-    # En el panel solo se muestran los criterios del cargo actual; el rango completo
-    # (area["criterios"]) se conserva para el diagnostico/comparacion posterior.
-    nivel_actual = sk._nivel_cargo(sesion.get("cargo", ""))
-    criterios_full = area.get("criterios", [])
-    criterios_mostrar = (
-        [c for c in criterios_full if sk._nivel_canonico(c.get("nivel", "")) == nivel_actual]
-        if nivel_actual else criterios_full
-    )
 
     return {
         "clave": clave,
         "etiqueta": secciones[clave],
         "cargo": sesion.get("cargo", ""),
         "evidencia": evidencia,
-        "criterios": criterios_mostrar,
-        "diagnostico": area.get("diagnostico", ""),  # vacío hasta que el CA mande su opinión
+        # En el panel solo se muestran los criterios del cargo actual; el rango completo
+        # (area["criterios"]) se conserva para la comparación posterior.
+        "criterios": _criterios_nivel_panel(sesion, area),
         "pregunta": _pregunta_area(secciones[clave]),
         "conversacion": area.get("conversacion", []),
         "propuesta": area.get("propuesta", ""),
         "confirmada": area.get("confirmada", False),
+        # Sugerencia final del área (criterio a criterio); solo existe si el CA la pidió.
+        "resumen": area.get("resumen_final") or [],
     }
 
 
@@ -456,11 +503,10 @@ def responder_area(advisee: str, clave: str, texto: str) -> dict:
         clave, {"conversacion": [], "propuesta": "", "confirmada": False})
     if "criterios" not in area:
         area["criterios"] = _criterios_area(sesion.get("cargo", ""), clave, secciones[clave], nombre=sesion.get("advisee", ""))
-    # El DIAGNÓSTICO (nivel + gaps) se genera aquí: solo cuando el CA manda su opinión inicial.
-    if "diagnostico" not in area:
-        area["diagnostico"] = _generar_diagnostico(
-            sesion.get("cargo", ""), secciones[clave], area.get("criterios") or [], evidencia)
     area["conversacion"].append({"rol": "ca", "texto": texto.strip()})
+    # La conversación avanza → la sugerencia final generada antes queda obsoleta.
+    # El CA la vuelve a pedir con el botón cuando dé el área por hablada.
+    area.pop("resumen_final", None)
 
     res = _claude_conversa_area(
         secciones[clave], evidencia, claude_bullets, area["conversacion"],
@@ -476,7 +522,37 @@ def responder_area(advisee: str, clave: str, texto: str) -> dict:
     area["confirmada"] = False
     _guardar(slug, sesion)
     return {"mensaje": res["mensaje"], "propuesta": area["propuesta"],
-            "conversacion": area["conversacion"], "diagnostico": area.get("diagnostico", "")}
+            "conversacion": area["conversacion"]}
+
+
+def generar_resumen_area(advisee: str, clave: str) -> dict:
+    """Genera BAJO DEMANDA (botón del CA) la sugerencia final del área, desglosada
+    criterio a criterio con los MISMOS bullets que muestra el panel «Criterios y nivel»."""
+    slug = slug_archivo(advisee)
+    sesion = _leer(slug)
+    if not sesion:
+        raise ValueError("No hay sesión iniciada.")
+    secciones = dict(_secciones(sesion.get("cargo", "")))
+    if clave not in secciones:
+        raise ValueError(f"Sección desconocida: {clave}")
+    area = sesion.get("areas", {}).get(clave)
+    if not area or not area.get("conversacion"):
+        raise ValueError("Primero conversa con la IA sobre esta área.")
+    if not area.get("criterios"):
+        area["criterios"] = _criterios_area(sesion.get("cargo", ""), clave, secciones[clave],
+                                            nombre=sesion.get("advisee", ""))
+    bullets = [b for c in _criterios_nivel_panel(sesion, area) for b in (c.get("criterios") or [])]
+    if not bullets:
+        raise ValueError("No existen criterios para este puesto en esta área.")
+
+    comentarios = _asegurar_comentarios(slug, sesion)
+    _, fuentes = _emp_y_fuentes(sesion)
+    evidencia = _evidencia_de_area(comentarios, fuentes, clave)
+    resumen = _generar_resumen_area(sesion.get("cargo", ""), secciones[clave], bullets,
+                                    evidencia, area.get("conversacion", []), area.get("propuesta", ""))
+    area["resumen_final"] = resumen
+    _guardar(slug, sesion)
+    return {"resumen": resumen}
 
 
 def confirmar_area(advisee: str, clave: str) -> dict:
@@ -514,7 +590,9 @@ def _generar_plan_accion(sesion: dict, instruccion: str = "", plan_previo: str =
     for clave, etiqueta in secciones:
         a = areas.get(clave, {})
         final = a.get("texto_final") or a.get("propuesta") or ""
-        diag = a.get("diagnostico") or ""
+        # Gaps: sugerencia final por criterios si el CA la pidió; si no, el
+        # diagnóstico de sesiones antiguas (ya no se genera automáticamente).
+        diag = _resumen_a_texto(a.get("resumen_final")) or a.get("diagnostico") or ""
         if final or diag:
             bloques.append(f"### {etiqueta}\nVALORACIÓN ACORDADA: {final or '—'}\nDIAGNÓSTICO/GAPS: {diag or '—'}")
     resumen = "\n\n".join(bloques) or "(sin datos por área)"
@@ -588,6 +666,136 @@ def guardar_plan_accion(advisee: str, texto: str) -> dict:
     return {"ok": True}
 
 
+# ── Borrador editable del informe final (en la web) ───────────────────────────
+
+def _dims_informe(cargo: str) -> list[tuple[str, str]]:
+    """Dimensiones de la tabla CALIFICACIÓN de la plantilla oficial (proyecto + liderazgo si aplica)."""
+    dims = list(sk._DIMS_PDF)
+    if any(c in (cargo or "").strip().lower() for c in sk._REQUIERE_LIDERAZGO):
+        dims += list(sk._DIMS_LIDERAZGO)
+    return dims
+
+
+def _construir_borrador(sesion: dict) -> dict:
+    """Borrador editable que replica 1:1 la plantilla oficial del informe final.
+
+    Los comentarios por dimensión van prellenados con lo acordado en la sesión; los
+    campos reservados al CA (notas, retribución, promoción, salarios, deadlines) se
+    dejan VACÍOS, igual que en la plantilla. El CA los rellena en la web si quiere."""
+    ahora = datetime.now(timezone.utc)
+    areas = sesion.get("areas", {})
+    dimensiones = []
+    for clave, etiqueta in _dims_informe(sesion.get("cargo", "")):
+        a = areas.get(clave, {})
+        dimensiones.append({
+            "clave": clave, "etiqueta": etiqueta, "nota": "",
+            "comentarios": a.get("texto_final") or a.get("propuesta") or "",
+        })
+    objetivos = [{"texto": (o.get("titulo") or o.get("descripcion") or "").strip(), "deadline": ""}
+                 for o in sesion["emp_data"].get("objetivos", [])]
+    while len(objetivos) < 3:
+        objetivos.append({"texto": "", "deadline": ""})
+    return {
+        "empleado": sesion["advisee"],
+        "anio": ahora.year - 1,
+        "anioSiguiente": ahora.year,
+        "fecha": f"{sk._mes_label(ahora.month - 1, 'es')} {ahora.year}",
+        "caActual": sesion.get("ca", ""),
+        "caSiguiente": "",
+        "cargo": sesion.get("cargo", ""),
+        "salarioActual": "",
+        "dimensiones": dimensiones,
+        "retribucion": {"notaProyectos": "", "variable60": "", "notaContribucion": "",
+                        "variable": "", "objetivosCorporativos": "", "totalVariable": ""},
+        "resultadoEval": {"promocion": "", "cargoSiguiente": "", "nuevoSalarioFijo": ""},
+        "objetivos": objetivos,
+    }
+
+
+def _merge_borrador(base: dict, data: dict) -> dict:
+    """Aplica al borrador SOLO los campos editables conocidos (ignora claves extrañas)."""
+    out = json.loads(json.dumps(base))  # copia profunda
+    for campo in ("caSiguiente", "salarioActual"):
+        if campo in data:
+            out[campo] = str(data.get(campo) or "").strip()
+    editadas = {d.get("clave"): d for d in data.get("dimensiones") or [] if isinstance(d, dict)}
+    for dim in out.get("dimensiones", []):
+        ed = editadas.get(dim["clave"])
+        if not ed:
+            continue
+        if "nota" in ed:
+            dim["nota"] = str(ed.get("nota") or "").strip()
+        if "comentarios" in ed:
+            dim["comentarios"] = str(ed.get("comentarios") or "")
+    for bloque in ("retribucion", "resultadoEval"):
+        entrada = data.get(bloque)
+        if isinstance(entrada, dict):
+            for k in out[bloque]:
+                if k in entrada:
+                    out[bloque][k] = str(entrada.get(k) or "").strip()
+    if isinstance(data.get("objetivos"), list):
+        out["objetivos"] = [{"texto": str(o.get("texto") or ""), "deadline": str(o.get("deadline") or "").strip()}
+                            for o in data["objetivos"][:20] if isinstance(o, dict)]
+        while len(out["objetivos"]) < 3:
+            out["objetivos"].append({"texto": "", "deadline": ""})
+    return out
+
+
+def obtener_borrador(advisee: str) -> dict:
+    """Borrador editable del informe final. Se construye al finalizar la sesión;
+    aquí solo se recupera (o se reconstruye si falta en sesiones antiguas)."""
+    slug = slug_archivo(advisee)
+    sesion = _leer(slug)
+    if not sesion:
+        raise ValueError("No hay sesión iniciada.")
+    if sesion.get("estado") != "completada":
+        raise ValueError("Genera primero el borrador (todas las áreas deben estar confirmadas).")
+    if not sesion.get("borrador"):
+        sesion["borrador"] = _construir_borrador(sesion)
+        _guardar(slug, sesion)
+    return {"borrador": sesion["borrador"]}
+
+
+def guardar_borrador(advisee: str, data: dict) -> dict:
+    """Guarda las ediciones del CA sobre el borrador web."""
+    slug = slug_archivo(advisee)
+    sesion = _leer(slug)
+    if not sesion:
+        raise ValueError("No hay sesión iniciada.")
+    base = sesion.get("borrador") or _construir_borrador(sesion)
+    sesion["borrador"] = _merge_borrador(base, data or {})
+    _guardar(slug, sesion)
+    return {"ok": True, "borrador": sesion["borrador"]}
+
+
+def generar_docx_borrador(advisee: str, nombre_archivo: str) -> str:
+    """Genera el .docx del informe final (plantilla oficial) desde el borrador editado.
+
+    Devuelve la ruta del archivo escrito en CARPETA_WEB."""
+    slug = slug_archivo(advisee)
+    sesion = _leer(slug)
+    if not sesion:
+        raise ValueError("No hay sesión iniciada.")
+    borrador = sesion.get("borrador")
+    if not borrador:
+        raise ValueError("No hay borrador generado para esta persona.")
+    _, fuentes = _emp_y_fuentes(sesion)
+    comentarios = {"_fuentes": fuentes}
+    for dim in borrador.get("dimensiones", []):
+        comentarios[dim["clave"]] = dim.get("comentarios", "")
+    valores_ca = {
+        "caSiguiente": borrador.get("caSiguiente", ""),
+        "salarioActual": borrador.get("salarioActual", ""),
+        "notas": {d["clave"]: d.get("nota", "") for d in borrador.get("dimensiones", [])},
+        "retribucion": borrador.get("retribucion", {}),
+        "resultadoEval": borrador.get("resultadoEval", {}),
+        "objetivos": borrador.get("objetivos", []),
+    }
+    sk.guardar_informe_anual_word(sesion["emp_data"], comentarios, cargo=sesion.get("cargo", ""),
+                                  valores_ca=valores_ca, nombre_archivo=nombre_archivo)
+    return os.path.join(config.CARPETA_WEB, nombre_archivo)
+
+
 def finalizar_sesion(advisee: str) -> dict:
     """Exige todas las áreas confirmadas. Genera el borrador con lo acordado (huecos en blanco)."""
     slug = slug_archivo(advisee)
@@ -610,6 +818,9 @@ def finalizar_sesion(advisee: str) -> dict:
     sk.guardar_informe_anual_word(emp_data, comentarios_final, cargo=cargo)
     sk.guardar_informe_anual_html(emp_data, comentarios_final, cargo=cargo)
 
+    # Borrador editable en la web: se (re)construye con lo recién acordado.
+    # (Si el CA reabre áreas y vuelve a finalizar, el borrador se regenera.)
+    sesion["borrador"] = _construir_borrador(sesion)
     sesion["estado"] = "completada"
     sesion["completada_en"] = _ahora()
     _guardar(slug, sesion)

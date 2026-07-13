@@ -693,20 +693,22 @@ def _bloques_dm_ca(idioma, enlace_pendientes=None):
             "text": {"type": "mrkdwn", "text": t("bc.pending_intro", idioma)},
         },
         {"type": "context", "elements": [{"type": "mrkdwn", "text": t("bot.no_inteligente", idioma)}]},
-        {"type": "section", "text": {"type": "mrkdwn", "text": t("bp.example_label", idioma)}},
+        {"type": "section", "text": {"type": "mrkdwn", "text": t("bot.example_q", idioma)}},
         {
             "type": "actions",
             "elements": [
                 {
                     "type": "button",
-                    "text": {"type": "plain_text", "text": t("bp.see_example", idioma)},
-                    "action_id": "ca_ver_ejemplo",
+                    "text": {"type": "plain_text", "text": t("bm.yes_btn", idioma), "emoji": True},
+                    "style": "primary",
+                    "action_id": "ca_ejemplo_si",
+                },
+                {
+                    "type": "button",
+                    "text": {"type": "plain_text", "text": t("bm.no_btn", idioma), "emoji": True},
+                    "action_id": "ca_ejemplo_no",
                 },
             ],
-        },
-        {
-            "type": "section",
-            "text": {"type": "mrkdwn", "text": t("bp.send_to_start", idioma)},
         },
     ]
     if enlace_pendientes:
@@ -1563,6 +1565,55 @@ def _handle_ca_ver_ejemplo(ack, body, logger):
         slack_app.client.views_update(view_id=resp["view"]["id"], view=_build_ejemplo_ca_view(_idi))
     except Exception:
         logger.exception("Error actualizando modal de ejemplo CA")
+
+
+def _arrancar_ca_desde_boton(body, logger, con_ejemplo):
+    """Botones Sí/No del DM inicial CA. 'Sí' publica el ejemplo en el hilo;
+    ambos arrancan la evaluación inyectando el evento que antes generaba el primer
+    mensaje del usuario. Si la conversación ya está en marcha, 'Sí' solo muestra
+    el ejemplo y 'No' no hace nada."""
+    user_id = body.get("user", {}).get("id", "")
+    channel = (body.get("channel") or {}).get("id") or (body.get("container") or {}).get("channel_id")
+    msg = body.get("message") or {}
+    thread_ts = msg.get("thread_ts") or msg.get("ts")
+    if not (user_id and channel and thread_ts):
+        return
+    with _lock:
+        es_activo = user_id in ca_dm_activas and thread_ts == ca_dm_ts.get(user_id)
+        estado = conversaciones_ca.get(user_id)
+        ya_empezada = estado is not None and estado.get("modo", "pre_inicial") != "pre_inicial"
+    if not es_activo:
+        return
+    idioma = idioma_por_slack_id(user_id)
+    if con_ejemplo:
+        with AnimacionCargando(channel, thread_ts, idioma):
+            ejemplo = obtener_ejemplos_guia(idioma).get("CA") or t("bm.no_example", idioma)
+        slack_app.client.chat_postMessage(
+            channel=channel,
+            thread_ts=thread_ts,
+            text=f"{t('bc.guide_example_header', idioma)}\n\n{ejemplo[:2900]}",
+        )
+    if ya_empezada:
+        return
+    manejar_mensaje_ca({"user": user_id, "channel": channel, "thread_ts": thread_ts, "text": ""}, logger)
+
+
+@slack_app.action("ca_ejemplo_si")
+def _handle_ca_ejemplo_si(ack, body, logger):
+    ack()
+    try:
+        _arrancar_ca_desde_boton(body, logger, con_ejemplo=True)
+    except Exception:
+        logger.exception("Error arrancando evaluación CA desde el botón Sí")
+
+
+@slack_app.action("ca_ejemplo_no")
+def _handle_ca_ejemplo_no(ack, body, logger):
+    ack()
+    try:
+        _arrancar_ca_desde_boton(body, logger, con_ejemplo=False)
+    except Exception:
+        logger.exception("Error arrancando evaluación CA desde el botón No")
 
 
 def ciclo_envio_ca() -> None:

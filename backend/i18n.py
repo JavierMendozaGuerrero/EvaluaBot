@@ -34,6 +34,12 @@ TEXTOS: dict[str, dict[str, str]] = {
         "es": "🤖 Este bot no es inteligente: solo te hace preguntas y guarda tus respuestas tal cual. No entiende ni interpreta lo que escribes, así que no esperes respuestas conversacionales.",
         "en": "🤖 This bot is not intelligent: it just asks you questions and stores your answers as they are. It doesn't understand or interpret what you write, so don't expect conversational replies.",
     },
+    # --- Pregunta compartida del DM inicial: ver ejemplo con botones Sí/No ---
+    "bot.example_q": {
+        "es": ":point_right: *¿Quieres ver un ejemplo antes de empezar?*",
+        "en": ":point_right: *Would you like to see an example before starting?*",
+        "pt": ":point_right: *Queres ver um exemplo antes de começar?*",
+    },
     # --- Bot Slack: evaluacion mensual de proyecto (slack_bot.py) ---
     "bm.back_btn": {"es": "⬅️ Atrás", "en": "⬅️ Back"},
     "bm.back_done": {"es": "⬅️ Volviste atrás", "en": "⬅️ Went back"},
@@ -162,6 +168,7 @@ TEXTOS: dict[str, dict[str, str]] = {
     "bm.btn_hide_item": {"es": "▼ Ocultar", "en": "▼ Hide", "pt": "▼ Ocultar"},
     "bp.examples_title": {"es": "Ejemplos de guía", "en": "Guide examples", "pt": "Exemplos de guia"},
     "bp.examples_intro": {"es": "💡 *Ejemplos de guía — Seguimiento personal*\nPulsa *Ver* en cada apartado para expandirlo:", "en": "💡 *Guide examples — Personal tracking*\nClick *View* on each item to expand it:", "pt": "💡 *Exemplos de guia — Acompanhamento pessoal*\nClica em *Ver* em cada secção para a expandir:"},
+    "bp.examples_header": {"es": "💡 *Ejemplos de guía — Seguimiento personal*", "en": "💡 *Guide examples — Personal tracking*", "pt": "💡 *Exemplos de guia — Acompanhamento pessoal*"},
     "bp.no_personal_examples": {"es": "_No hay ejemplos personales disponibles_", "en": "_No personal examples available_", "pt": "_Sem exemplos pessoais disponíveis_"},
     "bp.criteria_title": {"es": "Criterios de evaluación", "en": "Evaluation criteria", "pt": "Critérios de avaliação"},
     "bp.criteria_title_short": {"es": "Criterios", "en": "Criteria", "pt": "Critérios"},

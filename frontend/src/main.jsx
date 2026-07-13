@@ -1792,7 +1792,7 @@ function ChatEvalProyecto({ token, user, onComplete, onNavigate }) {
     );
     if (step === "preguntas") {
       if (esValoracion) return (
-        <div className="chat-input-area"><div className="chat-btns">{[1,2,3,4].map(n => <button key={n} className="chat-btn" onClick={() => handleValoracion(String(n))}>{n}</button>)}</div></div>
+        <div className="chat-input-area"><div className="chat-btns">{[1,2,3,4,5].map(n => <button key={n} className="chat-btn" onClick={() => handleValoracion(String(n))}>{n}</button>)}</div></div>
       );
       return (
         <div className="chat-input-area"><div className="chat-input-row">
@@ -1824,7 +1824,7 @@ function ChatEvalProyecto({ token, user, onComplete, onNavigate }) {
         </div>
       );
       if (esModValoracion) return (
-        <div className="chat-input-area"><div className="chat-btns">{[1,2,3,4].map(n => <button key={n} className="chat-btn" onClick={() => handleModificarValor(String(n))}>{n}</button>)}</div></div>
+        <div className="chat-input-area"><div className="chat-btns">{[1,2,3,4,5].map(n => <button key={n} className="chat-btn" onClick={() => handleModificarValor(String(n))}>{n}</button>)}</div></div>
       );
       return (
         <div className="chat-input-area"><div className="chat-input-row">
@@ -2551,11 +2551,14 @@ function DashNavItem({ label, onClick, disabled, external = false }) {
   );
 }
 
-function DashCollapsible({ title, open, onToggle, children, badge = null, bodyMarginTop = 10 }) {
+function DashCollapsible({ title, open, onToggle, children, badge = null, bodyMarginTop = 10, hint = null }) {
   return (
     <div>
       <div onClick={onToggle} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", cursor: "pointer", userSelect: "none" }}>
-        <span className="eyebrow" style={{ marginBottom: 0, fontSize: "0.7rem" }}>{title}</span>
+        <span className="eyebrow" style={{ marginBottom: 0, fontSize: "0.7rem" }}>
+          {title}
+          {hint && !open && <span style={{ textTransform: "none", letterSpacing: 0, fontStyle: "italic", fontWeight: 200, marginLeft: 8, fontSize: 11, color: "var(--text-55)" }}>{hint}</span>}
+        </span>
         <span style={{ display: "inline-flex", alignItems: "center", gap: 8, flexShrink: 0 }}>
           {badge != null && (
             <span style={{
@@ -2770,7 +2773,7 @@ function Dashboard({ token, user, onLogout, onNavigate, onBackToRoleSelect = nul
           const lista = construirEvaluacionesProyectoAHacer(persona, p.activado_por || "", equipo);
           const pendientes = lista
             .filter((it) => !completadasKeys.includes(`${it.tipo}:${norm(it.evaluado)}`))
-            .map((it) => ({ proyecto: p.nombre_proyecto, tipo: it.tipo, evaluado: it.evaluado, label: it.label }));
+            .map((it) => ({ proyecto: p.nombre_proyecto, tipo: it.tipo, evaluado: it.evaluado, label: it.label, fecha_limite: p.fecha_limite || "" }));
           progreso[p.nombre_proyecto] = { done: lista.length - pendientes.length, total: lista.length };
           pendientes.forEach((it) => tareas.push(it));
         });
@@ -3009,25 +3012,39 @@ function Dashboard({ token, user, onLogout, onNavigate, onBackToRoleSelect = nul
                 <p className="fine">{t("dash.no_pending_tasks")}</p>
               ) : (
                 <div className="tareas-list">
-                  {tareasSlack.pendientes.map((tp) => (
-                    <div key={`slack-${tp}`} className="tarea-row"
+                  {tareasSlack.pendientes.map((tp) => {
+                    // Tolerante a ambos formatos: string (backend antiguo) u objeto {tipo, deadline}.
+                    const tipoSlack = typeof tp === "string" ? tp : tp.tipo;
+                    const deadlineSlack = typeof tp === "string" ? "" : tp.deadline;
+                    return (
+                    <div key={`slack-${tipoSlack}`} className="tarea-row"
                       onClick={() => { if (tareasSlack.url) window.location.href = tareasSlack.url; }}>
-                      <span className="tarea-label">{t(`dash.slack_${tp}`)}</span>
-                      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ width: 13, height: 13, flexShrink: 0 }}><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6" /><polyline points="15 3 21 3 21 9" /><line x1="10" y1="14" x2="21" y2="3" /></svg>
+                      <span className="tarea-label">{t(`dash.slack_${tipoSlack}`)}</span>
+                      <span style={{ display: "inline-flex", alignItems: "center", gap: 8, flexShrink: 0 }}>
+                        {deadlineSlack && <span style={{ fontSize: 12, color: "rgba(0,0,0,.5)", whiteSpace: "nowrap" }}>{formatearFecha(deadlineSlack)}</span>}
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ width: 13, height: 13, flexShrink: 0 }}><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6" /><polyline points="15 3 21 3 21 9" /><line x1="10" y1="14" x2="21" y2="3" /></svg>
+                      </span>
                     </div>
-                  ))}
+                    );
+                  })}
                   {tareasProyecto.map((it) => (
                     <div key={`proj-${it.proyecto}-${it.tipo}-${it.evaluado}`} className="tarea-row"
                       onClick={() => onNavigate({ type: "evaluaciones-proyecto", proyectos: proyectosActivos, initialProyecto: it.proyecto })}>
                       <span className="tarea-label">{it.label} · {it.proyecto}</span>
-                      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ width: 13, height: 13, flexShrink: 0 }}><polyline points="9 18 15 12 9 6" /></svg>
+                      <span style={{ display: "inline-flex", alignItems: "center", gap: 8, flexShrink: 0 }}>
+                        {it.fecha_limite && <span style={{ fontSize: 12, color: "rgba(0,0,0,.5)", whiteSpace: "nowrap" }}>{formatearFecha(it.fecha_limite)}</span>}
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ width: 13, height: 13, flexShrink: 0 }}><polyline points="9 18 15 12 9 6" /></svg>
+                      </span>
                     </div>
                   ))}
                   {evaluacionesExtraPendientes.map((ev) => (
                     <div key={`extra-${ev.page_id}`} className="tarea-row"
                       onClick={() => onNavigate({ type: "formulario-evaluacion-extra", solicitudPageId: ev.page_id, evaluado: ev.evaluado, contexto: ev.contexto })}>
                       <span className="tarea-label">{t("eep.requested_by", { nombre: ev.evaluado })}</span>
-                      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ width: 13, height: 13, flexShrink: 0 }}><polyline points="9 18 15 12 9 6" /></svg>
+                      <span style={{ display: "inline-flex", alignItems: "center", gap: 8, flexShrink: 0 }}>
+                        {ev.fecha_limite && <span style={{ fontSize: 12, color: "rgba(0,0,0,.5)", whiteSpace: "nowrap" }}>{formatearFecha(ev.fecha_limite)}</span>}
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ width: 13, height: 13, flexShrink: 0 }}><polyline points="9 18 15 12 9 6" /></svg>
+                      </span>
                     </div>
                   ))}
                 </div>
@@ -4238,6 +4255,20 @@ function MisProyectosActivosPage({ token, user, onBack }) {
 // (año de 4 dígitos + al menos dos tokens en MAYÚSCULAS/dígitos, sin espacios ni tildes).
 const FORMATO_PROYECTO = /^\d{4}(_[A-Z0-9]+){2,}$/;
 
+// Fecha por defecto para la fecha límite de una evaluación: hoy + 2 semanas (YYYY-MM-DD).
+function fechaLimitePorDefecto() {
+  const d = new Date();
+  d.setDate(d.getDate() + 14);
+  return d.toISOString().slice(0, 10);
+}
+
+// Formatea una fecha "YYYY-MM-DD" como "DD/MM/YYYY" para mostrar. Vacío si no hay fecha.
+function formatearFecha(iso) {
+  if (!iso) return "";
+  const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(iso);
+  return m ? `${m[3]}/${m[2]}/${m[1]}` : iso;
+}
+
 function ActivarEvaluacionesProyectoPage({ token, user, onBack, onActivado }) {
   const [proyecto, setProyecto] = useState("");
   const [todosEmpleados, setTodosEmpleados] = useState([]);
@@ -4999,6 +5030,7 @@ function SolicitarEvaluacionExtraPage({ token, user, onBack }) {
   const [busqueda, setBusqueda] = useState("");
   const [evaluador, setEvaluador] = useState("");
   const [contexto, setContexto] = useState("");
+  const [fechaLimite, setFechaLimite] = useState(fechaLimitePorDefecto);
   const [loading, setLoading] = useState(false);
   const [status, setStatus] = useState("");
   const [enviado, setEnviado] = useState(false);
@@ -5016,13 +5048,14 @@ function SolicitarEvaluacionExtraPage({ token, user, onBack }) {
     e.preventDefault();
     if (!evaluador) { setStatus(t("sex.err_select_employee")); return; }
     if (!contexto.trim()) { setStatus(t("sex.err_context")); return; }
+    if (!fechaLimite) { setStatus(t("aep.err_deadline")); return; }
     setLoading(true);
     setStatus("");
     try {
       const data = await apiRequest("/api/solicitar-evaluacion-extra", {
         token,
         method: "POST",
-        body: { evaluador, contexto: contexto.trim() },
+        body: { evaluador, contexto: contexto.trim(), fechaLimite },
       });
       if (data.ok) {
         setStatus(t("sex.sent", { nombre: evaluador }));
@@ -5038,7 +5071,7 @@ function SolicitarEvaluacionExtraPage({ token, user, onBack }) {
   }
 
   const filtrados = todosEmpleados.filter((n) => n.toLowerCase().includes(busqueda.toLowerCase().trim()));
-  const canSubmit = Boolean(evaluador) && contexto.trim().length > 0 && !loading;
+  const canSubmit = Boolean(evaluador) && contexto.trim().length > 0 && Boolean(fechaLimite) && !loading;
 
   return (
     <main className="page">
@@ -5062,7 +5095,7 @@ function SolicitarEvaluacionExtraPage({ token, user, onBack }) {
               {status}
             </div>
             <div className="actions">
-              <button onClick={() => { setEnviado(false); setEvaluador(""); setContexto(""); setStatus(""); setBusqueda(""); }}>
+              <button onClick={() => { setEnviado(false); setEvaluador(""); setContexto(""); setStatus(""); setBusqueda(""); setFechaLimite(fechaLimitePorDefecto()); }}>
                 {t("sex.request_another")}
               </button>
               <button className="secondary" onClick={onBack}>{t("sex.back_home")}</button>
@@ -5120,6 +5153,20 @@ function SolicitarEvaluacionExtraPage({ token, user, onBack }) {
               rows={4}
               placeholder={t("sex.context_placeholder")}
               style={{ width: "100%", border: "1px solid #DBDBDE", borderRadius: "6px", padding: "12px 14px", fontSize: "14px", lineHeight: "1.6", resize: "vertical", background: "transparent", color: "#000000", outline: "none", fontFamily: "inherit", boxSizing: "border-box" }}
+            />
+
+            <label htmlFor="extra-deadline" style={{ marginTop: 24 }}>{t("aep.deadline")}</label>
+            <p className="fine" style={{ marginTop: -2, marginBottom: 8, color: "#000", fontSize: 11 }}>
+              {t("aep.deadline_hint")}
+            </p>
+            <input
+              id="extra-deadline"
+              type="date"
+              value={fechaLimite}
+              min={new Date().toISOString().slice(0, 10)}
+              onChange={(e) => setFechaLimite(e.target.value)}
+              style={{ maxWidth: 220 }}
+              required
             />
 
             {status && <p className="error" style={{ marginTop: 8 }}>{status}</p>}
@@ -5205,7 +5252,7 @@ function FormularioEvaluacionExtra({ token, evaluado, contexto, solicitudPageId,
             {t("fex.score_label")}
           </label>
           <div style={{ display: "flex", border: "1px solid #DBDBDE", borderRadius: "8px", overflow: "hidden", width: "100%", maxWidth: "320px" }}>
-            {[1, 2, 3, 4].map((val, idx) => (
+            {[1, 2, 3, 4, 5].map((val, idx) => (
               <label
                 key={val}
                 className="eval-seg"

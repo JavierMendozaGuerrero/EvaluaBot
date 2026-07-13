@@ -43,6 +43,7 @@ _PROPS_SOLICITUDES = {
     "Solicitante": {"rich_text": {}},
     "Contexto": {"rich_text": {}},
     "Fecha_solicitud": {"date": {}},
+    "Fecha_limite": {"date": {}},
     "Completada": {"checkbox": {}},
 }
 
@@ -150,20 +151,24 @@ def _notificar_solicitud_evaluacion_extra(evaluado: str, evaluador: str, context
 # Solicitar una evaluación extra
 # ---------------------------------------------------------------------------
 
-def solicitar_evaluacion_extra(evaluado: str, evaluador: str, contexto: str, idioma: str = "es") -> dict:
-    """Crea la solicitud pendiente en Notion y notifica por Slack al evaluador."""
+def solicitar_evaluacion_extra(evaluado: str, evaluador: str, contexto: str, idioma: str = "es", fecha_limite: str = "") -> dict:
+    """Crea la solicitud pendiente en Notion y notifica por Slack al evaluador.
+    `fecha_limite` (YYYY-MM-DD) es la fecha tope que fija quien la pide."""
     db_id = _obtener_o_crear_bbdd_solicitudes()
     if not db_id:
         return {"ok": False, "error": t("evex.err_db_access", idioma)}
 
     try:
-        _crear_pagina_en_bbdd(db_id, {
+        props = {
             "Evaluador": {"title": [{"type": "text", "text": {"content": evaluador}}]},
             "Solicitante": {"rich_text": [{"type": "text", "text": {"content": evaluado}}]},
             "Contexto": {"rich_text": [{"type": "text", "text": {"content": contexto}}]},
             "Fecha_solicitud": {"date": {"start": datetime.now(timezone.utc).isoformat()}},
             "Completada": {"checkbox": False},
-        })
+        }
+        if fecha_limite:
+            props["Fecha_limite"] = {"date": {"start": fecha_limite}}
+        _crear_pagina_en_bbdd(db_id, props)
     except Exception:
         logging.exception("Error creando solicitud de evaluación extra de '%s' a '%s'", evaluado, evaluador)
         return {"ok": False, "error": t("evex.err_request", idioma)}
@@ -202,11 +207,13 @@ def obtener_solicitudes_pendientes(evaluador: str) -> list:
                 p.get("plain_text", "") for p in (props.get("Contexto") or {}).get("rich_text", [])
             ).strip()
             fecha = ((props.get("Fecha_solicitud") or {}).get("date") or {}).get("start", "")
+            fecha_limite = ((props.get("Fecha_limite") or {}).get("date") or {}).get("start", "")
             pendientes.append({
                 "page_id": fila.get("id", ""),
                 "evaluado": solicitante,
                 "contexto": contexto,
                 "fecha": (fecha or "")[:10],
+                "fecha_limite": (fecha_limite or "")[:10],
             })
         pendientes.sort(key=lambda x: x.get("fecha", ""))
         return pendientes
@@ -297,7 +304,7 @@ def obtener_evaluaciones_extra_por_evaluado(evaluado: str) -> list[dict]:
                 ).strip()
                 nota = (props.get("Nota") or {}).get("number")
                 fecha = ((props.get("Fecha") or {}).get("date") or {}).get("start", "")
-                respuestas = f"Nota: {nota}/4. Justificación: {justificacion}" if nota is not None else justificacion
+                respuestas = f"Nota: {nota}/5. Justificación: {justificacion}" if nota is not None else justificacion
                 resultado.append({
                     "contexto": contexto,
                     "evaluador": evaluador,

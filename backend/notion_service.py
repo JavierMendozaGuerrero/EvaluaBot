@@ -824,12 +824,12 @@ def _obtener_o_crear_bbdd_preguntas():
 
 
 _Q4_BOTTOM_TOP = (
-    "¿Cómo valorarías del 1 al 4 la contribución del Project Leader al buen avance del proyecto? "
+    "¿Cómo valorarías del 1 al 5 la contribución del Project Leader al buen avance del proyecto? "
     "(Esta respuesta es totalmente privada y anónima: no la puede ver nadie de la empresa, "
     "ni tu CA ni la persona evaluada, salvo la Head of People, Ana.)"
 )
-_Q4_TOP_BOTTOM = "¿Cómo valorarías del 1 al 4 la contribución de {nombre} al buen avance del proyecto?"
-_Q4_SAME_LEVEL = "¿Cómo valorarías del 1 al 4 la contribución de {nombre} al buen avance del proyecto?"
+_Q4_TOP_BOTTOM = "¿Cómo valorarías del 1 al 5 la contribución de {nombre} al buen avance del proyecto?"
+_Q4_SAME_LEVEL = "¿Cómo valorarías del 1 al 5 la contribución de {nombre} al buen avance del proyecto?"
 _Q5_TEXTO = "Indica un ejemplo concreto que justifique tu valoración"
 _Q5_BOTTOM_TOP = (
     "Indica un ejemplo concreto que justifique tu valoración. "
@@ -4350,6 +4350,127 @@ def _obtener_o_crear_bbdd_calendario() -> str | None:
 
         _cache_calendario_db["db_id"] = db_id
         return db_id
+
+
+# ---------------------------------------------------------------------------
+# Frecuencia de evaluaciones de Slack (BD 'Frecuencia evaluaciones': Tipo + Frecuencia días).
+# El deadline de una tarea de Slack = su fecha de envío + su frecuencia en días.
+# ---------------------------------------------------------------------------
+_cache_frecuencias_db: dict = {"db_id": None}
+_lock_frecuencias = threading.Lock()
+_cache_frecuencias_val: dict = {"ts": 0.0, "data": None}
+_FREC_TTL = 300
+_frecuencias_sembradas: set = set()
+
+_PROPS_FRECUENCIAS = {
+    "Tipo": {"title": {}},
+    "Frecuencia": {"number": {}},
+}
+# Frecuencia (días) con la que se siembra la BD la primera vez. Editable en Notion después.
+_FRECUENCIAS_DEFAULT = {"mensual": 30, "personal": 14, "ca": 30, "proyecto": 14}
+
+
+def _asegurar_filas_frecuencias(db_id: str) -> None:
+    """Siembra las filas (mensual/personal/ca) que falten, una vez por proceso."""
+    if not db_id or db_id in _frecuencias_sembradas:
+        return
+    _frecuencias_sembradas.add(db_id)
+    try:
+        existentes = set()
+        resp = _query_bbdd(db_id, page_size=50)
+        for fila in resp.get("results", []):
+            tipo = "".join(
+                p.get("plain_text", "") for p in fila.get("properties", {}).get("Tipo", {}).get("title", [])
+            ).strip().lower()
+            if tipo:
+                existentes.add(tipo)
+        for tipo, dias in _FRECUENCIAS_DEFAULT.items():
+            if tipo in existentes:
+                continue
+            _crear_pagina_en_bbdd(db_id, {
+                "Tipo": {"title": [{"type": "text", "text": {"content": tipo}}]},
+                "Frecuencia": {"number": dias},
+            })
+    except Exception:
+        logging.exception("Error sembrando 'Frecuencia evaluaciones'")
+
+
+def _obtener_o_crear_bbdd_frecuencias() -> str | None:
+    with _lock_frecuencias:
+        db_id = _cache_frecuencias_db["db_id"]
+        if not db_id:
+            parent = _parent_bbdd_en_pagina(config.NOTION_DATA_LISTS_PAGE_NAME, crear=False)
+            if parent.get("type") != "page_id":
+                parent = _parent_bbdd_referencia()
+            parent_id = parent.get("page_id")
+            if parent_id:
+                db_id = _buscar_bbdd_en_pagina_id(parent_id, "Frecuencia evaluaciones")
+            if not db_id:
+                try:
+                    res = notion.search(
+                        query="Frecuencia evaluaciones",
+                        filter={"value": _tipo_objeto_busqueda_bbdd(), "property": "object"},
+                        page_size=10,
+                    )
+                    for bbdd in res.get("results", []):
+                        if normalizar_nombre(_extraer_titulo_bbdd(bbdd)) == "frecuencia evaluaciones":
+                            db_id = _data_source_id(bbdd)
+                            break
+                except Exception:
+                    pass
+            if not db_id:
+                try:
+                    if _usa_data_sources():
+                        nueva = notion.databases.create(
+                            parent=parent,
+                            title=[{"type": "text", "text": {"content": "Frecuencia evaluaciones"}}],
+                            initial_data_source={
+                                "title": [{"type": "text", "text": {"content": "Frecuencia evaluaciones"}}],
+                                "properties": _PROPS_FRECUENCIAS,
+                            },
+                        )
+                        nueva = notion.databases.retrieve(database_id=nueva["id"])
+                    else:
+                        nueva = notion.databases.create(
+                            parent=parent,
+                            title=[{"type": "text", "text": {"content": "Frecuencia evaluaciones"}}],
+                            properties=_PROPS_FRECUENCIAS,
+                        )
+                    db_id = _data_source_id(nueva)
+                except Exception:
+                    logging.exception("Error creando 'Frecuencia evaluaciones' en Notion")
+                    return None
+            _cache_frecuencias_db["db_id"] = db_id
+    _asegurar_filas_frecuencias(db_id)
+    return db_id
+
+
+def obtener_frecuencias_evaluaciones() -> dict:
+    """{tipo: días} de la BD 'Frecuencia evaluaciones' (cacheado). Cae a los defaults."""
+    ahora = time.time()
+    with _lock_frecuencias:
+        c = _cache_frecuencias_val
+        if c["data"] is not None and (ahora - c["ts"]) < _FREC_TTL:
+            return c["data"]
+    db_id = _obtener_o_crear_bbdd_frecuencias()
+    data = dict(_FRECUENCIAS_DEFAULT)
+    if db_id:
+        try:
+            resp = _query_bbdd(db_id, page_size=50)
+            for fila in resp.get("results", []):
+                props = fila.get("properties", {})
+                tipo = "".join(
+                    p.get("plain_text", "") for p in props.get("Tipo", {}).get("title", [])
+                ).strip().lower()
+                num = (props.get("Frecuencia") or {}).get("number")
+                if tipo in _FRECUENCIAS_DEFAULT and isinstance(num, (int, float)) and num > 0:
+                    data[tipo] = int(num)
+        except Exception:
+            logging.exception("Error leyendo 'Frecuencia evaluaciones'")
+    with _lock_frecuencias:
+        _cache_frecuencias_val["data"] = data
+        _cache_frecuencias_val["ts"] = time.time()
+    return data
 
 
 def obtener_config_calendario() -> dict:

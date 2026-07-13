@@ -213,7 +213,7 @@ def generar_pdf_evals_mensuales(advisee: str, anonimo: bool = True, idioma: str 
     for d in datos:
         cuerpo = []
         if d.get("q1"):
-            cuerpo.append(f"{_t(idioma, 'valoracion')}: {d['q1']}/4")
+            cuerpo.append(f"{_t(idioma, 'valoracion')}: {d['q1']}/5")
         if d.get("q2"):
             cuerpo.append(f"{_t(idioma, 'ejemplo')}: {d['q2']}")
         entradas.append({
@@ -236,7 +236,7 @@ def generar_pdf_evals_extra(advisee: str, anonimo: bool = True, idioma: str = "e
         "header": d.get("contexto") or _t(idioma, "sin_contexto"),
         "meta": " · ".join(p for p in [
             None if anonimo else d.get("evaluador"),
-            f"{_t(idioma, 'nota')}: {d['nota']}/4" if d.get("nota") is not None else None,
+            f"{_t(idioma, 'nota')}: {d['nota']}/5" if d.get("nota") is not None else None,
             _fecha_es(d.get("fecha", ""), idioma),
         ] if p),
         "cuerpo": d.get("justificacion", ""),
@@ -273,7 +273,7 @@ def _entradas_evals_mensuales(advisee, anonimo, idioma="es"):
     for d in datos:
         cuerpo = []
         if d.get("q1"):
-            cuerpo.append(f"{_t(idioma, 'valoracion')}: {d['q1']}/4")
+            cuerpo.append(f"{_t(idioma, 'valoracion')}: {d['q1']}/5")
         if d.get("q2"):
             cuerpo.append(f"{_t(idioma, 'ejemplo')}: {d['q2']}")
         out.append({
@@ -294,7 +294,7 @@ def _entradas_evals_extra(advisee, anonimo, idioma="es"):
         "header": d.get("contexto") or _t(idioma, "sin_contexto"),
         "meta": " · ".join(p for p in [
             None if anonimo else d.get("evaluador"),
-            f"{_t(idioma, 'nota')}: {d['nota']}/4" if d.get("nota") is not None else None,
+            f"{_t(idioma, 'nota')}: {d['nota']}/5" if d.get("nota") is not None else None,
             _fecha_es(d.get("fecha", ""), idioma),
         ] if p),
         "cuerpo": d.get("justificacion", ""),

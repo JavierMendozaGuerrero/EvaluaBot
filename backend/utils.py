@@ -1,8 +1,24 @@
 import re
+from datetime import datetime, timedelta, timezone
 
 
 def normalizar_nombre(valor):
     return " ".join((valor or "").strip().lower().split())
+
+
+def sanear_fecha_limite(valor, dias_defecto: int = 14) -> str:
+    """Normaliza una fecha límite a 'YYYY-MM-DD'.
+
+    Devuelve la fecha dada si es válida con ese formato; si falta o es inválida, usa
+    hoy + `dias_defecto` (por defecto 2 semanas)."""
+    s = (valor or "").strip()[:10]
+    if re.match(r"^\d{4}-\d{2}-\d{2}$", s):
+        try:
+            datetime.strptime(s, "%Y-%m-%d")
+            return s
+        except ValueError:
+            pass
+    return (datetime.now(timezone.utc) + timedelta(days=dias_defecto)).date().isoformat()
 
 
 def slug_archivo(valor):

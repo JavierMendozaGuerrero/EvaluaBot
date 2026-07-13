@@ -580,6 +580,32 @@ def _handle_personal_tipo(ack, body, logger):
             text=texto_msg,
             blocks=[seccion],
         )
+        # Desactiva el selector del mensaje original: sustituye los botones de tema por
+        # una nota del tema elegido, para que no se pueda volver a pulsar y duplicar el
+        # "Escribe tu comentario".
+        try:
+            bloques_orig = msg.get("blocks", [])
+
+            def _es_selector_topico(b):
+                return b.get("type") == "actions" and any(
+                    el.get("action_id", "").startswith("personal_tipo_") for el in b.get("elements", [])
+                )
+
+            nuevos = [
+                {"type": "context", "elements": [{"type": "mrkdwn", "text": f"✅ *{tipo_display}*"}]}
+                if _es_selector_topico(b)
+                else b
+                for b in bloques_orig
+            ]
+            if nuevos != bloques_orig:
+                slack_app.client.chat_update(
+                    channel=channel,
+                    ts=msg["ts"],
+                    blocks=nuevos,
+                    text=msg.get("text", tipo_display),
+                )
+        except Exception:
+            logger.exception("No se pudo desactivar el selector de tipo personal")
     except Exception:
         logger.exception("Error procesando selección de tipo personal")
 

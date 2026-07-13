@@ -310,7 +310,7 @@ def _texto_evals_mensuales(advisee: str, desde_fecha: str | None, anonimo: bool 
         quien = "Anónimo" if anonimo else ev.get("persona_que_evalua", "?")
         lineas.append(
             f"• [{fecha}] *{quien}* en {ev.get('proyecto', '?')} – "
-            f"Valoración: {ev.get('q1', '?')}/4 | Ejemplo: {ev.get('q2', '?')}"
+            f"Valoración: {ev.get('q1', '?')}/5 | Ejemplo: {ev.get('q2', '?')}"
         )
     return "\n".join(lineas)
 
@@ -384,7 +384,7 @@ def _resumen_advisee(advisee: str, desde_fecha: str | None, anonimo: bool = True
         quien = "Anónimo" if anonimo else ev.get('persona_que_evalua', '?')
         lineas.append(
             f"• [{fecha}] *{quien}* en {ev.get('proyecto', '?')} – "
-            f"Valoración: {ev.get('q1', '?')}/4 | "
+            f"Valoración: {ev.get('q1', '?')}/5 | "
             f"Ejemplo: {ev.get('q2', '?')}"
         )
 

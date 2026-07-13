@@ -392,20 +392,24 @@ _SLACK_TIPOS = ("mensual", "personal", "ca")
 
 def pendientes_slack_de_persona(persona: str) -> list:
     """Tipos de evaluacion de Slack (mensual/personal/ca) pendientes para `persona`
-    (filas con Completada=False). Devuelve tipos distintos, en orden estable."""
+    (filas con Completada=False). Devuelve [{tipo, fecha_envio}] en orden estable;
+    fecha_envio (YYYY-MM-DD) es la del último envío pendiente de ese tipo, base para el deadline."""
     db_id = _obtener_o_crear_bbdd()
     if not db_id or not persona:
         return []
     objetivo = normalizar_nombre(persona)
-    vistos = set()
+    por_tipo: dict = {}  # tipo -> fecha_envio (la más reciente)
     try:
         for fila in _iter_filas(db_id, filter={"property": "Completada", "checkbox": {"equals": False}}):
             props = fila.get("properties", {})
             if normalizar_nombre(_titulo(props, "Persona")) != objetivo:
                 continue
             tipo = _select(props, "Tipo")
-            if tipo in _SLACK_TIPOS:
-                vistos.add(tipo)
+            if tipo not in _SLACK_TIPOS:
+                continue
+            fenv = (((props.get("Fecha_envio") or {}).get("date") or {}).get("start", "") or "")[:10]
+            if tipo not in por_tipo or fenv > por_tipo[tipo]:
+                por_tipo[tipo] = fenv
     except Exception:
         logging.exception("Error leyendo pendientes de Slack de '%s'", persona)
-    return [tp for tp in _SLACK_TIPOS if tp in vistos]
+    return [{"tipo": tp, "fecha_envio": por_tipo[tp]} for tp in _SLACK_TIPOS if tp in por_tipo]

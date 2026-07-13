@@ -17,6 +17,7 @@ from ...notion_service import (
     idioma_por_sesion,
     obtener_config_calendario,
     obtener_evaluados_middleoffice,
+    obtener_frecuencias_evaluaciones,
     obtener_perfil_empleado,
     obtener_preguntas_desde_notion,
     obtener_preguntas_mo,
@@ -48,10 +49,32 @@ def _slack_deeplink() -> str:
     return _slack_deeplink_cache["url"]
 
 
+def _deadline_slack(fecha_envio: str, dias) -> str:
+    """Deadline (YYYY-MM-DD) = fecha de envío + frecuencia (días) de ese tipo. Es cuándo
+    llegaría la siguiente evaluación de ese tipo, calculado solo (sin fechas manuales)."""
+    if not fecha_envio or not dias:
+        return ""
+    try:
+        base = datetime.fromisoformat(fecha_envio[:10])
+        return (base + timedelta(days=int(dias))).date().isoformat()
+    except Exception:
+        logging.exception("No se pudo calcular el deadline de la tarea slack (%s, %s)", fecha_envio, dias)
+        return ""
+
+
 @router.get("/api/tareas-slack")
 def tareas_slack(session=Depends(require_session)):
     persona = session.get("persona", "")
-    return {"pendientes": pendientes_slack_de_persona(persona), "slackUrl": _slack_deeplink()}
+    try:
+        frecuencias = obtener_frecuencias_evaluaciones()
+    except Exception:
+        logging.exception("No se pudieron leer las frecuencias para deadlines de tareas slack")
+        frecuencias = {}
+    pendientes = [
+        {"tipo": it["tipo"], "deadline": _deadline_slack(it.get("fecha_envio", ""), frecuencias.get(it["tipo"]))}
+        for it in pendientes_slack_de_persona(persona)
+    ]
+    return {"pendientes": pendientes, "slackUrl": _slack_deeplink()}
 
 
 @router.get("/api/estado-ciclo-slack")

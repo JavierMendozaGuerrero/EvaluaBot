@@ -20,7 +20,7 @@ import logging
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from . import config
 from .clients import notion, slack_app
@@ -36,6 +36,7 @@ from .notion_service import (
     _titulo_child_page,
     _usa_data_sources,
     idioma_por_slack_id,
+    obtener_frecuencias_evaluaciones,
     obtener_registros_empleados,
 )
 from .utils import normalizar_nombre
@@ -131,6 +132,7 @@ def _props_bbdd_activaciones():
         "Empleado": {"title": {}},
         "Proyecto": {"rich_text": {}},
         "Activado_por": {"rich_text": {}},
+        "Fecha_activacion": {"date": {}},
         "Activo": {"checkbox": {}},
     }
 
@@ -642,6 +644,7 @@ def _leer_activaciones_activas() -> list:
                         "empleado": "".join(t.get("plain_text", "") for t in (props.get("Empleado") or {}).get("title", [])),
                         "proyecto": "".join(t.get("plain_text", "") for t in (props.get("Proyecto") or {}).get("rich_text", [])),
                         "activado_por": "".join(t.get("plain_text", "") for t in (props.get("Activado_por") or {}).get("rich_text", [])),
+                        "fecha_activacion": (((props.get("Fecha_activacion") or {}).get("date") or {}).get("start", "") or "")[:10],
                     })
                 if not resp.get("has_more"):
                     break
@@ -702,14 +705,18 @@ def _leer_completadas_proyecto(proyecto: str) -> list:
 
 
 def obtener_proyectos_activos_empleado(nombre_empleado: str) -> list:
-    """Devuelve [{nombre_proyecto, activado_por}] para el empleado dado."""
+    """Devuelve [{nombre_proyecto, activado_por, fecha_activacion}] para el empleado dado."""
     objetivo = normalizar_nombre(nombre_empleado)
     proyectos = []
     for r in _leer_activaciones_activas():
         if normalizar_nombre(r["empleado"]) != objetivo:
             continue
         if r["proyecto"]:
-            proyectos.append({"nombre_proyecto": r["proyecto"], "activado_por": r["activado_por"]})
+            proyectos.append({
+                "nombre_proyecto": r["proyecto"],
+                "activado_por": r["activado_por"],
+                "fecha_activacion": r.get("fecha_activacion", ""),
+            })
     return proyectos
 
 
@@ -729,6 +736,8 @@ def activar_evaluaciones_empleados(manager: str, proyecto: str, empleados: list,
     """
     Activa evaluaciones de proyecto para los empleados indicados.
     Crea/actualiza registros en la BD de activaciones y envía notificaciones Slack.
+    Guarda la fecha de activación; el deadline se calcula = fecha_activación + la frecuencia
+    'proyecto' (días) configurada en la BD 'Frecuencia evaluaciones'.
     """
     db_id = _obtener_o_crear_bbdd_activaciones()
     if not db_id:
@@ -768,6 +777,7 @@ def activar_evaluaciones_empleados(manager: str, proyecto: str, empleados: list,
                 "Empleado": {"title": [{"type": "text", "text": {"content": nombre_empleado}}]},
                 "Proyecto": {"rich_text": [{"type": "text", "text": {"content": proyecto}}]},
                 "Activado_por": {"rich_text": [{"type": "text", "text": {"content": manager}}]},
+                "Fecha_activacion": {"date": {"start": datetime.now(timezone.utc).isoformat()}},
                 "Activo": {"checkbox": True},
             })
             activados.append(nombre_empleado)
@@ -804,6 +814,7 @@ def añadir_miembro_proyecto(manager: str, proyecto: str, empleado: str, idioma:
                 "Empleado": {"title": [{"type": "text", "text": {"content": empleado}}]},
                 "Proyecto": {"rich_text": [{"type": "text", "text": {"content": proyecto}}]},
                 "Activado_por": {"rich_text": [{"type": "text", "text": {"content": manager}}]},
+                "Fecha_activacion": {"date": {"start": datetime.now(timezone.utc).isoformat()}},
                 "Activo": {"checkbox": True},
             })
         slack_id = None
@@ -1074,16 +1085,31 @@ def obtener_progreso_proyectos_empleado(persona: str) -> list:
     with ThreadPoolExecutor(max_workers=min(8, len(nombres))) as ex:
         for nombre, comp in zip(nombres, ex.map(lambda p: obtener_evals_completadas_proyecto(persona, p), nombres)):
             completadas_por_proy[nombre] = comp
+    # Deadline = fecha de activación + frecuencia 'proyecto' (días) de la BD 'Frecuencia evaluaciones'.
+    dias_proyecto = obtener_frecuencias_evaluaciones().get("proyecto")
     salida = []
     for p in activos:
         nombre = p["nombre_proyecto"]
         salida.append({
             "nombre_proyecto": nombre,
             "activado_por": p.get("activado_por", ""),
+            "fecha_limite": _deadline_proyecto(p.get("fecha_activacion", ""), dias_proyecto),
             "equipo": obtener_equipo_proyecto(nombre),  # de la cache de activaciones ya caliente
             "completadas": completadas_por_proy.get(nombre, []),
         })
     return salida
+
+
+def _deadline_proyecto(fecha_activacion: str, dias) -> str:
+    """Deadline (YYYY-MM-DD) = fecha de activación + frecuencia 'proyecto' (días)."""
+    if not fecha_activacion or not dias:
+        return ""
+    try:
+        base = datetime.fromisoformat(fecha_activacion[:10])
+        return (base + timedelta(days=int(dias))).date().isoformat()
+    except Exception:
+        logging.exception("No se pudo calcular el deadline de proyecto (%s, %s)", fecha_activacion, dias)
+        return ""
 
 
 def obtener_estado_evaluaciones_proyecto(proyecto: str) -> list:

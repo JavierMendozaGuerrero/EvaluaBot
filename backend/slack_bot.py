@@ -314,8 +314,8 @@ def _es_no(texto):
 
 _Q5_EJEMPLO = "Indica un ejemplo concreto que justifique tu valoración"
 
-_PALABRAS_NUMERO = {"uno": "1", "dos": "2", "tres": "3", "cuatro": "4",
-                    "one": "1", "two": "2", "three": "3", "four": "4"}
+_PALABRAS_NUMERO = {"uno": "1", "dos": "2", "tres": "3", "cuatro": "4", "cinco": "5",
+                    "one": "1", "two": "2", "three": "3", "four": "4", "five": "5"}
 
 _sugerencias_por_usuario: dict = {}  # user_id -> [nombre, ...]
 
@@ -336,7 +336,7 @@ def _bloques_valoracion(texto_pregunta: str, user_id: str, estado: dict = None) 
                     "value": str(i),
                     "action_id": f"valoracion_{i}",
                 }
-                for i in range(1, 5)
+                for i in range(1, 6)
             ],
         },
     ] + (fila_atras("atras_negocio", "bm.back_btn", estado, idioma) if estado is not None else [])
@@ -471,7 +471,7 @@ def _aplicar_respuesta_valoracion(user_id: str, valor: str):
         )
 
 
-@slack_app.action(re.compile(r"^valoracion_[1-4]$"))
+@slack_app.action(re.compile(r"^valoracion_[1-5]$"))
 def _handle_valoracion_interactiva(ack, body, client, logger):
     ack()
     try:
@@ -956,9 +956,9 @@ def _handle_autoeval_solo(ack, body, client, logger):
 
 
 def _normalizar_valoracion(texto: str) -> str | None:
-    """Devuelve '1'-'4' si el texto es un número válido (dígito o palabra), None si no."""
+    """Devuelve '1'-'5' si el texto es un número válido (dígito o palabra), None si no."""
     t = texto.strip().lower()
-    if t in {"1", "2", "3", "4"}:
+    if t in {"1", "2", "3", "4", "5"}:
         return t
     return _PALABRAS_NUMERO.get(t)
 
@@ -968,7 +968,7 @@ def _pregunta_contribucion(relacion: str, nombre_evaluado: str = "") -> str:
         sujeto = "del Project Leader"
     else:
         sujeto = f"de {nombre_evaluado}" if nombre_evaluado else "de tu compañero"
-    return f"¿Cómo valorarías del 1 al 4 la contribución {sujeto} al buen avance del proyecto?"
+    return f"¿Cómo valorarías del 1 al 5 la contribución {sujeto} al buen avance del proyecto?"
 
 
 def _es_q1_texto_default(texto: str) -> bool:
@@ -996,7 +996,7 @@ def _preguntas_negocio(relacion: str, preguntas_notion: dict = None, nombre_eval
 
 def _es_valor_satisfaccion(texto):
     try:
-        return int(texto) in {1, 2, 3, 4}
+        return int(texto) in {1, 2, 3, 4, 5}
     except Exception:
         return False
 

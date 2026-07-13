@@ -16,6 +16,7 @@ Estructura en Notion:
         Evaluaciones                                 (BD con todas las evaluaciones del proyecto)
 """
 
+import json
 import logging
 import threading
 import time
@@ -24,6 +25,7 @@ from datetime import datetime, timezone
 
 from . import config
 from .clients import notion, slack_app
+from .hierarchy import comparar_jerarquia
 from .i18n import t, traducir_dimension
 from .notion_service import (
     _buscar_bbdd_en_pagina_id,
@@ -35,6 +37,7 @@ from .notion_service import (
     _query_bbdd,
     _titulo_child_page,
     _usa_data_sources,
+    buscar_empleado_y_cargo,
     idioma_por_slack_id,
     obtener_registros_empleados,
 )
@@ -63,6 +66,53 @@ LABELS_TIPOS = {
     "miembros_a_manager": "Evaluación de miembros del equipo a managers",
     "manager_a_miembros": "Evaluación de managers a miembros del equipo",
 }
+
+# ---------------------------------------------------------------------------
+# Jerarquía de empresa: qué plantilla corresponde a cada par evaluador→evaluado
+# ---------------------------------------------------------------------------
+# La plantilla NO depende del rol en el proyecto (quién activó el proyecto) sino
+# del cargo en la Lista de Empleados de Notion, comparado con la escala de
+# hierarchy.py (la misma que usa la evaluación mensual).
+
+
+def relacion_jerarquia_empresa(evaluador: str, evaluado: str) -> str:
+    """'superior' si el evaluador está por encima del evaluado en el escalafón,
+    'inferior' si está por debajo, 'igual' en el resto (incluye cargos que faltan
+    en Notion o no están en la escala)."""
+    _, cargo_evaluador = buscar_empleado_y_cargo(evaluador)
+    _, cargo_evaluado = buscar_empleado_y_cargo(evaluado)
+    return comparar_jerarquia(cargo_evaluador or "", cargo_evaluado or "")
+
+
+def tipo_evaluacion_por_jerarquia(evaluador: str, evaluado: str) -> tuple[str, str]:
+    """Devuelve (tipo_clave, relacion) para el par dado.
+
+    - Misma persona → autoevaluacion.
+    - Evaluador por debajo del evaluado → miembros_a_manager (bottom-to-top).
+    - Evaluador por encima O al mismo nivel → manager_a_miembros (top-to-bottom;
+      el mismo nivel usa esta plantilla por decisión de negocio, pero su relacion
+      sigue siendo 'igual' y por tanto NO se libera al evaluado).
+    """
+    if normalizar_nombre(evaluador) == normalizar_nombre(evaluado):
+        return "autoevaluacion", "igual"
+    relacion = relacion_jerarquia_empresa(evaluador, evaluado)
+    if relacion == "inferior":
+        return "miembros_a_manager", relacion
+    return "manager_a_miembros", relacion
+
+
+def construir_evaluaciones_a_hacer(persona: str, equipo: list) -> list[dict]:
+    """Evaluaciones que `persona` debe hacer en un proyecto: su autoevaluación más
+    una por compañero, con el tipo decidido por jerarquía de empresa.
+    Cada elemento: {tipo, evaluado, relacion}."""
+    persona_norm = normalizar_nombre(persona)
+    lista = [{"tipo": "autoevaluacion", "evaluado": persona, "relacion": "igual"}]
+    for miembro in equipo:
+        if normalizar_nombre(miembro) == persona_norm:
+            continue
+        tipo, relacion = tipo_evaluacion_por_jerarquia(persona, miembro)
+        lista.append({"tipo": tipo, "evaluado": miembro, "relacion": relacion})
+    return lista
 
 # ---------------------------------------------------------------------------
 # Preguntas iniciales por tipo
@@ -175,6 +225,9 @@ _PROPS_RESULTADOS_PROYECTO = {
     "Evaluado": {"rich_text": {}},
     "Proyecto": {"rich_text": {}},
     "Respuestas": {"rich_text": {}},
+    # True solo para evaluaciones top-to-bottom (evaluador por ENCIMA en jerarquía
+    # de empresa): son las únicas que el evaluado puede ver en su TO-SEE de la web.
+    "Visible_evaluado": {"checkbox": {}},
 }
 
 _lock_pagina_final = threading.Lock()
@@ -234,19 +287,20 @@ def _buscar_child_page_id(parent_id: str, nombre: str) -> str | None:
 
 
 def _obtener_o_crear_bbdd_evaluacion_proyecto(persona_page_id: str) -> str | None:
+    # Lock mantenido durante toda la búsqueda/creación: dos hilos concurrentes no
+    # deben poder crear dos BDs 'Evaluaciones' bajo la misma página.
     with _lock_bbdd_evaluacion:
         if persona_page_id in _cache_bbdd_evaluacion:
             return _cache_bbdd_evaluacion[persona_page_id]
-    db_id = _buscar_bbdd_en_pagina_id(persona_page_id, _NOMBRE_BBDD_EVALUACION)
-    if not db_id:
-        try:
-            db_id = _crear_bbdd(persona_page_id, _NOMBRE_BBDD_EVALUACION, _PROPS_EVALUACION_PROYECTO)
-        except Exception:
-            logging.exception("Error creando BD evaluación en página '%s'", persona_page_id)
-            return None
-    with _lock_bbdd_evaluacion:
+        db_id = _buscar_bbdd_en_pagina_id(persona_page_id, _NOMBRE_BBDD_EVALUACION)
+        if not db_id:
+            try:
+                db_id = _crear_bbdd(persona_page_id, _NOMBRE_BBDD_EVALUACION, _PROPS_EVALUACION_PROYECTO)
+            except Exception:
+                logging.exception("Error creando BD evaluación en página '%s'", persona_page_id)
+                return None
         _cache_bbdd_evaluacion[persona_page_id] = db_id
-    return db_id
+        return db_id
 
 
 def _obtener_o_crear_pagina_resultados_final() -> str | None:
@@ -300,20 +354,36 @@ def _obtener_o_crear_bbdd_evals_proyecto(proyecto: str) -> str | None:
     proyecto_page_id = _obtener_o_crear_pagina_proyecto(proyecto)
     if not proyecto_page_id:
         return None
+    # Lock mantenido durante toda la búsqueda/creación para evitar duplicados por carrera.
     with _lock_bbdd_evals_proyecto:
         cached = _cache_bbdd_evals_proyecto.get(proyecto_page_id)
-    if cached:
-        return cached
-    db_id = _buscar_bbdd_en_pagina_id(proyecto_page_id, _NOMBRE_BBDD_EVALS_PROYECTO)
-    if not db_id:
-        try:
-            db_id = _crear_bbdd(proyecto_page_id, _NOMBRE_BBDD_EVALS_PROYECTO, _PROPS_RESULTADOS_PROYECTO)
-        except Exception:
-            logging.exception("Error creando BD '%s' en proyecto '%s'", _NOMBRE_BBDD_EVALS_PROYECTO, proyecto)
-            return None
-    with _lock_bbdd_evals_proyecto:
+        if cached:
+            return cached
+        db_id = _buscar_bbdd_en_pagina_id(proyecto_page_id, _NOMBRE_BBDD_EVALS_PROYECTO)
+        if not db_id:
+            try:
+                db_id = _crear_bbdd(proyecto_page_id, _NOMBRE_BBDD_EVALS_PROYECTO, _PROPS_RESULTADOS_PROYECTO)
+            except Exception:
+                logging.exception("Error creando BD '%s' en proyecto '%s'", _NOMBRE_BBDD_EVALS_PROYECTO, proyecto)
+                return None
+        _asegurar_prop_visible_evaluado(db_id)
         _cache_bbdd_evals_proyecto[proyecto_page_id] = db_id
-    return db_id
+        return db_id
+
+
+def _asegurar_prop_visible_evaluado(db_id: str) -> None:
+    """Añade la columna 'Visible_evaluado' si la BD del proyecto ya existía sin ella."""
+    try:
+        if _usa_data_sources():
+            bd = notion.data_sources.retrieve(data_source_id=db_id)
+            if "Visible_evaluado" not in bd.get("properties", {}):
+                notion.data_sources.update(data_source_id=db_id, properties={"Visible_evaluado": {"checkbox": {}}})
+        else:
+            bd = notion.databases.retrieve(database_id=db_id)
+            if "Visible_evaluado" not in bd.get("properties", {}):
+                notion.databases.update(database_id=db_id, properties={"Visible_evaluado": {"checkbox": {}}})
+    except Exception:
+        logging.exception("Error asegurando 'Visible_evaluado' en la BD de evaluaciones del proyecto")
 
 
 def _formatear_respuestas(preguntas: list, respuestas: dict) -> str:
@@ -908,65 +978,173 @@ def obtener_evals_completadas_proyecto(evaluador: str, proyecto: str) -> list:
     ]
 
 
+# Cache TTL de evaluaciones recibidas por evaluado: el dashboard la pide en cada
+# carga y recorrer todos los proyectos de Notion en cada request era el cuello de
+# botella de la sección "Evaluaciones recibidas". Se invalida al guardar una
+# evaluación de esa persona.
+_lock_evals_por_evaluado = threading.Lock()
+_cache_evals_por_evaluado: dict = {}  # evaluado_norm -> {"t": float, "rows": [...]}
+
+_lock_evals_por_evaluador = threading.Lock()
+_cache_evals_por_evaluador: dict = {}  # "evaluador_norm|desde_fecha" -> {"t": float, "rows": [...]}
+
+
+def _invalidar_cache_evals_por_evaluador(evaluador: str = "") -> None:
+    """Invalida la caché de evals realizadas. Sin argumento, la vacía entera.
+
+    Como la clave incluye `desde_fecha`, para un evaluador concreto se descartan
+    todas sus entradas (cualquier valor de `desde_fecha`)."""
+    objetivo = normalizar_nombre(evaluador)
+    with _lock_evals_por_evaluador:
+        if objetivo:
+            for clave in [k for k in _cache_evals_por_evaluador if k.split("|", 1)[0] == objetivo]:
+                _cache_evals_por_evaluador.pop(clave, None)
+        else:
+            _cache_evals_por_evaluador.clear()
+
+
+def _invalidar_cache_evals_por_evaluado(evaluado: str = "") -> None:
+    clave = normalizar_nombre(evaluado)
+    with _lock_evals_por_evaluado:
+        if clave:
+            _cache_evals_por_evaluado.pop(clave, None)
+        else:
+            _cache_evals_por_evaluado.clear()
+
+
+def _leer_evals_recibidas_en_proyecto(proy: dict, objetivo: str, evaluado: str) -> list[dict]:
+    """Filas de la BD 'Evaluaciones' de UNA subpágina de proyecto con Evaluado=objetivo."""
+    resultado: list[dict] = []
+    proyecto_nombre = proy["title"]
+    db_id = _buscar_bbdd_en_pagina_id(proy["id"], _NOMBRE_BBDD_EVALS_PROYECTO)
+    if not db_id:
+        return resultado
+    try:
+        cursor = None
+        while True:
+            kwargs: dict = {"page_size": 100}
+            if cursor:
+                kwargs["start_cursor"] = cursor
+            resp = _query_bbdd(db_id, **kwargs)
+            for fila in resp.get("results", []):
+                props = fila.get("properties", {})
+                ev_evaluado = "".join(
+                    p.get("plain_text", "") for p in (props.get("Evaluado") or {}).get("rich_text", [])
+                ).strip()
+                if normalizar_nombre(ev_evaluado) != objetivo:
+                    continue
+                evaluador = "".join(
+                    p.get("plain_text", "") for p in (props.get("Evaluador") or {}).get("rich_text", [])
+                ).strip()
+                proyecto = "".join(
+                    p.get("plain_text", "") for p in (props.get("Proyecto") or {}).get("rich_text", [])
+                ).strip()
+                tipo = ((props.get("Tipo") or {}).get("select") or {}).get("name", "")
+                respuestas = "".join(
+                    p.get("plain_text", "") for p in (props.get("Respuestas") or {}).get("rich_text", [])
+                ).strip()
+                fecha = ((props.get("Fecha") or {}).get("date") or {}).get("start", "")
+                if not (respuestas or evaluador):
+                    continue
+                resultado.append({
+                    "proyecto": proyecto or proyecto_nombre,
+                    "evaluador": evaluador,
+                    "tipo": tipo,
+                    "respuestas": respuestas,
+                    "fecha": (fecha or "")[:10],
+                    "page_id": fila.get("id", ""),
+                    "url": fila.get("url", ""),
+                    "visible_evaluado": bool((props.get("Visible_evaluado") or {}).get("checkbox")),
+                })
+            if not resp.get("has_more"):
+                break
+            cursor = resp.get("next_cursor")
+    except Exception:
+        logging.exception("Error leyendo evaluaciones del proyecto '%s' de '%s'", proyecto_nombre, evaluado)
+    return resultado
+
+
 def obtener_evaluaciones_proyecto_por_evaluado(evaluado: str) -> list[dict]:
     """Devuelve TODAS las evaluaciones de proyecto recibidas por `evaluado`.
 
     Recorre cada subpágina de proyecto bajo 'Resultados Evaluaciones al final de proyecto'
-    (TO-SEE → Resultados Evaluaciones) y su BD 'Evaluaciones' interna.
+    (TO-SEE → Resultados Evaluaciones) y su BD 'Evaluaciones' interna. Los proyectos se
+    consultan EN PARALELO (antes era en serie: 2 llamadas a Notion por proyecto) y el
+    resultado se cachea unos segundos por evaluado.
     Cada elemento: {proyecto, evaluador, tipo, respuestas, fecha (YYYY-MM-DD), page_id, url}.
     """
+    objetivo = normalizar_nombre(evaluado)
+    ahora = time.time()
+    with _lock_evals_por_evaluado:
+        entrada = _cache_evals_por_evaluado.get(objetivo)
+        if entrada and (ahora - entrada["t"]) < _TTL_DATOS:
+            return list(entrada["rows"])
+
     contenedor = _obtener_o_crear_pagina_resultados_final()
     if not contenedor:
         return []
-    objetivo = normalizar_nombre(evaluado)
     resultado: list[dict] = []
-    for proy in _listar_child_pages_proyecto(contenedor):
-        proyecto_nombre = proy["title"]
-        db_id = _buscar_bbdd_en_pagina_id(proy["id"], _NOMBRE_BBDD_EVALS_PROYECTO)
-        if not db_id:
-            continue
-        try:
-            cursor = None
-            while True:
-                kwargs: dict = {"page_size": 100}
-                if cursor:
-                    kwargs["start_cursor"] = cursor
-                resp = _query_bbdd(db_id, **kwargs)
-                for fila in resp.get("results", []):
-                    props = fila.get("properties", {})
-                    ev_evaluado = "".join(
-                        p.get("plain_text", "") for p in (props.get("Evaluado") or {}).get("rich_text", [])
-                    ).strip()
-                    if normalizar_nombre(ev_evaluado) != objetivo:
-                        continue
-                    evaluador = "".join(
-                        p.get("plain_text", "") for p in (props.get("Evaluador") or {}).get("rich_text", [])
-                    ).strip()
-                    proyecto = "".join(
-                        p.get("plain_text", "") for p in (props.get("Proyecto") or {}).get("rich_text", [])
-                    ).strip()
-                    tipo = ((props.get("Tipo") or {}).get("select") or {}).get("name", "")
-                    respuestas = "".join(
-                        p.get("plain_text", "") for p in (props.get("Respuestas") or {}).get("rich_text", [])
-                    ).strip()
-                    fecha = ((props.get("Fecha") or {}).get("date") or {}).get("start", "")
-                    if not (respuestas or evaluador):
-                        continue
-                    resultado.append({
-                        "proyecto": proyecto or proyecto_nombre,
-                        "evaluador": evaluador,
-                        "tipo": tipo,
-                        "respuestas": respuestas,
-                        "fecha": (fecha or "")[:10],
-                        "page_id": fila.get("id", ""),
-                        "url": fila.get("url", ""),
-                    })
-                if not resp.get("has_more"):
-                    break
-                cursor = resp.get("next_cursor")
-        except Exception:
-            logging.exception("Error leyendo evaluaciones del proyecto '%s' de '%s'", proyecto_nombre, evaluado)
+    proyectos = _listar_child_pages_proyecto(contenedor)
+    if proyectos:
+        with ThreadPoolExecutor(max_workers=min(8, len(proyectos))) as ex:
+            for filas in ex.map(lambda p: _leer_evals_recibidas_en_proyecto(p, objetivo, evaluado), proyectos):
+                resultado.extend(filas)
     resultado.sort(key=lambda x: x.get("fecha", ""))
+    with _lock_evals_por_evaluado:
+        _cache_evals_por_evaluado[objetivo] = {"t": ahora, "rows": resultado}
+    return list(resultado)
+
+
+def _leer_evals_realizadas_en_proyecto(proy: dict, objetivo: str, desde_fecha: str | None) -> list[dict]:
+    """Filas de la BD 'Evaluaciones' de UNA subpágina de proyecto con Evaluador=objetivo.
+
+    Devuelve filas planas {nombre, tipo, evaluado, respuestas, fecha, url}; el agrupado
+    por proyecto se hace en la función que orquesta las lecturas en paralelo."""
+    resultado: list[dict] = []
+    proyecto_nombre = proy["title"]
+    db_id = _buscar_bbdd_en_pagina_id(proy["id"], _NOMBRE_BBDD_EVALS_PROYECTO)
+    if not db_id:
+        return resultado
+    try:
+        cursor = None
+        while True:
+            kwargs: dict = {"page_size": 100}
+            if cursor:
+                kwargs["start_cursor"] = cursor
+            resp = _query_bbdd(db_id, **kwargs)
+            for fila in resp.get("results", []):
+                props = fila.get("properties", {})
+                ev_evaluador = "".join(
+                    p.get("plain_text", "") for p in (props.get("Evaluador") or {}).get("rich_text", [])
+                ).strip()
+                if normalizar_nombre(ev_evaluador) != objetivo:
+                    continue
+                fecha = (((props.get("Fecha") or {}).get("date") or {}).get("start", "") or "")[:10]
+                if desde_fecha and fecha and fecha < desde_fecha:
+                    continue
+                evaluado = "".join(
+                    p.get("plain_text", "") for p in (props.get("Evaluado") or {}).get("rich_text", [])
+                ).strip()
+                proyecto = "".join(
+                    p.get("plain_text", "") for p in (props.get("Proyecto") or {}).get("rich_text", [])
+                ).strip()
+                tipo = ((props.get("Tipo") or {}).get("select") or {}).get("name", "")
+                respuestas = "".join(
+                    p.get("plain_text", "") for p in (props.get("Respuestas") or {}).get("rich_text", [])
+                ).strip()
+                resultado.append({
+                    "nombre": proyecto or proyecto_nombre,
+                    "tipo": tipo,
+                    "evaluado": evaluado,
+                    "respuestas": respuestas,
+                    "fecha": fecha,
+                    "url": fila.get("url", ""),
+                })
+            if not resp.get("has_more"):
+                break
+            cursor = resp.get("next_cursor")
+    except Exception:
+        logging.exception("Error leyendo evals realizadas en proyecto '%s' por '%s'", proyecto_nombre, objetivo)
     return resultado
 
 
@@ -976,68 +1154,46 @@ def obtener_evaluaciones_proyecto_por_evaluador(evaluador: str, desde_fecha: str
     Recorre cada subpágina de proyecto bajo 'Resultados Evaluaciones al final de proyecto'
     y su BD 'Evaluaciones' interna, quedándose con las filas donde Evaluador = `evaluador`.
     Si `desde_fecha` (YYYY-MM-DD) se indica, descarta las anteriores a esa fecha.
+    Los proyectos se consultan EN PARALELO (antes era en serie: una query paginada por
+    proyecto) y el resultado se cachea unos segundos por (evaluador, desde_fecha).
     Devuelve [{nombre_proyecto, evaluaciones: [{tipo, evaluado, respuestas, fecha, url}]}],
     con las evals de cada proyecto y los proyectos ordenados por la más reciente (desc).
     """
+    objetivo = normalizar_nombre(evaluador)
+    clave_cache = f"{objetivo}|{desde_fecha or ''}"
+    ahora = time.time()
+    with _lock_evals_por_evaluador:
+        entrada = _cache_evals_por_evaluador.get(clave_cache)
+        if entrada and (ahora - entrada["t"]) < _TTL_DATOS:
+            return [dict(g, evaluaciones=list(g["evaluaciones"])) for g in entrada["rows"]]
+
     contenedor = _obtener_o_crear_pagina_resultados_final()
     if not contenedor:
         return []
-    objetivo = normalizar_nombre(evaluador)
     por_proyecto: dict[str, dict] = {}
-    for proy in _listar_child_pages_proyecto(contenedor):
-        proyecto_nombre = proy["title"]
-        db_id = _buscar_bbdd_en_pagina_id(proy["id"], _NOMBRE_BBDD_EVALS_PROYECTO)
-        if not db_id:
-            continue
-        try:
-            cursor = None
-            while True:
-                kwargs: dict = {"page_size": 100}
-                if cursor:
-                    kwargs["start_cursor"] = cursor
-                resp = _query_bbdd(db_id, **kwargs)
-                for fila in resp.get("results", []):
-                    props = fila.get("properties", {})
-                    ev_evaluador = "".join(
-                        p.get("plain_text", "") for p in (props.get("Evaluador") or {}).get("rich_text", [])
-                    ).strip()
-                    if normalizar_nombre(ev_evaluador) != objetivo:
-                        continue
-                    fecha = (((props.get("Fecha") or {}).get("date") or {}).get("start", "") or "")[:10]
-                    if desde_fecha and fecha and fecha < desde_fecha:
-                        continue
-                    evaluado = "".join(
-                        p.get("plain_text", "") for p in (props.get("Evaluado") or {}).get("rich_text", [])
-                    ).strip()
-                    proyecto = "".join(
-                        p.get("plain_text", "") for p in (props.get("Proyecto") or {}).get("rich_text", [])
-                    ).strip()
-                    tipo = ((props.get("Tipo") or {}).get("select") or {}).get("name", "")
-                    respuestas = "".join(
-                        p.get("plain_text", "") for p in (props.get("Respuestas") or {}).get("rich_text", [])
-                    ).strip()
-                    nombre = proyecto or proyecto_nombre
+    proyectos = _listar_child_pages_proyecto(contenedor)
+    if proyectos:
+        with ThreadPoolExecutor(max_workers=min(8, len(proyectos))) as ex:
+            for filas in ex.map(lambda p: _leer_evals_realizadas_en_proyecto(p, objetivo, desde_fecha), proyectos):
+                for fila in filas:
                     # Agrupamos por nombre NORMALIZADO para que variaciones menores (espacios,
                     # mayúsculas) del campo Proyecto no partan un mismo proyecto en dos grupos.
-                    clave = normalizar_nombre(nombre)
-                    entrada = por_proyecto.setdefault(clave, {"nombre_proyecto": nombre, "evaluaciones": []})
+                    clave = normalizar_nombre(fila["nombre"])
+                    entrada = por_proyecto.setdefault(clave, {"nombre_proyecto": fila["nombre"], "evaluaciones": []})
                     entrada["evaluaciones"].append({
-                        "tipo": tipo,
-                        "evaluado": evaluado,
-                        "respuestas": respuestas,
-                        "fecha": fecha,
-                        "url": fila.get("url", ""),
+                        "tipo": fila["tipo"],
+                        "evaluado": fila["evaluado"],
+                        "respuestas": fila["respuestas"],
+                        "fecha": fila["fecha"],
+                        "url": fila["url"],
                     })
-                if not resp.get("has_more"):
-                    break
-                cursor = resp.get("next_cursor")
-        except Exception:
-            logging.exception("Error leyendo evals realizadas en proyecto '%s' por '%s'", proyecto_nombre, evaluador)
     salida = list(por_proyecto.values())
     for entrada in salida:
         entrada["evaluaciones"].sort(key=lambda x: x.get("fecha", ""), reverse=True)
     salida.sort(key=lambda e: e["evaluaciones"][0]["fecha"] if e["evaluaciones"] else "", reverse=True)
-    return salida
+    with _lock_evals_por_evaluador:
+        _cache_evals_por_evaluador[clave_cache] = {"t": ahora, "rows": salida}
+    return [dict(g, evaluaciones=list(g["evaluaciones"])) for g in salida]
 
 
 def obtener_proyectos_manager(manager_nombre: str) -> list:
@@ -1077,11 +1233,15 @@ def obtener_progreso_proyectos_empleado(persona: str) -> list:
     salida = []
     for p in activos:
         nombre = p["nombre_proyecto"]
+        equipo = obtener_equipo_proyecto(nombre)  # de la cache de activaciones ya caliente
         salida.append({
             "nombre_proyecto": nombre,
             "activado_por": p.get("activado_por", ""),
-            "equipo": obtener_equipo_proyecto(nombre),  # de la cache de activaciones ya caliente
+            "equipo": equipo,
             "completadas": completadas_por_proy.get(nombre, []),
+            # Lista de evaluaciones a hacer con el tipo decidido por jerarquía de
+            # empresa; el frontend NO debe recalcularla por rol de proyecto.
+            "a_hacer": construir_evaluaciones_a_hacer(persona, equipo),
         })
     return salida
 
@@ -1304,11 +1464,16 @@ def guardar_evaluacion_proyecto(
     tipo_clave: str,
     respuestas: dict,
     preguntas: list,
+    visible_evaluado: bool = False,
 ) -> bool:
     """
     Guarda los resultados de una evaluación de proyecto en Notion.
     Escribe en la BD 'Evaluaciones' dentro de la subpágina del proyecto, bajo
     TO-SEE → Resultados Evaluaciones → Resultados Evaluaciones al final de proyecto.
+
+    `visible_evaluado` marca la fila como liberada al evaluado (solo top-to-bottom):
+    únicamente esas filas aparecen en el TO-SEE del evaluado en la web. El flujo del
+    CA (PDF, informe final) no depende de este flag y ve todas las filas igual.
     """
     db_id = _obtener_o_crear_bbdd_evals_proyecto(proyecto)
     if not db_id:
@@ -1327,14 +1492,143 @@ def guardar_evaluacion_proyecto(
             "Evaluado": {"rich_text": [{"type": "text", "text": {"content": evaluado}}]},
             "Proyecto": {"rich_text": [{"type": "text", "text": {"content": proyecto}}]},
             "Respuestas": {"rich_text": [{"type": "text", "text": {"content": respuestas_texto[:2000]}}]},
+            "Visible_evaluado": {"checkbox": bool(visible_evaluado)},
         })
         from .eval_tracking import marcar_completada
         marcar_completada(evaluador, "proyecto")
         _invalidar_cache_completadas(proyecto)
+        _invalidar_cache_evals_por_evaluado(evaluado)
+        _invalidar_cache_evals_por_evaluador(evaluador)
         threading.Thread(target=_verificar_y_cerrar_proyecto, args=(proyecto,), daemon=True).start()
         return True
     except Exception:
         logging.exception("Error guardando evaluación en BD Notion para '%s'", evaluado)
+        return False
+
+
+# ---------------------------------------------------------------------------
+# Borradores de evaluaciones de proyecto (server-side)
+# ---------------------------------------------------------------------------
+# Los borradores viven en Notion para que el evaluador pueda retomarlos desde
+# cualquier dispositivo (el autoguardado local del navegador sigue existiendo
+# como respaldo, pero la fuente de verdad es esta BD). Un borrador por
+# (evaluador, proyecto, tipo, evaluado); se elimina al enviar la evaluación.
+
+_NOMBRE_BBDD_BORRADORES = "Borradores Evaluaciones Proyecto"
+_PROPS_BORRADORES = {
+    "Clave": {"title": {}},
+    "Evaluador": {"rich_text": {}},
+    "Proyecto": {"rich_text": {}},
+    "Tipo": {"rich_text": {}},
+    "Evaluado": {"rich_text": {}},
+    "Respuestas": {"rich_text": {}},  # JSON {pregunta_id: respuesta}
+    "Actualizado": {"date": {}},
+}
+
+_lock_borradores = threading.Lock()
+_cache_borradores_id: dict = {"db_id": None}
+
+
+def _obtener_o_crear_bbdd_borradores() -> str | None:
+    with _lock_borradores:
+        if _cache_borradores_id["db_id"]:
+            return _cache_borradores_id["db_id"]
+        subpagina_id = _obtener_o_crear_subpagina_evaluaciones_proyectos()
+        if not subpagina_id:
+            return None
+        db_id = _buscar_bbdd_en_pagina_id(subpagina_id, _NOMBRE_BBDD_BORRADORES)
+        if not db_id:
+            try:
+                db_id = _crear_bbdd(subpagina_id, _NOMBRE_BBDD_BORRADORES, _PROPS_BORRADORES)
+                logging.info("BD '%s' creada en Notion", _NOMBRE_BBDD_BORRADORES)
+            except Exception:
+                logging.exception("Error creando BD '%s'", _NOMBRE_BBDD_BORRADORES)
+                return None
+        _cache_borradores_id["db_id"] = db_id
+        return db_id
+
+
+def _clave_borrador(evaluador: str, proyecto: str, tipo_clave: str, evaluado: str) -> str:
+    return "|".join([
+        normalizar_nombre(evaluador),
+        normalizar_nombre(proyecto),
+        tipo_clave.strip(),
+        normalizar_nombre(evaluado),
+    ])
+
+
+def _rich_text_largo(texto: str) -> list:
+    """Trocea un texto en items rich_text de <2000 chars (límite de Notion por item)."""
+    if not texto:
+        return [{"type": "text", "text": {"content": ""}}]
+    return [{"type": "text", "text": {"content": texto[i:i + 1900]}} for i in range(0, len(texto), 1900)]
+
+
+def guardar_borrador_evaluacion_proyecto(evaluador: str, proyecto: str, tipo_clave: str, evaluado: str, respuestas: dict) -> bool:
+    """Crea o actualiza (upsert por clave) el borrador del evaluador en Notion."""
+    db_id = _obtener_o_crear_bbdd_borradores()
+    if not db_id:
+        return False
+    clave = _clave_borrador(evaluador, proyecto, tipo_clave, evaluado)
+    props = {
+        "Clave": {"title": [{"type": "text", "text": {"content": clave}}]},
+        "Evaluador": {"rich_text": [{"type": "text", "text": {"content": evaluador}}]},
+        "Proyecto": {"rich_text": [{"type": "text", "text": {"content": proyecto}}]},
+        "Tipo": {"rich_text": [{"type": "text", "text": {"content": tipo_clave}}]},
+        "Evaluado": {"rich_text": [{"type": "text", "text": {"content": evaluado}}]},
+        "Respuestas": {"rich_text": _rich_text_largo(json.dumps(respuestas or {}, ensure_ascii=False))},
+        "Actualizado": {"date": {"start": datetime.now(timezone.utc).isoformat()}},
+    }
+    try:
+        resp = _query_bbdd(db_id, filter={"property": "Clave", "title": {"equals": clave}}, page_size=1)
+        existentes = resp.get("results", [])
+        if existentes:
+            notion.pages.update(page_id=existentes[0]["id"], properties=props)
+        else:
+            _crear_pagina_en_bbdd(db_id, props)
+        return True
+    except Exception:
+        logging.exception("Error guardando borrador de '%s' (%s / %s)", evaluador, proyecto, evaluado)
+        return False
+
+
+def obtener_borrador_evaluacion_proyecto(evaluador: str, proyecto: str, tipo_clave: str, evaluado: str) -> dict | None:
+    """Devuelve {respuestas, actualizado} del borrador guardado, o None si no hay."""
+    db_id = _obtener_o_crear_bbdd_borradores()
+    if not db_id:
+        return None
+    clave = _clave_borrador(evaluador, proyecto, tipo_clave, evaluado)
+    try:
+        resp = _query_bbdd(db_id, filter={"property": "Clave", "title": {"equals": clave}}, page_size=1)
+        filas = resp.get("results", [])
+        if not filas:
+            return None
+        props = filas[0].get("properties", {})
+        crudo = "".join(p.get("plain_text", "") for p in (props.get("Respuestas") or {}).get("rich_text", []))
+        try:
+            respuestas = json.loads(crudo) if crudo else {}
+        except ValueError:
+            respuestas = {}
+        actualizado = ((props.get("Actualizado") or {}).get("date") or {}).get("start", "")
+        return {"respuestas": respuestas, "actualizado": actualizado}
+    except Exception:
+        logging.exception("Error leyendo borrador de '%s' (%s / %s)", evaluador, proyecto, evaluado)
+        return None
+
+
+def eliminar_borrador_evaluacion_proyecto(evaluador: str, proyecto: str, tipo_clave: str, evaluado: str) -> bool:
+    """Archiva el borrador (si existe). Se llama al enviar la evaluación definitiva."""
+    db_id = _obtener_o_crear_bbdd_borradores()
+    if not db_id:
+        return False
+    clave = _clave_borrador(evaluador, proyecto, tipo_clave, evaluado)
+    try:
+        resp = _query_bbdd(db_id, filter={"property": "Clave", "title": {"equals": clave}}, page_size=1)
+        for fila in resp.get("results", []):
+            notion.pages.update(page_id=fila["id"], archived=True)
+        return True
+    except Exception:
+        logging.exception("Error eliminando borrador de '%s' (%s / %s)", evaluador, proyecto, evaluado)
         return False
 
 

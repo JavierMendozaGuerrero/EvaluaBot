@@ -15,7 +15,7 @@ def test_me_sin_sesion_devuelve_user_null(client):
 
 def test_login_correcto_devuelve_token_y_user(client, monkeypatch):
     monkeypatch.setattr(auth_router, "autenticar_usuario", lambda u, p: {"username": u, "persona": "Ana", "email": "a@x.com", "is_admin": False})
-    monkeypatch.setattr(auth_router, "crear_sesion", lambda usuario: "token-123")
+    monkeypatch.setattr(auth_router, "crear_sesion", lambda usuario, remember=False: "token-123")
     monkeypatch.setattr(auth_router, "obtener_sesion_por_token", lambda token: {"username": "ana", "persona": "Ana", "email": "a@x.com", "is_admin": False})
     monkeypatch.setattr(auth_router, "idioma_por_sesion", lambda sesion: "es")
 

@@ -11,17 +11,23 @@ from ...project_evals import (
     LABELS_TIPOS,
     activar_evaluaciones_empleados,
     añadir_miembro_proyecto,
+    construir_evaluaciones_a_hacer,
+    eliminar_borrador_evaluacion_proyecto,
     eliminar_miembro_proyecto,
     enviar_recordatorios_proyecto,
+    guardar_borrador_evaluacion_proyecto,
     guardar_evaluacion_proyecto,
+    obtener_borrador_evaluacion_proyecto,
     obtener_equipo_proyecto,
     obtener_estado_evaluaciones_proyecto,
     obtener_evals_completadas_proyecto,
+    obtener_evaluaciones_proyecto_por_evaluado,
     obtener_evaluaciones_proyecto_por_evaluador,
     obtener_preguntas_tipo,
     obtener_progreso_proyectos_empleado,
     obtener_proyectos_activos_empleado,
     obtener_proyectos_manager,
+    tipo_evaluacion_por_jerarquia,
 )
 
 router = APIRouter()
@@ -60,6 +66,34 @@ def preguntas_evaluacion_proyecto(tipo: str = "", session=Depends(require_sessio
 def equipo_proyecto(proyecto: str = "", session=Depends(require_session)):
     empleados = obtener_equipo_proyecto(proyecto) if proyecto else []
     return {"empleados": empleados}
+
+
+@router.get("/api/evaluaciones-proyecto-a-hacer")
+def evaluaciones_proyecto_a_hacer(proyecto: str = "", session=Depends(require_session)):
+    """Evaluaciones que la persona debe hacer en el proyecto, con el tipo de plantilla
+    decidido por JERARQUÍA DE EMPRESA (cargo en Notion), no por rol en el proyecto."""
+    if not proyecto:
+        return JSONResponse({"error": "Falta el parámetro proyecto."}, status_code=400)
+    persona = session.get("persona", "")
+    equipo = obtener_equipo_proyecto(proyecto)
+    return {"evaluaciones": construir_evaluaciones_a_hacer(persona, equipo)}
+
+
+@router.get("/api/mis-evaluaciones-proyecto-recibidas")
+def mis_evaluaciones_proyecto_recibidas(session=Depends(require_session)):
+    """Evaluaciones de proyecto RECIBIDAS por la persona y liberadas para ella.
+
+    Solo devuelve filas con Visible_evaluado=True (evaluaciones top-to-bottom, de
+    alguien por encima en la jerarquía de empresa). Las bottom-to-top y las de mismo
+    nivel NUNCA se devuelven aquí: siguen siendo visibles solo para el CA.
+    """
+    persona = session.get("persona", "")
+    visibles = [
+        e for e in obtener_evaluaciones_proyecto_por_evaluado(persona)
+        if e.get("visible_evaluado")
+    ]
+    visibles.sort(key=lambda x: x.get("fecha", ""), reverse=True)
+    return {"evaluaciones": visibles}
 
 
 @router.get("/api/proyectos-manager")
@@ -144,8 +178,54 @@ def guardar_evaluacion_proyecto_route(datos: dict = Body(default={}), session=De
         return JSONResponse({"error": "Faltan campos obligatorios."}, status_code=400)
     if tipo not in LABELS_TIPOS:
         return JSONResponse({"error": "Tipo de evaluación no válido."}, status_code=400)
-    preguntas = obtener_preguntas_tipo(tipo, idioma_por_sesion(session))
-    ok = guardar_evaluacion_proyecto(evaluador, evaluado, proyecto, tipo, respuestas, preguntas)
+    # El tipo lo decide el SERVIDOR por jerarquía de empresa (no confiamos en el que
+    # manda el cliente, que podría venir de la lógica antigua por rol de proyecto).
+    tipo_calc, relacion = tipo_evaluacion_por_jerarquia(evaluador, evaluado)
+    # Solo las top-to-bottom estrictas (evaluador por ENCIMA) se liberan al evaluado.
+    visible = relacion == "superior" and tipo_calc != "autoevaluacion"
+    preguntas = obtener_preguntas_tipo(tipo_calc, idioma_por_sesion(session))
+    ok = guardar_evaluacion_proyecto(
+        evaluador, evaluado, proyecto, tipo_calc, respuestas, preguntas,
+        visible_evaluado=visible,
+    )
+    if ok:
+        eliminar_borrador_evaluacion_proyecto(evaluador, proyecto, tipo_calc, evaluado)
+        if tipo != tipo_calc:
+            eliminar_borrador_evaluacion_proyecto(evaluador, proyecto, tipo, evaluado)
+        return {"ok": True, "tipo": tipo_calc, "relacion": relacion}
+    return JSONResponse({"error": "No se pudo guardar la evaluación en Notion."}, status_code=500)
+
+
+@router.get("/api/borrador-evaluacion-proyecto")
+def borrador_evaluacion_proyecto_get(proyecto: str = "", tipo: str = "", evaluado: str = "", session=Depends(require_session)):
+    if not proyecto or tipo not in LABELS_TIPOS:
+        return JSONResponse({"error": "Faltan campos obligatorios."}, status_code=400)
+    evaluador = session.get("persona", "")
+    return {"borrador": obtener_borrador_evaluacion_proyecto(evaluador, proyecto, tipo, evaluado)}
+
+
+@router.post("/api/borrador-evaluacion-proyecto")
+def borrador_evaluacion_proyecto_post(datos: dict = Body(default={}), session=Depends(require_session)):
+    evaluador = session.get("persona", "")
+    proyecto = datos.get("proyecto", "").strip()
+    tipo = datos.get("tipo", "").strip()
+    evaluado = datos.get("evaluado", "").strip()
+    respuestas = datos.get("respuestas", {})
+    if not proyecto or tipo not in LABELS_TIPOS or not isinstance(respuestas, dict):
+        return JSONResponse({"error": "Faltan campos obligatorios."}, status_code=400)
+    ok = guardar_borrador_evaluacion_proyecto(evaluador, proyecto, tipo, evaluado, respuestas)
     if ok:
         return {"ok": True}
-    return JSONResponse({"error": "No se pudo guardar la evaluación en Notion."}, status_code=500)
+    return JSONResponse({"error": "No se pudo guardar el borrador."}, status_code=500)
+
+
+@router.post("/api/borrador-evaluacion-proyecto/eliminar")
+def borrador_evaluacion_proyecto_eliminar(datos: dict = Body(default={}), session=Depends(require_session)):
+    evaluador = session.get("persona", "")
+    proyecto = datos.get("proyecto", "").strip()
+    tipo = datos.get("tipo", "").strip()
+    evaluado = datos.get("evaluado", "").strip()
+    if not proyecto or tipo not in LABELS_TIPOS:
+        return JSONResponse({"error": "Faltan campos obligatorios."}, status_code=400)
+    eliminar_borrador_evaluacion_proyecto(evaluador, proyecto, tipo, evaluado)
+    return {"ok": True}

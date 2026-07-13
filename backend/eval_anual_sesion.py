@@ -580,32 +580,96 @@ def estado_sesion(advisee: str) -> dict:
 
 # ── Plan de acción sugerido (paso final) ──────────────────────────────────────
 
-def _generar_plan_accion(sesion: dict, instruccion: str = "", plan_previo: str = "") -> str:
-    """Claude propone un plan de acción para el año que viene a partir de la evaluación acordada."""
-    if not anthropic_client:
-        return plan_previo or ""
-    secciones = _secciones(sesion.get("cargo", ""))
+def _evidencia_y_criterios(sesion: dict) -> tuple[str, str]:
+    """Bloque de evidencia (evals acordadas o en bruto) + criterios del puesto y siguiente.
+    Compartido por la generación del plan y por el chat de dudas."""
+    cargo = sesion.get("cargo", "")
+    secciones = _secciones(cargo)
     areas = sesion.get("areas", {})
     bloques = []
     for clave, etiqueta in secciones:
         a = areas.get(clave, {})
         final = a.get("texto_final") or a.get("propuesta") or ""
-        # Gaps: sugerencia final por criterios si el CA la pidió; si no, el
-        # diagnóstico de sesiones antiguas (ya no se genera automáticamente).
         diag = _resumen_a_texto(a.get("resumen_final")) or a.get("diagnostico") or ""
         if final or diag:
             bloques.append(f"### {etiqueta}\nVALORACIÓN ACORDADA: {final or '—'}\nDIAGNÓSTICO/GAPS: {diag or '—'}")
-    resumen = "\n\n".join(bloques) or "(sin datos por área)"
+
+    if bloques:
+        evidencia = "EVALUACIÓN POR ÁREA (acordada con el CA):\n" + "\n\n".join(bloques)
+    else:
+        emp_data = sesion.get("emp_data") or {}
+        contexto, _ = sk._formatear_contexto(emp_data)
+        evidencia = "RESULTADOS DE TODAS LAS EVALUACIONES:\n" + (contexto or "(sin evaluaciones)")
+
+    emp_nombre = (sesion.get("emp_data") or {}).get("empleado", "") or sesion.get("advisee", "")
+    criterios = sk._criterios_para_prompt(cargo, "es", emp_nombre)
+    criterios_section = f"\n\nCRITERIOS DEL PUESTO Y DEL SIGUIENTE NIVEL:\n{criterios}" if criterios else ""
+    return evidencia, criterios_section
+
+
+def chatear_plan(advisee: str, mensajes: list) -> dict:
+    """Chat (Haiku, barato) para que el CA resuelva dudas sobre el plan de acción.
+
+    `mensajes` = [{"rol": "user"|"assistant", "texto": ...}, ...], con la última pregunta
+    al final. Reutiliza la misma evidencia que el plan y la cachea (prompt caching) para
+    abaratar los mensajes siguientes."""
+    if not anthropic_client:
+        raise ValueError("El chat no está disponible (falta la API de Claude).")
+    slug = slug_archivo(advisee)
+    sesion = _leer(slug)
+    if not sesion:
+        raise ValueError("No hay sesión iniciada. Crea antes un plan de acción.")
+    msgs = [
+        {"role": "assistant" if m.get("rol") == "assistant" else "user", "content": m.get("texto", "").strip()}
+        for m in (mensajes or []) if m.get("texto", "").strip()
+    ]
+    if not msgs:
+        raise ValueError("Escribe una pregunta.")
+    plan = sesion.get("plan_accion", "")
+    evidencia, criterios_section = _evidencia_y_criterios(sesion)
+    system_text = (
+        "Eres un asistente de RRHH de IGENERIS. Ayudas al Career Advisor a entender y afinar el PLAN DE "
+        "ACCIÓN de su advisee para el año que viene. Responde SOLO con base en la evidencia proporcionada "
+        "(evaluaciones, criterios del puesto y el plan). Sé breve, concreto y directo. Si te falta "
+        "información para responder, dilo claramente en lugar de inventar."
+        + config.INSTRUCCION_ANTIINYECCION
+        + f"\n\nCARGO: {sesion.get('cargo') or 'no especificado'}{criterios_section}\n\n{evidencia}"
+        + f"\n\nPLAN DE ACCIÓN ACTUAL:\n{plan or '(todavía no hay plan generado)'}"
+    )
+    try:
+        resp = anthropic_client.messages.create(
+            model="claude-haiku-4-5", max_tokens=700, temperature=0.3,
+            system=[{"type": "text", "text": system_text, "cache_control": {"type": "ephemeral"}}],
+            messages=msgs,
+        )
+        return {"respuesta": "".join(b.text for b in resp.content if b.type == "text").strip()}
+    except Exception:
+        logging.exception("Fallo en el chat del plan de acción")
+        raise ValueError("No se pudo responder ahora mismo. Inténtalo de nuevo.")
+
+
+def _generar_plan_accion(sesion: dict, instruccion: str = "", plan_previo: str = "") -> str:
+    """Claude propone un plan de acción para el año que viene en UNA sola llamada.
+
+    Se basa en los resultados de todas las evaluaciones y en los criterios del puesto
+    (y del siguiente nivel). Si el CA ya hizo el informe final, usa las valoraciones
+    acordadas por área; si no (plan creado desde cero), usa las evaluaciones en bruto.
+    NO usa los objetivos del año (para minimizar el gasto de API)."""
+    if not anthropic_client:
+        return plan_previo or ""
+    cargo = sesion.get("cargo", "")
+    evidencia, criterios_section = _evidencia_y_criterios(sesion)
+
     system = (
-        "Eres el director de RRHH de IGENERIS. A partir de la evaluación anual YA ACORDADA (valoración y "
-        "gaps por área) y del cargo de la persona, propón un PLAN DE ACCIÓN SUGERIDO para el año que viene: "
-        "entre 3 y 5 objetivos concretos y accionables. Para cada objetivo: un título breve + qué hacer / "
-        "cómo lograrlo, atado a los GAPS detectados y a la ruta de crecimiento (consolidar su nivel o subir "
-        "al siguiente). Realista, específico y medible cuando se pueda. Es una SUGERENCIA para el CA. "
-        "Devuelve texto plano como lista numerada (1., 2., …), sin preámbulos."
+        "Eres el director de RRHH de IGENERIS. A partir de los resultados de las evaluaciones del empleado "
+        "y de los criterios de su puesto (y del siguiente nivel), propón un PLAN DE ACCIÓN SUGERIDO para el "
+        "año que viene: entre 3 y 5 objetivos concretos y accionables. Para cada objetivo: un título breve + "
+        "qué hacer / cómo lograrlo, atado a los gaps detectados y a la ruta de crecimiento (consolidar su "
+        "nivel o subir al siguiente). Realista, específico y medible cuando se pueda. Es una SUGERENCIA para "
+        "el CA. Devuelve texto plano como lista numerada (1., 2., …), sin preámbulos."
         + config.INSTRUCCION_ANTIINYECCION
     )
-    user = f"CARGO: {sesion.get('cargo') or 'no especificado'}\n\nEVALUACIÓN POR ÁREA:\n{resumen}"
+    user = f"CARGO: {cargo or 'no especificado'}{criterios_section}\n\n{evidencia}"
     if plan_previo and instruccion:
         user += f"\n\nPLAN ACTUAL:\n{plan_previo}\n\nAJUSTE QUE PIDE EL CA: {instruccion}"
     try:
@@ -619,13 +683,21 @@ def _generar_plan_accion(sesion: dict, instruccion: str = "", plan_previo: str =
         return plan_previo or ""
 
 
-def obtener_plan_accion(advisee: str) -> dict:
-    """Genera (lazy) y devuelve el plan de acción sugerido."""
+def obtener_plan_accion(advisee: str, forzar: bool = False) -> dict:
+    """Genera (lazy) y devuelve el plan de acción sugerido por Claude.
+
+    `forzar` regenera aunque ya hubiera un plan (para 'Crear plan de acción nuevo').
+    Si no hay sesión (el CA no ha hecho el informe final), la inicia. El plan se genera
+    en UNA sola llamada a Claude a partir de las evaluaciones (en bruto o acordadas) y de
+    los criterios del puesto — como en el informe final pero sin recorrer todo el asistente."""
     slug = slug_archivo(advisee)
     sesion = _leer(slug)
     if not sesion:
+        iniciar_sesion(advisee)
+        sesion = _leer(slug)
+    if not sesion:
         raise ValueError("No hay sesión iniciada.")
-    if not sesion.get("plan_accion"):
+    if forzar or not sesion.get("plan_accion"):
         sesion["plan_accion"] = _generar_plan_accion(sesion)
         _guardar(slug, sesion)
     return {"plan": sesion.get("plan_accion", "")}

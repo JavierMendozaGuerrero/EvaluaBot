@@ -453,7 +453,13 @@ button:disabled, .button:disabled { opacity: .45; cursor: not-allowed; }
 .advisee-detail-foto { width: clamp(120px, 22vw, 180px); height: clamp(120px, 22vw, 180px); border-radius: 50%; object-fit: cover; font-size: clamp(40px, 8vw, 56px); }
 .advisee-detail-nombre { margin: 0; text-align: center; font-size: clamp(18px, 2.5vw, 26px); }
 .advisee-detail-right { display: flex; flex-direction: column; gap: 12px; padding-top: 8px; }
-.advisee-gestion { display: flex; flex-direction: column; gap: 8px; padding-left: 14px; border-left: 1px solid var(--border); }
+.advisee-gestion { display: flex; flex-direction: column; gap: 2px; padding-left: 14px; border-left: 1px solid var(--border); }
+/* Los puntitos anidados (dentro de "Gestionar informe") en naranja; los de primer nivel siguen grises. */
+/* Alterna el color del punto por nivel dentro de "Gestionar informe":
+   L1 (fuera) gris · L2 naranja · L3 gris · L4 naranja ... */
+.advisee-gestion .dash-dot { background: var(--accent); }
+.advisee-gestion .advisee-nav-children .dash-dot { background: var(--text-30); }
+.advisee-gestion .advisee-nav-children .advisee-nav-children .dash-dot { background: var(--accent); }
 .opiniones-doc-opciones { display: flex; flex-direction: column; gap: 0; padding-left: 14px; border-left: 1px solid var(--border); }
 .opiniones-doc-opciones button { width: 100%; display: inline-flex; align-items: center; justify-content: flex-start; gap: 8px; border: 0; }
 .opiniones-doc-opciones button svg { flex-shrink: 0; }
@@ -476,6 +482,7 @@ button:disabled, .button:disabled { opacity: .45; cursor: not-allowed; }
 .notas-ca-dictado.grabando { background: var(--accent); border-color: var(--accent); color: #fff; animation: notas-ca-pulso 1.2s ease-in-out infinite; }
 .notas-ca-dictado-hint { color: var(--text-55); }
 @keyframes notas-ca-pulso { 0%, 100% { opacity: 1; } 50% { opacity: 0.55; } }
+@keyframes spin { to { transform: rotate(360deg); } }
 
 /* ── Opiniones ── */
 .opiniones-header { display: flex; justify-content: space-between; align-items: flex-start; gap: 16px; margin-bottom: 20px; }

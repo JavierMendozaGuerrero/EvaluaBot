@@ -59,11 +59,11 @@ def eval_anual_area(evaluado: str = "", clave: str = "", session=Depends(require
 
 
 @router.get("/api/eval-anual/plan")
-def eval_anual_plan(evaluado: str = "", session=Depends(require_session)):
+def eval_anual_plan(evaluado: str = "", forzar: bool = False, session=Depends(require_session)):
     evaluado = _requiere_evaluado(evaluado, session)
     if evaluado is None:
         return JSONResponse({"error": "Falta el parámetro evaluado."}, status_code=400)
-    return eval_sesion.obtener_plan_accion(evaluado)
+    return eval_sesion.obtener_plan_accion(evaluado, forzar=forzar)
 
 
 @router.get("/api/eval-anual/plan-guardado")
@@ -129,6 +129,17 @@ def eval_anual_plan_cambios(datos: dict = Body(default={}), session=Depends(requ
     if evaluado is None:
         return JSONResponse({"error": "Falta el campo evaluado."}, status_code=400)
     return eval_sesion.pedir_cambios_plan(evaluado, datos.get("instruccion", ""))
+
+
+@router.post("/api/eval-anual/plan-chat")
+def eval_anual_plan_chat(datos: dict = Body(default={}), session=Depends(require_session)):
+    evaluado = _requiere_evaluado(datos.get("evaluado", ""), session)
+    if evaluado is None:
+        return JSONResponse({"error": "Falta el parámetro evaluado."}, status_code=400)
+    try:
+        return eval_sesion.chatear_plan(evaluado, datos.get("mensajes", []))
+    except ValueError as e:
+        return JSONResponse({"error": str(e)}, status_code=400)
 
 
 @router.post("/api/eval-anual/plan-guardar")

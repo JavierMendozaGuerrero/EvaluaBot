@@ -1842,6 +1842,7 @@ def invalidar_cache_empleados() -> None:
     global _empleados_cache_ts
     with _lock_empleados:
         _empleados_cache_ts = 0.0
+    invalidar_cache_bbdd_evaluados()
 
 
 def obtener_lista_empleados() -> list[str]:
@@ -2526,7 +2527,28 @@ def validar_empleado_en_lista(nombre: str) -> bool:
     return buscar_empleado_en_lista(nombre) is not None
 
 
+_lock_bbdd_evaluados = threading.Lock()
+_bbdd_evaluados_cache: list | None = None
+_bbdd_evaluados_cache_ts: float = 0.0
+_BBDD_EVALUADOS_CACHE_TTL = 120  # 2 minutos: las BDs por empleado son estables
+
+
+def invalidar_cache_bbdd_evaluados() -> None:
+    """Fuerza que la próxima llamada a listar_bbdd_evaluados vuelva a Notion."""
+    global _bbdd_evaluados_cache_ts
+    with _lock_bbdd_evaluados:
+        _bbdd_evaluados_cache_ts = 0.0
+
+
 def listar_bbdd_evaluados():
+    """Lista las BDs de evaluaciones por empleado. Cachea 2 min: se llama en cada
+    generación de informe/PDF y en obtener_evaluaciones, y el search a Notion es lento."""
+    global _bbdd_evaluados_cache, _bbdd_evaluados_cache_ts
+    import time as _time
+    ahora = _time.time()
+    with _lock_bbdd_evaluados:
+        if _bbdd_evaluados_cache is not None and (ahora - _bbdd_evaluados_cache_ts) < _BBDD_EVALUADOS_CACHE_TTL:
+            return list(_bbdd_evaluados_cache)
     parent = obtener_parent_bbdd_evaluados()
     if parent is None:
         return []
@@ -2536,7 +2558,10 @@ def listar_bbdd_evaluados():
         titulo = _extraer_titulo_bbdd(bbdd)
         if titulo.startswith(config.PREFIJO_BBDD_EVALUADO) and _coincide_parent_bbdd(bbdd, parent):
             bases.append({"id": _data_source_id(bbdd), "evaluado": titulo.removeprefix(config.PREFIJO_BBDD_EVALUADO)})
-    return bases
+    with _lock_bbdd_evaluados:
+        _bbdd_evaluados_cache = bases
+        _bbdd_evaluados_cache_ts = _time.time()
+    return list(bases)
 
 
 def obtener_evaluaciones_de_bbdd(database_id, evaluado):
@@ -2843,47 +2868,34 @@ def obtener_todos_los_advisees() -> list[str]:
 
 
 def obtener_datos_empleados_por_nombres(nombres: list[str]) -> list[dict]:
-    """Retorna {nombre, foto, email, cargo} para cada nombre desde 'Lista de empleados'."""
+    """Retorna {nombre, foto, email, cargo} para cada nombre desde 'Lista de empleados'.
+
+    Se sirve íntegramente de la caché de empleados (_obtener_registros_empleados, TTL
+    5 min), que ya contiene nombre/foto/email/cargo de todos. Antes esta función volvía
+    a resolver la BD (_retrieve_bbdd) y a paginar la lista de empleados entera en Notion
+    en CADA llamada, aunque esos datos ya estuvieran cacheados en memoria. Solo se
+    incluyen los nombres presentes en la lista (misma semántica que la versión anterior,
+    que recorría la BD y omitía los que no encontraba).
+    """
     if not nombres:
         return []
     nombres_norm = {normalizar_nombre(n): n for n in nombres}
-    cargos_por_nombre = {
-        normalizar_nombre(r["nombre"]): r.get("cargo", "")
-        for r in _obtener_registros_empleados()
-    }
     try:
-        db_id, _ = _retrieve_bbdd(config.NOTION_EMPLOYEES_DATABASE_ID)
+        por_nombre = {
+            normalizar_nombre(r["nombre"]): r
+            for r in _obtener_registros_empleados()
+        }
         resultado = []
-        cursor = None
-        while True:
-            kwargs: dict = {"page_size": 100}
-            if cursor:
-                kwargs["start_cursor"] = cursor
-            resp = _query_bbdd(db_id, **kwargs)
-            for fila in resp.get("results", []):
-                props = fila.get("properties", {})
-                prop_nombre = props.get("Nombre", {})
-                nombre = "".join(
-                    p.get("plain_text", "")
-                    for p in (prop_nombre.get("rich_text") or prop_nombre.get("title") or [])
-                ).strip()
-                if normalizar_nombre(nombre) not in nombres_norm:
-                    continue
-                foto = _extraer_url_foto(props.get("Foto", {}))
-                prop_correo = props.get("Correo", props.get("correo", props.get("email", props.get("Email", {}))))
-                correo = prop_correo.get("email") or prop_correo.get("url") or "".join(
-                    p.get("plain_text", "")
-                    for p in (prop_correo.get("rich_text") or prop_correo.get("title") or [])
-                ).strip()
-                resultado.append({
-                    "nombre": nombre,
-                    "foto": foto or "",
-                    "email": correo or "",
-                    "cargo": cargos_por_nombre.get(normalizar_nombre(nombre), ""),
-                })
-            if not resp.get("has_more"):
-                break
-            cursor = resp.get("next_cursor")
+        for norm, original in nombres_norm.items():
+            r = por_nombre.get(norm)
+            if not r:
+                continue
+            resultado.append({
+                "nombre": r.get("nombre", original),
+                "foto": r.get("foto", "") or "",
+                "email": r.get("email", "") or "",
+                "cargo": r.get("cargo", "") or "",
+            })
         return resultado
     except Exception:
         logging.exception("Error obteniendo datos de empleados por nombres")

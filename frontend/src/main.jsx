@@ -2797,17 +2797,23 @@ function Dashboard({ token, user, onLogout, onNavigate, onBackToRoleSelect = nul
 
   useEffect(() => {
     if (isAdmin) return;
-    apiRequest("/api/evaluaciones-proyecto-activas", { token })
-      .then((d) => setProyectosActivos(d.proyectos || []))
+    // Cacheado (SWR): pinta al instante lo último conocido y revalida en segundo
+    // plano. Recorrer los proyectos de Notion tarda, así que evitamos el waterfall
+    // en cada remontaje del dashboard.
+    const applyActivos = (d) => setProyectosActivos(d.proyectos || []);
+    apiRequestCached("/api/evaluaciones-proyecto-activas", { token }, applyActivos)
+      .then(applyActivos)
       .catch(() => {});
-    apiRequest("/api/proyectos-manager", { token })
-      .then((d) => setProyectosManager(d.proyectos || []))
+    const applyManager = (d) => setProyectosManager(d.proyectos || []);
+    apiRequestCached("/api/proyectos-manager", { token }, applyManager)
+      .then(applyManager)
       .catch(() => setProyectosManager([]));
   }, [token, isAdmin, proyectosVersion]);
 
   useEffect(() => {
-    apiRequest("/api/evaluaciones-extra-pendientes", { token })
-      .then((d) => setEvaluacionesExtraPendientes(d.pendientes || []))
+    const apply = (d) => setEvaluacionesExtraPendientes(d.pendientes || []);
+    apiRequestCached("/api/evaluaciones-extra-pendientes", { token }, apply)
+      .then(apply)
       .catch(() => setEvaluacionesExtraPendientes([]));
   }, [token]);
 
@@ -2825,8 +2831,9 @@ function Dashboard({ token, user, onLogout, onNavigate, onBackToRoleSelect = nul
 
   useEffect(() => {
     if (isAdmin) { setTareasSlack({ pendientes: [], url: "" }); return; }
-    apiRequest("/api/tareas-slack", { token })
-      .then((d) => setTareasSlack({ pendientes: d.pendientes || [], url: d.slackUrl || "" }))
+    const apply = (d) => setTareasSlack({ pendientes: d.pendientes || [], url: d.slackUrl || "" });
+    apiRequestCached("/api/tareas-slack", { token }, apply)
+      .then(apply)
       .catch(() => {});
   }, [token, isAdmin]);
 

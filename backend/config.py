@@ -21,7 +21,25 @@ REGISTRO_WEB_HABILITADO = env_bool("REGISTRO_WEB_HABILITADO", "false")
 INTERVALO_PRUEBA_DIAS = 30
 ZONA_HORARIA_MADRID = ZoneInfo("Europe/Madrid")
 DIA_ENVIO_PRODUCCION = 4
-HORA_ENVIO_PRODUCCION = datetime_time(10, 0)
+# Hora del día (en horario de Madrid) a la que salen las evaluaciones en producción.
+# Configurable por env con formato "HH" o "HH:MM" (por defecto 10:00).
+try:
+    _h_env, _, _m_env = os.environ.get("HORA_ENVIO_PRODUCCION", "10:00").partition(":")
+    HORA_ENVIO_PRODUCCION = datetime_time(int(_h_env), int(_m_env or 0))
+except Exception:
+    HORA_ENVIO_PRODUCCION = datetime_time(10, 0)
+
+# Desfases del envío en producción (ruta por calendario de Notion), para que los tres
+# ciclos no lleguen a la vez cuando coinciden en el mismo día:
+# - CA se envía una semana DESPUÉS de proyecto (no el mismo día).
+# - Personal se separa unas horas de proyecto para que, cuando coincidan (cada 4 semanas,
+#   al ser personal cada 2 y proyecto cada 4), no lleguen a la misma hora.
+CA_OFFSET_DIAS = int(os.environ.get("CA_OFFSET_DIAS", "7"))
+PERSONAL_OFFSET_HORAS = int(os.environ.get("PERSONAL_OFFSET_HORAS", "2"))
+# Cada cuánto (segundos) los ciclos de envío en producción releen la 'Fecha inicio' del
+# calendario mientras esperan. Permite que un cambio de fecha en caliente se aplique sin
+# reiniciar el bot, en como mucho este intervalo.
+RECHECK_CALENDARIO_SEGUNDOS = int(os.environ.get("RECHECK_CALENDARIO_SEGUNDOS", "3600"))
 
 PUERTO_WEB = int(os.environ.get("PUERTO_WEB", "8000"))
 CARPETA_WEB = os.path.join(BASE_DIR, "dashboard_web")
@@ -65,6 +83,9 @@ def _require_env(name):
 SLACK_BOT_TOKEN = _require_env("SLACK_BOT_TOKEN")
 SLACK_APP_TOKEN = _require_env("SLACK_APP_TOKEN")
 SLACK_TEST_USER_ID = os.environ.get("SLACK_TEST_USER_ID", "").strip()
+# Admite varios IDs separados por comas para probar el envío a varias personas
+# a la vez en modo prueba, p. ej. SLACK_TEST_USER_ID="U111,U222,U333,U444".
+SLACK_TEST_USER_IDS = [uid.strip() for uid in SLACK_TEST_USER_ID.split(",") if uid.strip()]
 # Slack Lists requiere workspace de pago. Desactivado por defecto: se
 # probó en un workspace gratuito de pruebas; activar (env var a "true")
 # solo cuando el bot esté en el workspace de pago definitivo de la empresa.

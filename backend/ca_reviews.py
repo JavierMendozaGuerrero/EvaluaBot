@@ -40,7 +40,7 @@ from .notion_service import (
     excluir_feedback_confidencial,
     obtener_advisees,
     obtener_comentarios_personales,
-    obtener_config_calendario,
+    esperar_hasta_proximo_envio,
     obtener_ejemplos_guia,
     obtener_evaluaciones_por_evaluado,
     obtener_nombre_por_id_usuario,
@@ -48,7 +48,6 @@ from .notion_service import (
     obtener_preguntas_seguimiento_ca,
     obtener_slack_id_por_nombre,
     obtener_slack_ids_empleados,
-    siguiente_envio_calendario,
     sugerir_empleados_parecidos,
 )
 from .project_evals import obtener_evaluaciones_proyecto_por_evaluado
@@ -745,9 +744,9 @@ def _bloques_dm_ca(idioma, enlace_pendientes=None):
 def enviar_pregunta_inicial_ca() -> None:
     try:
         invalidar_cache_empleados()  # leer el idioma actual de Notion, no una copia cacheada
-        if config.APP_MODE != "produccion" and config.SLACK_TEST_USER_ID:
-            slack_ids = [config.SLACK_TEST_USER_ID]
-            logging.info(f"Modo prueba CA: enviando solo a {config.SLACK_TEST_USER_ID}")
+        if config.APP_MODE != "produccion" and config.SLACK_TEST_USER_IDS:
+            slack_ids = config.SLACK_TEST_USER_IDS
+            logging.info(f"Modo prueba CA: enviando solo a {slack_ids}")
         else:
             slack_ids = obtener_slack_ids_empleados()
             if not slack_ids:
@@ -1654,18 +1653,11 @@ def ciclo_envio_ca() -> None:
             except Exception:
                 logging.exception("Error en ciclo CA")
         return
-    # Producción: 4 semanas desde la fecha configurada en Notion
+    # Producción: cada 4 semanas, pero una semana DESPUÉS de proyecto (offset_dias).
+    # esperar_hasta_proximo_envio relee el calendario mientras espera, así un cambio de
+    # fecha en caliente se aplica sin reiniciar.
     while True:
-        cal = obtener_config_calendario()
-        fecha = cal.get("proyecto_ca")
-        if not fecha:
-            logging.info("[CA] Sin 'Proyecto y CA' en Calendario evaluaciones de Notion. Reintentando en 1h.")
-            time.sleep(3600)
-            continue
-        siguiente = siguiente_envio_calendario(fecha, 4)
-        espera = max(60, (siguiente - datetime.now(timezone.utc)).total_seconds())
-        logging.info(f"[CA] Próximo envío: {siguiente.isoformat()} (en {espera/3600:.1f}h)")
-        time.sleep(espera)
+        esperar_hasta_proximo_envio("proyecto_ca", 4, offset_dias=config.CA_OFFSET_DIAS, etiqueta="[CA]")
         try:
             enviar_pregunta_inicial_ca()
         except Exception:

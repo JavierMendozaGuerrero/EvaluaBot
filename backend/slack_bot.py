@@ -33,7 +33,7 @@ from .notion_service import (
     idioma_por_slack_id,
     guardar_idioma_por_slack_id,
     invalidar_cache_empleados,
-    obtener_config_calendario,
+    esperar_hasta_proximo_envio,
     obtener_ejemplos_guia,
     obtener_evaluados_middleoffice,
     obtener_nombre_por_id_usuario,
@@ -41,7 +41,6 @@ from .notion_service import (
     obtener_preguntas_mo,
     obtener_preguntas_palantir,
     obtener_slack_ids_empleados,
-    siguiente_envio_calendario,
     sugerir_empleados_parecidos,
 )
 from .state import (
@@ -132,9 +131,9 @@ def _bloques_dm_mensual(idioma, enlace_pendientes=None):
 def enviar_una_evaluacion():
     try:
         invalidar_cache_empleados()  # leer el idioma actual de Notion, no una copia cacheada
-        if config.APP_MODE != "produccion" and config.SLACK_TEST_USER_ID:
-            slack_ids = [config.SLACK_TEST_USER_ID]
-            logging.info(f"Modo prueba: enviando solo a {config.SLACK_TEST_USER_ID}")
+        if config.APP_MODE != "produccion" and config.SLACK_TEST_USER_IDS:
+            slack_ids = config.SLACK_TEST_USER_IDS
+            logging.info(f"Modo prueba: enviando solo a {slack_ids}")
         else:
             slack_ids = obtener_slack_ids_empleados()
             if not slack_ids:
@@ -198,19 +197,14 @@ def enviar_evaluaciones_programadas():
     if config.APP_MODE != "produccion":
         enviar_evaluaciones_modo_prueba()
         return
-    # Producción: intervalo fijo de 4 semanas desde la fecha configurada en Notion
+    # Producción: cada 4 semanas desde la fecha configurada en Notion. esperar_hasta_proximo_envio
+    # relee el calendario mientras espera, así un cambio de fecha en caliente se aplica sin reiniciar.
     while True:
-        cal = obtener_config_calendario()
-        fecha = cal.get("proyecto_ca")
-        if not fecha:
-            logging.info("[Proyecto] Sin 'Proyecto y CA' en Calendario evaluaciones de Notion. Reintentando en 1h.")
-            time.sleep(3600)
-            continue
-        siguiente = siguiente_envio_calendario(fecha, 4)
-        espera = max(60, (siguiente - datetime.now(timezone.utc)).total_seconds())
-        logging.info(f"[Proyecto] Próximo envío: {siguiente.isoformat()} (en {espera/3600:.1f}h)")
-        time.sleep(espera)
-        enviar_una_evaluacion()
+        esperar_hasta_proximo_envio("proyecto_ca", 4, etiqueta="[Proyecto]")
+        try:
+            enviar_una_evaluacion()
+        except Exception:
+            logging.exception("Error en envío de proyecto programado")
 
 
 def resumen_respuestas(respuestas, area="negocio", preguntas_area=None, tras_modificacion=False, idioma="es"):

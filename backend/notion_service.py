@@ -4366,6 +4366,49 @@ _PROPS_CALENDARIO = {
     "Fecha inicio": {"date": {}},
 }
 
+# Texto que se pone como descripción de la BD para que se lea como un formulario de
+# configuración a rellenar y no como una página en blanco.
+_DESC_CALENDARIO = (
+    "Rellena la fila «Inicio» con la fecha del primer envío (columna «Fecha inicio»). "
+    "El bot programa las evaluaciones automáticas a partir de esa fecha; mientras esté "
+    "vacía no se envía nada. Personal cada 2 semanas · Proyecto y CA cada 4 semanas."
+)
+# BDs a las que ya se ha aplicado la descripción + fila de ejemplo (una vez por proceso).
+_calendario_autoexplicado: set = set()
+
+
+def _asegurar_calendario_autoexplicativo(db_id: str) -> None:
+    """Deja la BD 'Calendario evaluaciones' autoexplicativa: descripción visible y una
+    fila 'Inicio' de ejemplo (SIN fecha) si la tabla está vacía. Best-effort, una vez
+    por proceso. No pisa filas puestas a mano: solo siembra si no hay ninguna."""
+    if not db_id or db_id in _calendario_autoexplicado:
+        return
+    _calendario_autoexplicado.add(db_id)
+    try:
+        payload = {"description": [{"type": "text", "text": {"content": _DESC_CALENDARIO}}]}
+        # La descripción vive en el objeto 'database', no en la data source. En workspaces
+        # con data sources hay que resolver el database_id contenedor antes de actualizar.
+        database_id = db_id
+        if _usa_data_sources():
+            try:
+                ds = notion.data_sources.retrieve(data_source_id=db_id)
+                database_id = (ds.get("parent") or {}).get("database_id") or db_id
+            except Exception:
+                database_id = db_id
+        notion.databases.update(database_id=database_id, **payload)
+    except Exception:
+        logging.exception("No se pudo poner la descripción de 'Calendario evaluaciones'")
+    try:
+        # La fila 'Inicio' sin fecha es inofensiva: obtener_config_calendario ignora las
+        # filas sin 'Fecha inicio', así que no dispara ningún envío hasta que se rellene.
+        resp = _query_bbdd(db_id, page_size=5)
+        if not resp.get("results"):
+            _crear_pagina_en_bbdd(db_id, {
+                "Nombre": {"title": [{"type": "text", "text": {"content": "Inicio"}}]},
+            })
+    except Exception:
+        logging.exception("No se pudo sembrar la fila 'Inicio' de 'Calendario evaluaciones'")
+
 
 def _obtener_o_crear_bbdd_calendario() -> str | None:
     with _lock_calendario:
@@ -4427,7 +4470,10 @@ def _obtener_o_crear_bbdd_calendario() -> str | None:
                 return None
 
         _cache_calendario_db["db_id"] = db_id
-        return db_id
+    # Fuera del lock (como en 'Frecuencia evaluaciones'): añade descripción y fila de
+    # ejemplo sin bloquear a otros hilos durante las llamadas a la API.
+    _asegurar_calendario_autoexplicativo(db_id)
+    return db_id
 
 
 # ---------------------------------------------------------------------------
@@ -4578,17 +4624,58 @@ def obtener_config_calendario() -> dict:
     return resultado
 
 
-def siguiente_envio_calendario(fecha_inicio_str: str, semanas: int) -> "datetime":
-    """Dado un inicio y un intervalo en semanas, devuelve el próximo momento de envío tras ahora."""
-    inicio = datetime.fromisoformat(fecha_inicio_str)
-    if inicio.tzinfo is None:
-        inicio = inicio.replace(tzinfo=timezone.utc)
+def siguiente_envio_calendario(fecha_inicio_str: str, semanas: int, offset_dias: int = 0, offset_horas: int = 0) -> "datetime":
+    """Dado un inicio y un intervalo en semanas, devuelve el próximo momento de envío tras ahora.
+
+    El envío se ancla a config.HORA_ENVIO_PRODUCCION en HORARIO DE MADRID (no a medianoche
+    UTC), así que cada envío cae a esa hora local del día que toque, con DST resuelto por
+    la fecha concreta. offset_dias / offset_horas desplazan el ancla (y con ella toda la
+    serie) para separar ciclos que si no coincidirían: p.ej. CA una semana después de
+    proyecto (offset_dias=7), o personal a una hora distinta de proyecto (offset_horas)
+    cuando caen el mismo día.
+    """
+    fecha = datetime.fromisoformat(fecha_inicio_str[:10]).date()
+    inicio = datetime.combine(fecha, config.HORA_ENVIO_PRODUCCION, tzinfo=config.ZONA_HORARIA_MADRID)
+    if offset_dias or offset_horas:
+        inicio = inicio + timedelta(days=offset_dias, hours=offset_horas)
     ahora = datetime.now(timezone.utc)
     if ahora < inicio:
         return inicio
     intervalo = timedelta(weeks=semanas)
     n = int((ahora - inicio) / intervalo) + 1
     return inicio + intervalo * n
+
+
+def esperar_hasta_proximo_envio(fecha_key: str, semanas: int, offset_dias: int = 0,
+                                offset_horas: int = 0, etiqueta: str = "",
+                                intervalo_recheck: int | None = None) -> None:
+    """Bloquea hasta el próximo instante de envío de este ciclo y retorna cuando toca enviar.
+
+    A diferencia de un `time.sleep` largo de una tirada, RELEE el calendario de Notion cada
+    `intervalo_recheck` segundos mientras espera. Así, si se cambia la 'Fecha inicio' con el
+    bot en marcha, el nuevo horario se respeta en ≤ un intervalo de recheck, sin reiniciar.
+    Si el calendario está vacío, sigue reintentando (no envía). El caller hace el envío.
+
+    fecha_key: clave de obtener_config_calendario() ('proyecto_ca' o 'personal').
+    """
+    recheck = intervalo_recheck or config.RECHECK_CALENDARIO_SEGUNDOS
+    ultimo_log = None
+    while True:
+        fecha = obtener_config_calendario().get(fecha_key)
+        if not fecha:
+            logging.info("%s Sin fecha en 'Calendario evaluaciones' de Notion. Reintentando en %.0f min.",
+                         etiqueta, recheck / 60)
+            time.sleep(recheck)
+            continue
+        siguiente = siguiente_envio_calendario(fecha, semanas, offset_dias=offset_dias, offset_horas=offset_horas)
+        restante = (siguiente - datetime.now(timezone.utc)).total_seconds()
+        if restante <= 0:
+            return
+        # Log solo cuando cambia el objetivo, para no repetirlo en cada recheck.
+        if siguiente.isoformat() != ultimo_log:
+            logging.info("%s Próximo envío: %s (en %.1f h)", etiqueta, siguiente.isoformat(), restante / 3600)
+            ultimo_log = siguiente.isoformat()
+        time.sleep(min(restante, recheck))
 
 
 def obtener_comentarios_personales(nombre: str) -> list[dict]:

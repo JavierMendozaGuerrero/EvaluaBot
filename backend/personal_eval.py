@@ -17,8 +17,8 @@ from .notion_service import (
     idioma_por_slack_id,
     guardar_idioma_por_slack_id,
     invalidar_cache_empleados,
+    esperar_hasta_proximo_envio,
     obtener_ca_de_empleado,
-    obtener_config_calendario,
     obtener_criterios_evaluacion,
     obtener_ejemplos_guia,
     obtener_nombre_por_id_usuario,
@@ -27,7 +27,6 @@ from .notion_service import (
     PREGUNTAS_PERSONALES_DEFAULT,
     obtener_slack_id_por_nombre,
     obtener_slack_ids_empleados,
-    siguiente_envio_calendario,
 )
 from .slack_carga import AnimacionCargando
 from .utils import normalizar_nombre
@@ -206,8 +205,8 @@ def _bloques_dm_personal(idioma, enlace_pendientes=None):
 def enviar_pregunta_inicial_personal() -> None:
     try:
         invalidar_cache_empleados()  # leer el idioma actual de Notion, no una copia cacheada
-        if config.APP_MODE != "produccion" and config.SLACK_TEST_USER_ID:
-            slack_ids = [config.SLACK_TEST_USER_ID]
+        if config.APP_MODE != "produccion" and config.SLACK_TEST_USER_IDS:
+            slack_ids = config.SLACK_TEST_USER_IDS
         else:
             slack_ids = obtener_slack_ids_empleados()
             if not slack_ids:
@@ -1278,17 +1277,12 @@ def ciclo_envio_personal() -> None:
             except Exception:
                 logging.exception("Error en ciclo personal prueba")
         return
+    # Cada 2 semanas, desfasado unas horas de proyecto para que, cuando coincidan en el
+    # mismo día (cada 4 semanas), no lleguen a la misma hora. esperar_hasta_proximo_envio
+    # relee el calendario mientras espera, así un cambio de fecha en caliente se aplica
+    # sin reiniciar.
     while True:
-        cal = obtener_config_calendario()
-        fecha = cal.get("personal")
-        if not fecha:
-            logging.info("[Personal] Sin 'Personal' en Calendario evaluaciones de Notion. Reintentando en 1h.")
-            time.sleep(3600)
-            continue
-        siguiente = siguiente_envio_calendario(fecha, 2)
-        espera = max(60, (siguiente - datetime.now(timezone.utc)).total_seconds())
-        logging.info(f"[Personal] Próximo envío: {siguiente.isoformat()} (en {espera/3600:.1f}h)")
-        time.sleep(espera)
+        esperar_hasta_proximo_envio("personal", 2, offset_horas=config.PERSONAL_OFFSET_HORAS, etiqueta="[Personal]")
         try:
             enviar_pregunta_inicial_personal()
         except Exception:

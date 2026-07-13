@@ -260,6 +260,30 @@ button.secondary:hover, .button.secondary:hover { opacity: 1; border-color: var(
 
 button:disabled, .button:disabled { opacity: .45; cursor: not-allowed; }
 
+/* Botones de accion en "Mis proyectos en activo": sin color inline para que
+   hereden el hover naranja global (button:hover { color: var(--accent) }). */
+.mpa-pill {
+  height: 32px;
+  min-height: auto;
+  padding: 0 14px;
+  background: transparent;
+  color: #000;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-pill);
+  font-size: 12px;
+  font-weight: 400;
+}
+.mpa-remove {
+  background: transparent;
+  border: none;
+  min-height: auto;
+  padding: 2px 4px;
+  color: var(--text-55);
+  font-size: 12px;
+  font-weight: 400;
+  white-space: nowrap;
+}
+
 .link-button {
   min-height: auto;
   padding: 0;
@@ -449,7 +473,7 @@ button:disabled, .button:disabled { opacity: .45; cursor: not-allowed; }
 .nota-ca-resumen-wrap summary { cursor: pointer; margin-bottom: 6px; }
 .notas-ca-dictado-fila { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
 .notas-ca-dictado { align-self: flex-start; }
-.notas-ca-dictado.grabando { background: #d64545; border-color: #d64545; color: #fff; animation: notas-ca-pulso 1.2s ease-in-out infinite; }
+.notas-ca-dictado.grabando { background: var(--accent); border-color: var(--accent); color: #fff; animation: notas-ca-pulso 1.2s ease-in-out infinite; }
 .notas-ca-dictado-hint { color: var(--text-55); }
 @keyframes notas-ca-pulso { 0%, 100% { opacity: 1; } 50% { opacity: 0.55; } }
 
@@ -815,7 +839,7 @@ input, select, textarea { padding: 12px 14px; font-size: 15.5px; }
   from { opacity: 0; transform: translateY(8px); }
   to   { opacity: 1; transform: none; }
 }
-.stagger > *, .stagger-item { animation: card-in .45s cubic-bezier(.2, .75, .2, 1) both; }
+.stagger > *, .stagger-item { animation: card-in .45s cubic-bezier(.2, .75, .2, 1) backwards; }
 .stagger > *:nth-child(1)  { animation-delay: .03s; }
 .stagger > *:nth-child(2)  { animation-delay: .08s; }
 .stagger > *:nth-child(3)  { animation-delay: .13s; }
@@ -837,7 +861,9 @@ button:active, .button:active, .chat-btn:active, .eval-tipo-btn:active { transfo
 .role-card, .advisee-page-card, .card {
   transition: transform .2s cubic-bezier(.2, .75, .2, 1), background .15s, border-color .15s, color .15s, opacity .15s;
 }
-.role-card:hover, .advisee-page-card:hover, .card:hover { transform: translateY(-2px); }
+.role-card:hover, .card:hover { transform: translateY(-2px); }
+/* Los advisees hacen un pequeño zoom al pasar el cursor. */
+.advisee-page-card:hover { transform: translateY(-2px) scale(1.05); }
 .role-card:hover, .card:hover { border-color: rgba(0, 0, 0, .32); }
 .role-card:active, .advisee-page-card:active, .card:active { transform: translateY(-1px) scale(.985); }
 

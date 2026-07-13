@@ -36,9 +36,9 @@ TEXTOS: dict[str, dict[str, str]] = {
     },
     # --- Pregunta compartida del DM inicial: ver ejemplo con botones Sí/No ---
     "bot.example_q": {
-        "es": ":point_right: *¿Quieres ver un ejemplo antes de empezar?*",
-        "en": ":point_right: *Would you like to see an example before starting?*",
-        "pt": ":point_right: *Queres ver um exemplo antes de começar?*",
+        "es": ":point_right: *Para empezar, entra en el hilo y selecciona si quieres ver un ejemplo antes de empezar*",
+        "en": ":point_right: *To begin, open the thread and choose whether you want to see an example before starting*",
+        "pt": ":point_right: *Para começar, entra no tópico e seleciona se queres ver um exemplo antes de começar*",
     },
     # --- Bot Slack: evaluacion mensual de proyecto (slack_bot.py) ---
     "bm.back_btn": {"es": "⬅️ Atrás", "en": "⬅️ Back"},

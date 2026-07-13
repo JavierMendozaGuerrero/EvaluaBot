@@ -13,6 +13,7 @@ from ...project_evals import (
     añadir_miembro_proyecto,
     eliminar_miembro_proyecto,
     enviar_recordatorios_proyecto,
+    filtrar_liderazgo_autoeval,
     guardar_evaluacion_proyecto,
     obtener_equipo_proyecto,
     obtener_estado_evaluaciones_proyecto,
@@ -53,7 +54,10 @@ def evaluaciones_proyecto_completadas(proyecto: str = "", session=Depends(requir
 def preguntas_evaluacion_proyecto(tipo: str = "", session=Depends(require_session)):
     if tipo not in LABELS_TIPOS:
         return JSONResponse({"error": "Tipo no válido."}, status_code=400)
-    return {"preguntas": obtener_preguntas_tipo(tipo, idioma_por_sesion(session))}
+    preguntas = obtener_preguntas_tipo(tipo, idioma_por_sesion(session))
+    if tipo == "autoevaluacion":
+        preguntas = filtrar_liderazgo_autoeval(preguntas, session.get("persona", ""))
+    return {"preguntas": preguntas}
 
 
 @router.get("/api/equipo-proyecto")
@@ -145,6 +149,8 @@ def guardar_evaluacion_proyecto_route(datos: dict = Body(default={}), session=De
     if tipo not in LABELS_TIPOS:
         return JSONResponse({"error": "Tipo de evaluación no válido."}, status_code=400)
     preguntas = obtener_preguntas_tipo(tipo, idioma_por_sesion(session))
+    if tipo == "autoevaluacion":
+        preguntas = filtrar_liderazgo_autoeval(preguntas, evaluador)
     ok = guardar_evaluacion_proyecto(evaluador, evaluado, proyecto, tipo, respuestas, preguntas)
     if ok:
         return {"ok": True}

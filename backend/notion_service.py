@@ -2814,10 +2814,14 @@ def obtener_todos_los_advisees() -> list[str]:
 
 
 def obtener_datos_empleados_por_nombres(nombres: list[str]) -> list[dict]:
-    """Retorna {nombre, foto, email} para cada nombre desde 'Lista de empleados'."""
+    """Retorna {nombre, foto, email, cargo} para cada nombre desde 'Lista de empleados'."""
     if not nombres:
         return []
     nombres_norm = {normalizar_nombre(n): n for n in nombres}
+    cargos_por_nombre = {
+        normalizar_nombre(r["nombre"]): r.get("cargo", "")
+        for r in _obtener_registros_empleados()
+    }
     try:
         db_id, _ = _retrieve_bbdd(config.NOTION_EMPLOYEES_DATABASE_ID)
         resultado = []
@@ -2842,14 +2846,19 @@ def obtener_datos_empleados_por_nombres(nombres: list[str]) -> list[dict]:
                     p.get("plain_text", "")
                     for p in (prop_correo.get("rich_text") or prop_correo.get("title") or [])
                 ).strip()
-                resultado.append({"nombre": nombre, "foto": foto or "", "email": correo or ""})
+                resultado.append({
+                    "nombre": nombre,
+                    "foto": foto or "",
+                    "email": correo or "",
+                    "cargo": cargos_por_nombre.get(normalizar_nombre(nombre), ""),
+                })
             if not resp.get("has_more"):
                 break
             cursor = resp.get("next_cursor")
         return resultado
     except Exception:
         logging.exception("Error obteniendo datos de empleados por nombres")
-        return [{"nombre": n, "foto": "", "email": ""} for n in nombres]
+        return [{"nombre": n, "foto": "", "email": "", "cargo": ""} for n in nombres]
 
 
 def obtener_opiniones_ca_por_advisee(ca_nombre: str, advisee: str, ca_aliases=None) -> list[dict]:

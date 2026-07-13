@@ -656,9 +656,14 @@ def pedir_cambios_plan(advisee: str, instruccion: str) -> dict:
 
 
 def guardar_plan_accion(advisee: str, texto: str) -> dict:
-    """Guarda el plan editado a mano por el CA."""
+    """Guarda el plan editado a mano por el CA. Si aún no existe sesión de evaluación
+    anual (el CA crea un plan nuevo sin haber hecho el informe final), la inicia primero
+    para no romper el asistente si más adelante hace el informe."""
     slug = slug_archivo(advisee)
     sesion = _leer(slug)
+    if not sesion:
+        iniciar_sesion(advisee)
+        sesion = _leer(slug)
     if not sesion:
         raise ValueError("No hay sesión iniciada.")
     sesion["plan_accion"] = (texto or "").strip()

@@ -29,6 +29,7 @@ from .notion_service import (
     _buscar_bbdd_en_pagina_id,
     _data_source_id,
     _iter_blocks,
+    buscar_empleado_y_cargo,
     _page_or_database_link_by_name,
     _parent_bbdd_en_pagina,
     _parent_bbdd_referencia,
@@ -71,8 +72,13 @@ LABELS_TIPOS = {
 
 _PREGUNTAS_INICIALES = {
     "autoevaluacion": [
-        {"categoria": "", "texto": "Grado de satisfacción contigo mismo", "tipo": "escala_1_5", "opciones": "", "orden": 1},
-        {"categoria": "", "texto": "Justifica tu respuesta", "tipo": "abierta", "opciones": "", "orden": 2},
+        {"categoria": "CALIDAD TÉCNICA", "texto": "Grado de satisfacción en calidad técnica", "tipo": "escala_1_5", "opciones": "", "orden": 1},
+        {"categoria": "GESTIÓN DE PROYECTO", "texto": "Grado de satisfacción en gestión de proyecto", "tipo": "escala_1_5", "opciones": "", "orden": 2},
+        {"categoria": "COMUNICACIÓN", "texto": "Grado de satisfacción en comunicación", "tipo": "escala_1_5", "opciones": "", "orden": 3},
+        {"categoria": "RELACIÓN CON EL CLIENTE", "texto": "Grado de satisfacción en relación con el cliente", "tipo": "escala_1_5", "opciones": "", "orden": 4},
+        {"categoria": "TRABAJO EN EQUIPO", "texto": "Grado de satisfacción en trabajo en equipo", "tipo": "escala_1_5", "opciones": "", "orden": 5},
+        {"categoria": "LIDERAZGO", "texto": "Grado de satisfacción en liderazgo", "tipo": "escala_1_5", "opciones": "", "orden": 6},
+        {"categoria": "", "texto": "Justifica tu respuesta", "tipo": "abierta", "opciones": "", "orden": 7},
     ],
     "mismos_miembros": [
         {"categoria": "", "texto": "Grado de satisfacción con tu equipo", "tipo": "escala_1_5", "opciones": "", "orden": 1},
@@ -403,6 +409,33 @@ def _obtener_o_crear_pagina_raiz_resultados() -> str | None:
 # BD de activaciones
 # ---------------------------------------------------------------------------
 
+def _asegurar_props_bbdd_activaciones(db_id: str) -> None:
+    """Añade a la BD de activaciones cualquier propiedad del esquema que falte.
+
+    Cura BDs antiguas creadas antes de incorporar campos como 'Fecha_activacion':
+    el esquema de `_props_bbdd_activaciones` solo se aplica al crear la BD, no a las
+    ya existentes, así que sin esto activar en una BD vieja falla con
+    'Fecha_activacion is not a property that exists'.
+    """
+    faltantes: dict = {}
+    try:
+        necesarias = _props_bbdd_activaciones()
+        if _usa_data_sources():
+            bbdd = notion.data_sources.retrieve(data_source_id=db_id)
+            faltantes = {k: v for k, v in necesarias.items() if k not in bbdd.get("properties", {})}
+            if faltantes:
+                notion.data_sources.update(data_source_id=db_id, properties=faltantes)
+        else:
+            bbdd = notion.databases.retrieve(database_id=db_id)
+            faltantes = {k: v for k, v in necesarias.items() if k not in bbdd.get("properties", {})}
+            if faltantes:
+                notion.databases.update(database_id=db_id, properties=faltantes)
+        if faltantes:
+            logging.info("BD activaciones: añadidas propiedades faltantes %s", list(faltantes.keys()))
+    except Exception:
+        logging.exception("No se pudieron asegurar las propiedades de la BD de activaciones")
+
+
 def _obtener_o_crear_bbdd_activaciones() -> str | None:
     with _lock_activaciones:
         cached = _cache_activaciones_id["db_id"]
@@ -442,6 +475,8 @@ def _obtener_o_crear_bbdd_activaciones() -> str | None:
         except Exception:
             logging.exception("Error creando BD '%s'", _NOMBRE_BBDD_ACTIVACIONES)
             return None
+
+    _asegurar_props_bbdd_activaciones(db_id)
 
     with _lock_activaciones:
         _cache_activaciones_id["db_id"] = db_id
@@ -580,6 +615,40 @@ def obtener_preguntas_tipo(tipo_clave: str, idioma: str = "es") -> list:
     except Exception:
         logging.exception("Error obteniendo preguntas de tipo '%s'", tipo_clave)
         return []
+
+
+# Categorías de liderazgo en los 3 idiomas (normalizadas: sin acentos, minúsculas).
+_CATEGORIAS_LIDERAZGO = {"liderazgo", "leadership", "lideranca"}
+
+
+def _requiere_liderazgo_cargo(cargo: str) -> bool:
+    """True si el cargo es Sr Associate o superior (los que ven la pregunta de liderazgo
+    en la autoevaluación). Mismo criterio que el informe anual."""
+    c = " ".join((cargo or "").lower().replace(".", " ").split())
+    if not c:
+        return False
+    tokens = c.split()
+    es_sr = "sr" in tokens or "senior" in tokens
+    # Roles "base" (Associate/Asociado, Engineer/Ingeniero de Palantir): solo su versión
+    # Sr y superiores requieren liderazgo; la versión junior/normal no.
+    if "associate" in c or "asociado" in c or "engineer" in c or "ingeniero" in c:
+        return es_sr
+    return any(k in c for k in ("manager", "director", "partner", "head", "lead"))
+
+
+def filtrar_liderazgo_autoeval(preguntas: list, persona: str) -> list:
+    """Quita la pregunta de LIDERAZGO de la autoevaluación si el cargo de `persona`
+    no la requiere (solo Sr Associate y superiores). El resto de tipos no se tocan."""
+    try:
+        _, cargo = buscar_empleado_y_cargo(persona)
+    except Exception:
+        logging.exception("No se pudo leer el cargo de '%s' para filtrar liderazgo", persona)
+        cargo = ""
+    if _requiere_liderazgo_cargo(cargo or ""):
+        return preguntas
+    # .replace("ç","c") porque normalizar_nombre no descompone la cedilla ('Liderança' PT).
+    return [p for p in preguntas
+            if (not p) or normalizar_nombre(p.get("categoria", "")).replace("ç", "c") not in _CATEGORIAS_LIDERAZGO]
 
 
 # ---------------------------------------------------------------------------
@@ -981,6 +1050,71 @@ def obtener_evaluaciones_proyecto_por_evaluado(evaluado: str) -> list[dict]:
     return resultado
 
 
+def _evals_realizadas_en_proyecto(proy: dict, objetivo: str, desde_fecha: str | None) -> list[tuple]:
+    """Evals que `objetivo` (nombre ya normalizado) realizó en una subpágina de proyecto.
+
+    Devuelve [(clave_normalizada, nombre_proyecto, eval_dict), ...]. Pensada para ejecutarse
+    en paralelo (una por proyecto): hace listar-bloques + query paginada de la BD interna.
+    """
+    proyecto_nombre = proy["title"]
+    # El db_id interno de la subpágina es estable → se cachea (reusa la misma cache que
+    # _obtener_o_crear_bbdd_evals_proyecto) para no re-listar bloques en cada apertura.
+    with _lock_bbdd_evals_proyecto:
+        db_id = _cache_bbdd_evals_proyecto.get(proy["id"])
+    if not db_id:
+        db_id = _buscar_bbdd_en_pagina_id(proy["id"], _NOMBRE_BBDD_EVALS_PROYECTO)
+        if db_id:
+            with _lock_bbdd_evals_proyecto:
+                _cache_bbdd_evals_proyecto[proy["id"]] = db_id
+    if not db_id:
+        return []
+    filas_out: list[tuple] = []
+    try:
+        cursor = None
+        while True:
+            kwargs: dict = {"page_size": 100}
+            if cursor:
+                kwargs["start_cursor"] = cursor
+            resp = _query_bbdd(db_id, **kwargs)
+            for fila in resp.get("results", []):
+                props = fila.get("properties", {})
+                ev_evaluador = "".join(
+                    p.get("plain_text", "") for p in (props.get("Evaluador") or {}).get("rich_text", [])
+                ).strip()
+                if normalizar_nombre(ev_evaluador) != objetivo:
+                    continue
+                fecha = (((props.get("Fecha") or {}).get("date") or {}).get("start", "") or "")[:10]
+                if desde_fecha and fecha and fecha < desde_fecha:
+                    continue
+                evaluado = "".join(
+                    p.get("plain_text", "") for p in (props.get("Evaluado") or {}).get("rich_text", [])
+                ).strip()
+                proyecto = "".join(
+                    p.get("plain_text", "") for p in (props.get("Proyecto") or {}).get("rich_text", [])
+                ).strip()
+                tipo = ((props.get("Tipo") or {}).get("select") or {}).get("name", "")
+                respuestas = "".join(
+                    p.get("plain_text", "") for p in (props.get("Respuestas") or {}).get("rich_text", [])
+                ).strip()
+                nombre = proyecto or proyecto_nombre
+                # Agrupamos por nombre NORMALIZADO para que variaciones menores (espacios,
+                # mayúsculas) del campo Proyecto no partan un mismo proyecto en dos grupos.
+                clave = normalizar_nombre(nombre)
+                filas_out.append((clave, nombre, {
+                    "tipo": tipo,
+                    "evaluado": evaluado,
+                    "respuestas": respuestas,
+                    "fecha": fecha,
+                    "url": fila.get("url", ""),
+                }))
+            if not resp.get("has_more"):
+                break
+            cursor = resp.get("next_cursor")
+    except Exception:
+        logging.exception("Error leyendo evals realizadas en proyecto '%s' por '%s'", proyecto_nombre, objetivo)
+    return filas_out
+
+
 def obtener_evaluaciones_proyecto_por_evaluador(evaluador: str, desde_fecha: str | None = None) -> list[dict]:
     """Evaluaciones de proyecto REALIZADAS por `evaluador`, agrupadas por proyecto.
 
@@ -989,61 +1123,23 @@ def obtener_evaluaciones_proyecto_por_evaluador(evaluador: str, desde_fecha: str
     Si `desde_fecha` (YYYY-MM-DD) se indica, descarta las anteriores a esa fecha.
     Devuelve [{nombre_proyecto, evaluaciones: [{tipo, evaluado, respuestas, fecha, url}]}],
     con las evals de cada proyecto y los proyectos ordenados por la más reciente (desc).
+
+    Cada proyecto se procesa EN PARALELO (antes era un waterfall secuencial de N proyectos,
+    cada uno con listar-bloques + query paginada, que hacía la carga eterna).
     """
     contenedor = _obtener_o_crear_pagina_resultados_final()
     if not contenedor:
         return []
     objetivo = normalizar_nombre(evaluador)
+    proyectos = list(_listar_child_pages_proyecto(contenedor))
+    if not proyectos:
+        return []
     por_proyecto: dict[str, dict] = {}
-    for proy in _listar_child_pages_proyecto(contenedor):
-        proyecto_nombre = proy["title"]
-        db_id = _buscar_bbdd_en_pagina_id(proy["id"], _NOMBRE_BBDD_EVALS_PROYECTO)
-        if not db_id:
-            continue
-        try:
-            cursor = None
-            while True:
-                kwargs: dict = {"page_size": 100}
-                if cursor:
-                    kwargs["start_cursor"] = cursor
-                resp = _query_bbdd(db_id, **kwargs)
-                for fila in resp.get("results", []):
-                    props = fila.get("properties", {})
-                    ev_evaluador = "".join(
-                        p.get("plain_text", "") for p in (props.get("Evaluador") or {}).get("rich_text", [])
-                    ).strip()
-                    if normalizar_nombre(ev_evaluador) != objetivo:
-                        continue
-                    fecha = (((props.get("Fecha") or {}).get("date") or {}).get("start", "") or "")[:10]
-                    if desde_fecha and fecha and fecha < desde_fecha:
-                        continue
-                    evaluado = "".join(
-                        p.get("plain_text", "") for p in (props.get("Evaluado") or {}).get("rich_text", [])
-                    ).strip()
-                    proyecto = "".join(
-                        p.get("plain_text", "") for p in (props.get("Proyecto") or {}).get("rich_text", [])
-                    ).strip()
-                    tipo = ((props.get("Tipo") or {}).get("select") or {}).get("name", "")
-                    respuestas = "".join(
-                        p.get("plain_text", "") for p in (props.get("Respuestas") or {}).get("rich_text", [])
-                    ).strip()
-                    nombre = proyecto or proyecto_nombre
-                    # Agrupamos por nombre NORMALIZADO para que variaciones menores (espacios,
-                    # mayúsculas) del campo Proyecto no partan un mismo proyecto en dos grupos.
-                    clave = normalizar_nombre(nombre)
-                    entrada = por_proyecto.setdefault(clave, {"nombre_proyecto": nombre, "evaluaciones": []})
-                    entrada["evaluaciones"].append({
-                        "tipo": tipo,
-                        "evaluado": evaluado,
-                        "respuestas": respuestas,
-                        "fecha": fecha,
-                        "url": fila.get("url", ""),
-                    })
-                if not resp.get("has_more"):
-                    break
-                cursor = resp.get("next_cursor")
-        except Exception:
-            logging.exception("Error leyendo evals realizadas en proyecto '%s' por '%s'", proyecto_nombre, evaluador)
+    with ThreadPoolExecutor(max_workers=min(12, len(proyectos))) as ex:
+        for filas in ex.map(lambda proy: _evals_realizadas_en_proyecto(proy, objetivo, desde_fecha), proyectos):
+            for clave, nombre, ev in filas:
+                entrada = por_proyecto.setdefault(clave, {"nombre_proyecto": nombre, "evaluaciones": []})
+                entrada["evaluaciones"].append(ev)
     salida = list(por_proyecto.values())
     for entrada in salida:
         entrada["evaluaciones"].sort(key=lambda x: x.get("fecha", ""), reverse=True)

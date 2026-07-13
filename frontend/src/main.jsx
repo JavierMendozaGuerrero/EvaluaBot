@@ -971,7 +971,7 @@ function MisObjetivosPage({ token, persona, onBack }) {
   );
 }
 
-function ObjetivosPage({ token, advisee, caName, onBack }) {
+function ObjetivosPage({ token, advisee, caName, onBack, vista = "form" }) {
   const [objetivos, setObjetivos] = useState([]);
   const [form, setForm] = useState({ titulo: "", kpis: "", descripcion: "", tipo: "" });
   const [pendientes, setPendientes] = useState([]);
@@ -980,6 +980,7 @@ function ObjetivosPage({ token, advisee, caName, onBack }) {
   const [deleting, setDeleting] = useState(null);
   const [error, setError] = useState("");
   const [success, setSuccess] = useState("");
+  const [enviado, setEnviado] = useState(false);
 
   function recargar() {
     return apiRequest(`/api/objetivos?nombre=${encodeURIComponent(advisee.nombre)}`, { token })
@@ -1044,15 +1045,13 @@ function ObjetivosPage({ token, advisee, caName, onBack }) {
           body: { nombre: advisee.nombre, ...obj },
         });
       }
-      await recargar();
       setForm({ titulo: "", kpis: "", descripcion: "", tipo: "" });
       setPendientes([]);
-      setSuccess(aGuardar.length === 1
-        ? t("goals.saved_one")
-        : t("goals.saved_many", { n: aGuardar.length }));
+      // Muestra la animación de éxito y vuelve directamente a la página del advisee.
+      setEnviado(true);
+      setTimeout(() => onBack(), 1700);
     } catch (err) {
       setError(err.message);
-    } finally {
       setSaving(false);
     }
   }
@@ -1076,131 +1075,150 @@ function ObjetivosPage({ token, advisee, caName, onBack }) {
         <a className="brand" href="/"><img src="/src/logo.png" alt="igeneris" className="brand-logo" /></a>
         <NavBack onBack={onBack} />
       </nav>
-      <section className="hero dashboard-hero">
-        <div>
-          {advisee.foto
-            ? <img src={advisee.foto} alt={advisee.nombre} className="objetivos-foto" />
-            : <div className="objetivos-foto objetivos-foto-placeholder">{advisee.nombre.charAt(0)}</div>
-          }
-          <p className="kicker">{t("goals.kicker")}</p>
-          <h1>{advisee.nombre}</h1>
-        </div>
-        <form className="panel" onSubmit={guardar}>
-          <h2>{t("goals.new")}</h2>
-          {error && <p className="error">{error}</p>}
-          {success && <p className="fine">{success}</p>}
+      <div className="profile-wrap" style={{ flex: 1 }}>
+        <div className="dash-layout">
 
-          {pendientes.length > 0 && (
-            <div className="objetivos-pendientes">
-              {pendientes.map((obj, i) => (
-                <div key={i} className="objetivo-chip">
-                  <div className="objetivo-chip-body">
-                    <div className="objetivo-chip-titulo">{obj.titulo}</div>
-                    {(obj.tipo || obj.kpis) && (
-                      <div className="objetivo-chip-meta">
-                        {[obj.tipo, obj.kpis].filter(Boolean).join(" · ")}
-                      </div>
-                    )}
+          {/* LEFT — perfil del advisee (mismo panel que la página de advisee) */}
+          <aside className="dash-profile">
+            <p className="eyebrow" style={{ color: "var(--fg)", textAlign: "center", fontWeight: 500, margin: 0 }}>{t("ad.eyebrow")}</p>
+            <div className="profile-photo-wrap">
+              {advisee.foto
+                ? <img src={advisee.foto} alt={advisee.nombre} className="profile-photo" />
+                : <div className="profile-photo-placeholder">{advisee.nombre.charAt(0)}</div>
+              }
+              <div className="profile-id">
+                <h1 className="profile-name">{advisee.nombre}</h1>
+                {advisee.cargo && <p className="profile-cargo">{advisee.cargo}</p>}
+              </div>
+            </div>
+          </aside>
+
+          {/* RIGHT — introducir objetivos (form) o historial */}
+          <div className="dash-main">
+            {vista === "historial" ? (
+              <section className="objetivos-historial">
+                <p className="kicker">{t("goals.history")}</p>
+                <h2>{t("goals.of_person", { nombre: advisee.nombre })}</h2>
+                {loading ? (
+                  <p>{t("common.loading")}</p>
+                ) : objetivos.length ? (
+                  <div className="objetivos-anios">
+                    {objetivosPorAnio.map(([anio, meses], anioIdx) => (
+                      <details key={anio} className="objetivos-anio" open={anioIdx === 0}>
+                        <summary className="objetivos-anio-head"><span>{anio}</span></summary>
+                        {meses.map(([mesIdx, items], mesPos) => (
+                          <details key={mesIdx} className="objetivos-mes" open={mesPos === 0}>
+                            <summary className="objetivos-mes-head">{mesIdx >= 0 ? nombreMes(mesIdx) : t("common.no_date")}</summary>
+                            <div className="objetivos-list">
+                              {items.map((obj) => (
+                                <article key={obj.page_id} className="objetivo-item">
+                                  {obj.tipo && <p className="opinion-fecha fine">{obj.tipo}</p>}
+                                  <p className="objetivo-titulo"><strong>{obj.titulo}</strong></p>
+                                  {obj.kpis && <p className="objetivo-texto fine"><em>KPIs:</em> {obj.kpis}</p>}
+                                  {obj.descripcion && <p className="objetivo-texto">{obj.descripcion}</p>}
+                                  <div style={{ marginTop: "8px" }}>
+                                    <button
+                                      className="link-button"
+                                      style={{ color: "var(--muted)", fontSize: "12px" }}
+                                      disabled={deleting === obj.page_id}
+                                      onClick={() => eliminar(obj.page_id)}
+                                    >
+                                      {deleting === obj.page_id ? t("common.deleting") : t("common.delete")}
+                                    </button>
+                                  </div>
+                                </article>
+                              ))}
+                            </div>
+                          </details>
+                        ))}
+                      </details>
+                    ))}
                   </div>
-                  <button
-                    type="button"
-                    className="objetivo-chip-remove"
-                    aria-label={t("goals.remove_aria")}
-                    onClick={() => quitarPendiente(i)}
-                  >
-                    ×
+                ) : (
+                  <p>{t("goals.none_for", { nombre: advisee.nombre })}</p>
+                )}
+              </section>
+            ) : enviado ? (
+              <div style={{ paddingTop: "clamp(24px, 6vw, 64px)" }}>
+                <SavedOk text={t("goals.saved_title")} color="#166534" />
+              </div>
+            ) : (
+              <form onSubmit={guardar}>
+                <h2>{t("goals.new")}</h2>
+                {error && <p className="error">{error}</p>}
+                {success && <p className="fine">{success}</p>}
+
+                {pendientes.length > 0 && (
+                  <div className="objetivos-pendientes">
+                    {pendientes.map((obj, i) => (
+                      <div key={i} className="objetivo-chip">
+                        <div className="objetivo-chip-body">
+                          <div className="objetivo-chip-titulo">{obj.titulo}</div>
+                          {(obj.tipo || obj.kpis) && (
+                            <div className="objetivo-chip-meta">
+                              {[obj.tipo, obj.kpis].filter(Boolean).join(" · ")}
+                            </div>
+                          )}
+                        </div>
+                        <button
+                          type="button"
+                          className="objetivo-chip-remove"
+                          aria-label={t("goals.remove_aria")}
+                          onClick={() => quitarPendiente(i)}
+                        >
+                          ×
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                )}
+
+                <label>{t("goals.title_label")}</label>
+                <input
+                  type="text"
+                  value={form.titulo}
+                  onChange={(e) => setForm((f) => ({ ...f, titulo: e.target.value }))}
+                  placeholder={t("goals.title_ph")}
+                />
+                <label style={{ marginTop: "12px" }}>{t("goals.type_label")}</label>
+                <input
+                  type="text"
+                  value={form.tipo}
+                  onChange={(e) => setForm((f) => ({ ...f, tipo: e.target.value }))}
+                  placeholder={t("goals.type_ph")}
+                />
+                <label style={{ marginTop: "12px" }}>{t("goals.kpis_field_label")}</label>
+                <input
+                  type="text"
+                  value={form.kpis}
+                  onChange={(e) => setForm((f) => ({ ...f, kpis: e.target.value }))}
+                  placeholder={t("goals.kpis_ph")}
+                />
+                <label style={{ marginTop: "12px" }}>{t("goals.desc_label")}</label>
+                <textarea
+                  className="objetivos-textarea"
+                  value={form.descripcion}
+                  onChange={(e) => setForm((f) => ({ ...f, descripcion: e.target.value }))}
+                  rows={5}
+                  placeholder={t("goals.desc_ph")}
+                />
+                <div className="actions">
+                  <button type="button" className="secondary" onClick={añadirOtro} disabled={saving || !form.titulo.trim()}>
+                    {t("goals.add_another")}
+                  </button>
+                  <button type="submit" disabled={saving || (!form.titulo.trim() && pendientes.length === 0)}>
+                    {saving
+                      ? t("common.saving")
+                      : (pendientes.length + (form.titulo.trim() ? 1 : 0)) > 1
+                        ? t("goals.save_many", { n: pendientes.length + (form.titulo.trim() ? 1 : 0) })
+                        : t("goals.save_one")}
                   </button>
                 </div>
-              ))}
-            </div>
-          )}
-
-          <label>{t("goals.title_label")}</label>
-          <input
-            type="text"
-            value={form.titulo}
-            onChange={(e) => setForm((f) => ({ ...f, titulo: e.target.value }))}
-            placeholder={t("goals.title_ph")}
-          />
-          <label style={{ marginTop: "12px" }}>{t("goals.type_label")}</label>
-          <input
-            type="text"
-            value={form.tipo}
-            onChange={(e) => setForm((f) => ({ ...f, tipo: e.target.value }))}
-            placeholder={t("goals.type_ph")}
-          />
-          <label style={{ marginTop: "12px" }}>{t("goals.kpis_field_label")}</label>
-          <input
-            type="text"
-            value={form.kpis}
-            onChange={(e) => setForm((f) => ({ ...f, kpis: e.target.value }))}
-            placeholder={t("goals.kpis_ph")}
-          />
-          <label style={{ marginTop: "12px" }}>{t("goals.desc_label")}</label>
-          <textarea
-            className="objetivos-textarea"
-            value={form.descripcion}
-            onChange={(e) => setForm((f) => ({ ...f, descripcion: e.target.value }))}
-            rows={5}
-            placeholder={t("goals.desc_ph")}
-          />
-          <div className="actions">
-            <button type="button" className="secondary" onClick={añadirOtro} disabled={saving || !form.titulo.trim()}>
-              {t("goals.add_another")}
-            </button>
-            <button type="submit" disabled={saving || (!form.titulo.trim() && pendientes.length === 0)}>
-              {saving
-                ? t("common.saving")
-                : (pendientes.length + (form.titulo.trim() ? 1 : 0)) > 1
-                  ? t("goals.save_many", { n: pendientes.length + (form.titulo.trim() ? 1 : 0) })
-                  : t("goals.save_one")}
-            </button>
+              </form>
+            )}
           </div>
-        </form>
-      </section>
-
-      <section className="objetivos-historial panel">
-        <p className="kicker">{t("goals.history")}</p>
-        <h2>{t("goals.of_person", { nombre: advisee.nombre })}</h2>
-        {loading ? (
-          <p>{t("common.loading")}</p>
-        ) : objetivos.length ? (
-          <div className="objetivos-anios">
-            {objetivosPorAnio.map(([anio, meses], anioIdx) => (
-              <details key={anio} className="objetivos-anio" open={anioIdx === 0}>
-                <summary className="objetivos-anio-head"><span>{anio}</span></summary>
-                {meses.map(([mesIdx, items], mesPos) => (
-                  <details key={mesIdx} className="objetivos-mes" open={mesPos === 0}>
-                    <summary className="objetivos-mes-head">{mesIdx >= 0 ? nombreMes(mesIdx) : t("common.no_date")}</summary>
-                    <div className="objetivos-list">
-                      {items.map((obj) => (
-                        <article key={obj.page_id} className="objetivo-item">
-                          {obj.tipo && <p className="opinion-fecha fine">{obj.tipo}</p>}
-                          <p className="objetivo-titulo"><strong>{obj.titulo}</strong></p>
-                          {obj.kpis && <p className="objetivo-texto fine"><em>KPIs:</em> {obj.kpis}</p>}
-                          {obj.descripcion && <p className="objetivo-texto">{obj.descripcion}</p>}
-                          <div style={{ marginTop: "8px" }}>
-                            <button
-                              className="link-button"
-                              style={{ color: "var(--muted, #999)", fontSize: "12px" }}
-                              disabled={deleting === obj.page_id}
-                              onClick={() => eliminar(obj.page_id)}
-                            >
-                              {deleting === obj.page_id ? t("common.deleting") : t("common.delete")}
-                            </button>
-                          </div>
-                        </article>
-                      ))}
-                    </div>
-                  </details>
-                ))}
-              </details>
-            ))}
-          </div>
-        ) : (
-          <p>{t("goals.none_for", { nombre: advisee.nombre })}</p>
-        )}
-      </section>
+        </div>
+      </div>
       <Footer />
     </main>
   );
@@ -2373,6 +2391,11 @@ function HistorialEvaluacionesPage({ token, evaluado, evaluador, proyecto, onBac
   );
 }
 
+const LABEL_QA = {
+  fontSize: 11, letterSpacing: ".1em", textTransform: "uppercase",
+  color: "var(--text-55)", fontWeight: 400, flexShrink: 0, whiteSpace: "nowrap", minWidth: 88,
+};
+
 function DetalleEvaluacionRealizadaPage({ ev, proyecto, onBack }) {
   // `ev.respuestas` viene del backend como "pregunta: respuesta" por línea
   // (ver _formatear_respuestas). Partimos por el primer ": " para no romper
@@ -2403,17 +2426,38 @@ function DetalleEvaluacionRealizadaPage({ ev, proyecto, onBack }) {
       </nav>
       <div className="historial-page">
         <p className="kicker">{proyecto || ev?.proyecto || ""}</p>
-        <h1 className="historial-title">{ev?.tipo}{ev?.evaluado ? ` · ${ev.evaluado}` : ""}</h1>
+        <h1 className="historial-title">{(ev?.tipo || "").split(" ")[0]}{ev?.evaluado ? ` · ${ev.evaluado}` : ""}</h1>
         {ev?.fecha && <p className="fine historial-subtitle">{formatFecha(ev.fecha)}</p>}
         {lineas.length === 0 && <p className="historial-empty">{t("dash.finished_project_empty")}</p>}
         {lineas.length > 0 && (
-          <div style={{ display: "flex", flexDirection: "column", gap: 16, marginTop: 20, maxWidth: 720 }}>
-            {lineas.map((l, i) => (
-              <div key={i} style={{ display: "flex", flexDirection: "column", gap: 4 }}>
-                <span style={{ fontSize: 14, fontWeight: 500, color: "#000" }}>{l.pregunta}</span>
-                <span style={{ fontSize: 14, color: "rgba(0,0,0,.7)", whiteSpace: "pre-wrap" }}>{l.respuesta || "—"}</span>
-              </div>
-            ))}
+          <div style={{ display: "flex", flexDirection: "column", gap: 12, marginTop: 20 }}>
+            {lineas.map((l, i) => {
+              const resp = (l.respuesta || "").trim();
+              // Respuesta breve (numérica o categórica) → a la derecha de "RESPUESTA".
+              // Respuesta abierta (texto largo) → debajo.
+              const esNumerica = /^\d+([.,/]\d+)?$/.test(resp);
+              const esCorta = resp.length <= 24 && resp.split(/\s+/).length <= 3;
+              const inline = resp && (esNumerica || esCorta);
+              return (
+                <div key={i} style={{ border: "1px solid var(--border)", borderRadius: "var(--radius-lg)", padding: "16px 18px", background: "var(--bg)" }}>
+                  <div style={{ display: "flex", gap: 14, alignItems: "baseline" }}>
+                    <span style={LABEL_QA}>{t("det.question")}</span>
+                    <span style={{ fontSize: 15, fontWeight: 500, color: "#000", lineHeight: 1.5, minWidth: 0 }}>{l.pregunta}</span>
+                  </div>
+                  {inline ? (
+                    <div style={{ display: "flex", gap: 14, alignItems: "baseline", marginTop: 12 }}>
+                      <span style={LABEL_QA}>{t("det.answer")}</span>
+                      <span style={{ fontSize: 15, fontWeight: 400, color: "#000", lineHeight: 1.5, minWidth: 0 }}>{resp}</span>
+                    </div>
+                  ) : (
+                    <div style={{ marginTop: 12 }}>
+                      <p style={{ ...LABEL_QA, margin: 0 }}>{t("det.answer")}</p>
+                      <p style={{ fontSize: 15, fontWeight: 400, color: "#000", margin: "4px 0 0", whiteSpace: "pre-wrap", lineHeight: 1.5 }}>{resp || "—"}</p>
+                    </div>
+                  )}
+                </div>
+              );
+            })}
           </div>
         )}
       </div>
@@ -2526,7 +2570,7 @@ function EvaluacionesSlackSection({ token, user, advisees, onNavigate, onComplet
   );
 }
 
-function DashNavItem({ label, onClick, disabled, external = false }) {
+function DashNavItem({ label, onClick, disabled, external = false, download = false }) {
   const [hover, setHover] = useState(false);
   return (
     <div
@@ -2547,6 +2591,9 @@ function DashNavItem({ label, onClick, disabled, external = false }) {
       {external && (
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ width: 13, height: 13, flexShrink: 0 }}><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6" /><polyline points="15 3 21 3 21 9" /><line x1="10" y1="14" x2="21" y2="3" /></svg>
       )}
+      {download && (
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ width: 13, height: 13, flexShrink: 0 }}><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" /><polyline points="7 10 12 15 17 10" /><line x1="12" y1="15" x2="12" y2="3" /></svg>
+      )}
     </div>
   );
 }
@@ -2557,7 +2604,6 @@ function DashCollapsible({ title, open, onToggle, children, badge = null, bodyMa
       <div onClick={onToggle} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", cursor: "pointer", userSelect: "none" }}>
         <span className="eyebrow" style={{ marginBottom: 0, fontSize: "0.7rem" }}>
           {title}
-          {hint && !open && <span style={{ textTransform: "none", letterSpacing: 0, fontStyle: "italic", fontWeight: 200, marginLeft: 8, fontSize: 11, color: "var(--text-55)" }}>{hint}</span>}
         </span>
         <span style={{ display: "inline-flex", alignItems: "center", gap: 8, flexShrink: 0 }}>
           {badge != null && (
@@ -2568,7 +2614,7 @@ function DashCollapsible({ title, open, onToggle, children, badge = null, bodyMa
               fontSize: 11, whiteSpace: "nowrap",
             }}>{badge}</span>
           )}
-          <svg viewBox="0 0 24 24" fill="none" stroke="rgba(0,0,0,.3)" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"
+          <svg viewBox="0 0 24 24" fill="none" stroke="#000" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"
             style={{ width: 11, height: 11, flexShrink: 0, transform: open ? "rotate(180deg)" : "rotate(0deg)", transition: "transform .25s" }}>
             <polyline points="18 15 12 9 6 15" />
           </svg>
@@ -2979,7 +3025,7 @@ function Dashboard({ token, user, onLogout, onNavigate, onBackToRoleSelect = nul
               {misObjetivos.length ? (
                 <div style={{ display: "flex", flexDirection: "column", gap: 8, paddingLeft: 16 }}>
                   {misObjetivos.map((obj, i) => (
-                    <div key={i} style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+                    <div key={i} style={{ display: "flex", flexDirection: "column", gap: 1 }}>
                       <p style={{ fontSize: 13, color: "#000", display: "flex", alignItems: "center", gap: 10 }}>
                         <span style={{ display: "inline-block", width: 4, height: 4, borderRadius: "50%", background: "var(--accent)", flexShrink: 0 }} />
                         {obj.titulo}
@@ -3019,7 +3065,7 @@ function Dashboard({ token, user, onLogout, onNavigate, onBackToRoleSelect = nul
                     return (
                     <div key={`slack-${tipoSlack}`} className="tarea-row"
                       onClick={() => { if (tareasSlack.url) window.location.href = tareasSlack.url; }}>
-                      <span className="tarea-label">{t(`dash.slack_${tipoSlack}`)}</span>
+                      <span className="tarea-label">{t(`dash.slack_${tipoSlack}`)} {t("dash.slack_suffix")}</span>
                       <span style={{ display: "inline-flex", alignItems: "center", gap: 8, flexShrink: 0 }}>
                         {deadlineSlack && <span style={{ fontSize: 12, color: "rgba(0,0,0,.5)", whiteSpace: "nowrap" }}>{formatearFecha(deadlineSlack)}</span>}
                         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ width: 13, height: 13, flexShrink: 0 }}><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6" /><polyline points="15 3 21 3 21 9" /><line x1="10" y1="14" x2="21" y2="3" /></svg>
@@ -3080,21 +3126,21 @@ function Dashboard({ token, user, onLogout, onNavigate, onBackToRoleSelect = nul
                       <span style={{ fontSize: 11, fontWeight: 500, color: "var(--accent)", whiteSpace: "nowrap" }}>
                         {t("dash.proj_evals_unfinished")}
                       </span>
-                      <svg viewBox="0 0 24 24" fill="none" stroke="rgba(0,0,0,.3)" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"
+                      <svg viewBox="0 0 24 24" fill="none" stroke="#000" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"
                         style={{ width: 11, height: 11, flexShrink: 0, transform: projOpen ? "rotate(180deg)" : "rotate(0deg)", transition: "transform .25s" }}>
                         <polyline points="18 15 12 9 6 15" />
                       </svg>
                     </span>
                   </div>
                   {projOpen && (
-                    <div style={{ display: "flex", flexDirection: "column", gap: 6, paddingBottom: 12 }}>
+                    <div style={{ display: "flex", flexDirection: "column", gap: 1, paddingBottom: 8 }}>
                       {proyectosPendientes.map((p) => {
                         const prog = proyectosProgreso[p.nombre_proyecto];
                         return (
                           <div
                             key={p.nombre_proyecto}
                             onClick={() => onNavigate({ type: "evaluaciones-proyecto", proyectos: proyectosActivos, initialProyecto: p.nombre_proyecto })}
-                            style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8, fontSize: 13, color: "#000", cursor: "pointer", padding: "5px 0", paddingLeft: 16 }}
+                            style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8, fontSize: 13, color: "#000", cursor: "pointer", padding: "1px 0", paddingLeft: 16 }}
                           >
                             <span style={{ display: "inline-flex", alignItems: "center", minWidth: 0 }}>
                               <span style={{ display: "inline-block", width: 4, height: 4, borderRadius: "50%", background: "var(--accent)", marginRight: 10, flexShrink: 0 }} />
@@ -3160,19 +3206,19 @@ function Dashboard({ token, user, onLogout, onNavigate, onBackToRoleSelect = nul
                         </span>
                       </span>
                     )}
-                    <svg viewBox="0 0 24 24" fill="none" stroke="rgba(0,0,0,.3)" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"
+                    <svg viewBox="0 0 24 24" fill="none" stroke="#000" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"
                       style={{ width: 11, height: 11, flexShrink: 0, transform: extraEvalOpen ? "rotate(180deg)" : "rotate(0deg)", transition: "transform .25s" }}>
                       <polyline points="18 15 12 9 6 15" />
                     </svg>
                   </span>
                 </div>
                 {extraEvalOpen && (
-                  <div style={{ display: "flex", flexDirection: "column", gap: 6, paddingBottom: 12 }}>
+                  <div style={{ display: "flex", flexDirection: "column", gap: 1, paddingBottom: 8 }}>
                     {evaluacionesExtraPendientes.map((p) => (
                       <div
                         key={p.page_id}
                         onClick={() => onNavigate({ type: "formulario-evaluacion-extra", solicitudPageId: p.page_id, evaluado: p.evaluado, contexto: p.contexto })}
-                        style={{ display: "flex", alignItems: "flex-start", gap: 10, fontSize: 13, color: "#000", cursor: "pointer", padding: "5px 0", paddingLeft: 16 }}
+                        style={{ display: "flex", alignItems: "flex-start", gap: 10, fontSize: 13, color: "#000", cursor: "pointer", padding: "1px 0", paddingLeft: 16 }}
                       >
                         <span style={{ display: "inline-block", width: 4, height: 4, borderRadius: "50%", background: "var(--accent)", flexShrink: 0, marginTop: 6 }} />
                         <span style={{ display: "flex", flexDirection: "column", gap: 2, minWidth: 0 }}>
@@ -3183,7 +3229,7 @@ function Dashboard({ token, user, onLogout, onNavigate, onBackToRoleSelect = nul
                     ))}
                     <div
                       onClick={() => onNavigate({ type: "solicitar-evaluacion-extra" })}
-                      style={{ display: "flex", alignItems: "center", gap: 10, fontSize: 13, color: "var(--accent)", cursor: "pointer", padding: "5px 0", paddingLeft: 16 }}
+                      style={{ display: "flex", alignItems: "center", gap: 10, fontSize: 13, color: "var(--accent)", cursor: "pointer", padding: "1px 0", paddingLeft: 16 }}
                     >
                       <span style={{ display: "inline-block", width: 4, height: 4, borderRadius: "50%", background: "var(--accent)", flexShrink: 0 }} />
                       {t("dash.nav_request_extra_eval")}
@@ -3238,19 +3284,19 @@ function Dashboard({ token, user, onLogout, onNavigate, onBackToRoleSelect = nul
                   )}
                 </div>
               ) : (
-                <p style={{ fontStyle: "italic", color: "var(--accent)", fontSize: 13, margin: 0 }}>{t("dash.no_reports")}</p>
+                <p style={{ fontStyle: "italic", color: "var(--text-55)", fontSize: 13, margin: 0, paddingLeft: 16 }}>{t("dash.no_reports")}</p>
               )}
             </div>
             {/* ── PROYECTOS TERMINADOS ── */}
             {!isAdmin && (
               <>
                 <DashCollapsible
-                  title={<>{t("dash.todo_finished_projects")}{!terminadosOpen && <span style={{ textTransform: "none", letterSpacing: 0, fontStyle: "italic", fontWeight: 200, marginLeft: 8, fontSize: 11, color: "var(--text-55)" }}>{t("dash.finished_hint")}</span>}</>}
+                  title={t("dash.todo_finished_projects")}
                   open={terminadosOpen}
                   onToggle={() => { const next = !terminadosOpen; setTerminadosOpen(next); if (next) cargarProyectosTerminados(); }}
                   bodyMarginTop={2}
                 >
-                  <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+                  <div style={{ display: "flex", flexDirection: "column", gap: 1 }}>
                     {terminadosCargando && !proyectosTerminados && (
                       <p className="fine">{t("dash.finished_loading")}</p>
                     )}
@@ -3265,19 +3311,19 @@ function Dashboard({ token, user, onLogout, onNavigate, onBackToRoleSelect = nul
                             role="button"
                             tabIndex={0}
                             onClick={() => setProyTerminadoAbierto((v) => v === proy.nombre_proyecto ? null : proy.nombre_proyecto)}
-                            style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8, fontSize: 13, color: "#000", cursor: "pointer", padding: "5px 0", userSelect: "none" }}
+                            style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8, fontSize: 13, color: "#000", cursor: "pointer", padding: "1px 0", paddingLeft: 16, userSelect: "none" }}
                           >
                             <span style={{ display: "inline-flex", alignItems: "center", minWidth: 0 }}>
                               <span style={{ display: "inline-block", width: 4, height: 4, borderRadius: "50%", background: "var(--accent)", marginRight: 10, flexShrink: 0 }} />
                               {proy.nombre_proyecto}
                             </span>
-                            <svg viewBox="0 0 24 24" fill="none" stroke="rgba(0,0,0,.3)" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"
+                            <svg viewBox="0 0 24 24" fill="none" stroke="#000" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"
                               style={{ width: 10, height: 10, flexShrink: 0, transform: abierto ? "rotate(180deg)" : "rotate(0deg)", transition: "transform .25s" }}>
                               <polyline points="18 15 12 9 6 15" />
                             </svg>
                           </div>
                           {abierto && (
-                            <div style={{ display: "flex", flexDirection: "column", gap: 6, padding: "2px 0 6px 14px" }}>
+                            <div style={{ display: "flex", flexDirection: "column", gap: 6, padding: "2px 0 6px 30px" }}>
                               {proy.evaluaciones?.length === 0 && (
                                 <span style={{ fontSize: 12, color: "rgba(0,0,0,.5)" }}>{t("dash.finished_project_empty")}</span>
                               )}
@@ -3287,10 +3333,16 @@ function Dashboard({ token, user, onLogout, onNavigate, onBackToRoleSelect = nul
                                   role="button"
                                   tabIndex={0}
                                   onClick={() => onNavigate({ type: "detalle-evaluacion-realizada", ev, proyecto: proy.nombre_proyecto })}
-                                  style={{ display: "flex", flexDirection: "column", gap: 1, fontSize: 12.5, color: "#000", cursor: "pointer" }}
+                                  style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 8, fontSize: 12.5, color: "#000", cursor: "pointer" }}
                                 >
-                                  <span style={{ fontWeight: 400 }}>{ev.tipo}{ev.evaluado ? ` · ${ev.evaluado}` : ""}</span>
-                                  {ev.fecha && <span style={{ fontSize: 11, color: "rgba(0,0,0,.5)" }}>{ev.fecha}</span>}
+                                  <span style={{ display: "flex", alignItems: "flex-start", gap: 10, minWidth: 0 }}>
+                                    <span style={{ display: "inline-block", width: 4, height: 4, borderRadius: "50%", background: "rgba(0,0,0,.35)", flexShrink: 0, marginTop: 6 }} />
+                                    <span style={{ display: "flex", flexDirection: "column", gap: 1, minWidth: 0 }}>
+                                      <span style={{ fontWeight: 400 }}>{ev.tipo}{ev.evaluado ? ` · ${ev.evaluado}` : ""}</span>
+                                      {ev.fecha && <span style={{ fontSize: 11, color: "rgba(0,0,0,.5)" }}>{ev.fecha}</span>}
+                                    </span>
+                                  </span>
+                                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ width: 13, height: 13, flexShrink: 0, marginTop: 3, color: "rgba(0,0,0,.4)" }}><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6" /><polyline points="15 3 21 3 21 9" /><line x1="10" y1="14" x2="21" y2="3" /></svg>
                                 </div>
                               ))}
                             </div>
@@ -3549,8 +3601,214 @@ function AdviseesList({ token, advisees, onBack, onNavigate }) {
   );
 }
 
+// Fila desplegable del To-do/To-see de la página de advisee (mismo estilo que la nav del dashboard).
+function AdviseeNavGroup({ label, open, onToggle, children }) {
+  return (
+    <div>
+      <div
+        role="button"
+        tabIndex={0}
+        onClick={onToggle}
+        style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8, padding: "6px 0", fontSize: 14, fontWeight: 400, cursor: "pointer", color: "#000", userSelect: "none" }}
+      >
+        <span><span className="dash-dot" />{label}</span>
+        <svg viewBox="0 0 24 24" fill="none" stroke="#000" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"
+          style={{ width: 11, height: 11, flexShrink: 0, transform: open ? "rotate(180deg)" : "rotate(0deg)", transition: "transform .25s" }}>
+          <polyline points="18 15 12 9 6 15" />
+        </svg>
+      </div>
+      {open && <div style={{ paddingTop: 4, paddingBottom: 14, paddingLeft: 16 }}>{children}</div>}
+    </div>
+  );
+}
+
+function RegistroComentariosPage({ token, advisee, onBack }) {
+  const [cargo, setCargo] = useState(advisee.cargo || "");
+  const [notas, setNotas] = useState(null);
+  const [loadingNotas, setLoadingNotas] = useState(true);
+  const [nuevaNota, setNuevaNota] = useState("");
+  const [guardandoNota, setGuardandoNota] = useState(false);
+  const [notaError, setNotaError] = useState("");
+  const [grabando, setGrabando] = useState(false);
+  const [dictadoError, setDictadoError] = useState("");
+  const recognitionRef = React.useRef(null);
+  const baseNotaRef = React.useRef("");
+  const dictadoSoportado =
+    typeof window !== "undefined" && !!(window.SpeechRecognition || window.webkitSpeechRecognition);
+
+  useEffect(() => {
+    if (advisee.cargo) return;
+    apiRequest(`/api/perfil-empleado?nombre=${encodeURIComponent(advisee.nombre)}`, { token })
+      .then((perfil) => setCargo(perfil.cargo || ""))
+      .catch(() => {});
+  }, [token, advisee.nombre, advisee.cargo]);
+
+  useEffect(() => {
+    setLoadingNotas(true);
+    apiRequest(`/api/opiniones-ca?advisee=${encodeURIComponent(advisee.nombre)}`, { token })
+      .then((data) => setNotas(data.opiniones || []))
+      .catch(() => setNotas([]))
+      .finally(() => setLoadingNotas(false));
+  }, [token, advisee.nombre]);
+
+  useEffect(() => () => { try { recognitionRef.current?.stop(); } catch {} }, []);
+
+  function toggleDictado() {
+    if (grabando) {
+      try { recognitionRef.current?.stop(); } catch {}
+      return;
+    }
+    const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+    if (!SR) {
+      setDictadoError(t("ad.dictation_unsupported"));
+      return;
+    }
+    setDictadoError("");
+    const rec = new SR();
+    const LANGS = { es: "es-ES", en: "en-US", pt: "pt-PT" };
+    rec.lang = LANGS[getLang()] || "es-ES";
+    rec.continuous = true;
+    rec.interimResults = true;
+    baseNotaRef.current = nuevaNota ? nuevaNota.trimEnd() + " " : "";
+    rec.onresult = (e) => {
+      let texto = "";
+      for (let i = 0; i < e.results.length; i++) texto += e.results[i][0].transcript;
+      setNuevaNota(baseNotaRef.current + texto);
+    };
+    rec.onerror = (e) => {
+      if (e.error === "not-allowed" || e.error === "service-not-allowed") {
+        setDictadoError(t("ad.dictation_denied"));
+      } else if (e.error !== "no-speech" && e.error !== "aborted") {
+        setDictadoError(t("ad.dictation_error"));
+      }
+      setGrabando(false);
+    };
+    rec.onend = () => setGrabando(false);
+    recognitionRef.current = rec;
+    try {
+      rec.start();
+      setGrabando(true);
+    } catch {
+      setDictadoError(t("ad.dictation_error"));
+    }
+  }
+
+  async function guardarNota(e) {
+    e.preventDefault();
+    const texto = nuevaNota.trim();
+    if (!texto) return;
+    setGuardandoNota(true);
+    setNotaError("");
+    try {
+      const data = await apiRequest("/api/notas-ca", {
+        token,
+        method: "POST",
+        body: { advisee: advisee.nombre, nota: texto },
+      });
+      if (data.ok) {
+        const ahora = new Date().toISOString();
+        setNotas((prev) => [{ fecha: ahora, opinion: texto, resumen_advisee: "" }, ...(prev || [])]);
+        setNuevaNota("");
+      } else {
+        setNotaError(t("ad.err_save_note"));
+      }
+    } catch {
+      setNotaError(t("ad.err_save_note2"));
+    } finally {
+      setGuardandoNota(false);
+    }
+  }
+
+  return (
+    <main className="page">
+      <nav className="nav">
+        <a className="brand" href="/"><img src="/src/logo.png" alt="igeneris" className="brand-logo" /></a>
+        <NavBack onBack={onBack} />
+      </nav>
+      <div className="profile-wrap" style={{ flex: 1 }}>
+        <div className="dash-layout">
+
+          {/* LEFT — mismo panel de perfil que la pagina anterior */}
+          <aside className="dash-profile">
+            <p className="eyebrow" style={{ color: "var(--fg)", textAlign: "center", fontWeight: 500, margin: 0 }}>{t("ad.eyebrow")}</p>
+            <div className="profile-photo-wrap">
+              {advisee.foto
+                ? <img src={advisee.foto} alt={advisee.nombre} className="profile-photo" />
+                : <div className="profile-photo-placeholder">{advisee.nombre.charAt(0)}</div>
+              }
+              <div className="profile-id">
+                <h1 className="profile-name">{advisee.nombre}</h1>
+                {cargo && <p className="profile-cargo">{cargo}</p>}
+              </div>
+            </div>
+          </aside>
+
+          {/* RIGHT — registro de comentarios */}
+          <div className="dash-main">
+            <section className="dash-section">
+              <h1 style={{ marginBottom: 8 }}>{t("ad.meetings_log")}</h1>
+              <p className="fine" style={{ marginTop: 0, marginBottom: 22, color: "#000", maxWidth: 620 }}>{t("regcom.desc")}</p>
+
+              {dictadoSoportado && (
+                <div style={{ display: "flex", justifyContent: "flex-end", marginBottom: 12 }}>
+                  <button
+                    type="button"
+                    className={grabando ? "notas-ca-dictado grabando" : "notas-ca-dictado secondary"}
+                    onClick={toggleDictado}
+                  >
+                    {grabando ? t("ad.dictation_stop") : t("ad.dictation_start")}
+                  </button>
+                </div>
+              )}
+              <form className="notas-ca-form" onSubmit={guardarNota}>
+                <textarea
+                  className="notas-ca-textarea"
+                  placeholder={t("ad.note_placeholder")}
+                  value={nuevaNota}
+                  onChange={(e) => setNuevaNota(e.target.value)}
+                  rows={4}
+                />
+                {grabando && <span className="notas-ca-dictado-hint fine">{t("ad.dictation_listening")}</span>}
+                {dictadoError && <p className="form-error">{dictadoError}</p>}
+                {notaError && <p className="form-error">{notaError}</p>}
+                <button type="submit" disabled={guardandoNota || !nuevaNota.trim()}>
+                  {guardandoNota ? t("common.saving") : t("ad.save_note")}
+                </button>
+              </form>
+              <div className="notas-ca-historial">
+                {loadingNotas ? (
+                  <p className="fine">{t("ad.loading_history")}</p>
+                ) : !notas || notas.length === 0 ? (
+                  <p className="fine">{t("ad.no_notes")}</p>
+                ) : (
+                  notas.map((nota, i) => (
+                    <article key={i} className="nota-ca-item">
+                      <p className="nota-ca-fecha fine">{nota.fecha ? nota.fecha.slice(0, 10) : t("common.no_date")}</p>
+                      {nota.resumen_advisee && (
+                        <details className="nota-ca-resumen-wrap">
+                          <summary className="fine">{t("ad.view_included_evals")}</summary>
+                          <pre className="opinion-pre">{nota.resumen_advisee}</pre>
+                        </details>
+                      )}
+                      <p className="nota-ca-texto">{nota.opinion || "—"}</p>
+                    </article>
+                  ))
+                )}
+              </div>
+            </section>
+          </div>
+        </div>
+      </div>
+      <Footer />
+    </main>
+  );
+}
+
+
 function AdviseeDetail({ token, advisee, advisees, onBack, onNavigate }) {
   const [gestionOpen, setGestionOpen] = useState(false);
+  const [comentariosOpen, setComentariosOpen] = useState(false);
+  const [cargo, setCargo] = useState(advisee.cargo || "");
   const [accesoIndividual, setAccesoIndividual] = useState(false);
   const [togglingAccesoIndividual, setTogglingAccesoIndividual] = useState(false);
   const [notas, setNotas] = useState(null);
@@ -3575,30 +3833,6 @@ function AdviseeDetail({ token, advisee, advisees, onBack, onNavigate }) {
   const [fuenteError, setFuenteError] = useState("");
   const [fuenteOk, setFuenteOk] = useState(false);
   const [tieneEvaluacionesExtra, setTieneEvaluacionesExtra] = useState(false);
-  const [planAdv, setPlanAdv] = useState(null);       // plan de acción guardado (texto); null = cargando
-  const [planAdvSesion, setPlanAdvSesion] = useState(false);
-  const [planAdvBusy, setPlanAdvBusy] = useState(false);
-  const [planAdvOk, setPlanAdvOk] = useState(false);
-
-  // Plan de acción del año que viene: SOLO se lee lo ya guardado (cero API).
-  useEffect(() => {
-    apiRequest(`/api/eval-anual/plan-guardado?evaluado=${encodeURIComponent(advisee.nombre)}`, { token })
-      .then((r) => { setPlanAdv(r.plan || ""); setPlanAdvSesion(!!r.tieneSesion); })
-      .catch(() => { setPlanAdv(""); setPlanAdvSesion(false); });
-  }, [token, advisee.nombre]);
-
-  async function guardarPlanAdvisee() {
-    setPlanAdvBusy(true); setPlanAdvOk(false);
-    try {
-      await apiRequest("/api/eval-anual/plan-guardar", { token, method: "POST", body: { evaluado: advisee.nombre, texto: planAdv } });
-      setPlanAdvOk(true);
-      setTimeout(() => setPlanAdvOk(false), 2600);
-    } catch (e) {
-      setFuenteError(e.message);
-    } finally {
-      setPlanAdvBusy(false);
-    }
-  }
 
   // Descarga un PDF de una fuente (opiniones, evals proyecto, seguimiento, evals mensuales).
   async function descargarFuentePdf(endpoint, etiqueta) {
@@ -3649,6 +3883,13 @@ function AdviseeDetail({ token, advisee, advisees, onBack, onNavigate }) {
       .then((data) => setTieneEvaluacionesExtra((data.evaluaciones || []).length > 0))
       .catch(() => setTieneEvaluacionesExtra(false));
   }, [token, advisee.nombre]);
+
+  useEffect(() => {
+    if (advisee.cargo) return;
+    apiRequest(`/api/perfil-empleado?nombre=${encodeURIComponent(advisee.nombre)}`, { token })
+      .then((perfil) => setCargo(perfil.cargo || ""))
+      .catch(() => {});
+  }, [token, advisee.nombre, advisee.cargo]);
 
   async function toggleAccesoIndividual() {
     setTogglingAccesoIndividual(true);
@@ -3812,190 +4053,264 @@ function AdviseeDetail({ token, advisee, advisees, onBack, onNavigate }) {
         <a className="brand" href="/"><img src="/src/logo.png" alt="igeneris" className="brand-logo" /></a>
         <button className="link-button" onClick={onBack}>{t("ad.back_advisees")}</button>
       </nav>
-      <div className="advisee-detail-wrap">
-        <div className="advisee-detail-layout">
-          <div className="advisee-detail-left">
-            {advisee.foto
-              ? <img src={advisee.foto} alt={advisee.nombre} className="advisee-detail-foto" />
-              : <div className="advisee-detail-foto advisee-foto-placeholder">{advisee.nombre.charAt(0)}</div>
-            }
-            <h2 className="advisee-detail-nombre">{advisee.nombre}</h2>
-          </div>
-          <div className="advisee-detail-right">
-            <button className="secondary" onClick={() => onNavigate({ type: "objetivos", advisee, advisees, from: "advisee-detail" })}>
-              {t("ad.edit_goals")}
-            </button>
-            <button className="secondary" onClick={() => setGestionOpen((v) => !v)}>
-              {gestionOpen ? t("ad.close_manage") : t("ad.manage_report")}
-            </button>
-            {gestionOpen && (
-              <div className="advisee-gestion">
-                <button className="secondary" onClick={() => setRealizarOpen((v) => !v)}>
-                  {realizarOpen ? t("ad.close_make_final") : t("ad.make_final")}
-                </button>
-                {realizarOpen && (
-                  <div className="opiniones-doc-opciones">
-                    <button className="secondary" onClick={() => onNavigate({ type: "eval-anual", advisee, advisees, from: "advisee-detail" })}>
-                      {t("ad.with_claude")}
-                    </button>
-                    <button className="secondary" onClick={() => setManualOpen((v) => !v)}>
-                      {manualOpen ? t("ad.close_manual") : t("ad.manual")}
-                    </button>
-                    {manualOpen && (
-                      <div className="opiniones-doc-opciones">
-                        <button className="secondary" disabled={!!generandoFuente}
-                          onClick={() => descargarFuentePdf("/api/generar-opiniones-ca", "opiniones")}>
-                          {generandoFuente === "/api/generar-opiniones-ca" ? t("ad.generating") : t("ad.dl_opinions")}
-                        </button>
-                        <button className="secondary" disabled={!!generandoFuente}
-                          onClick={() => descargarFuentePdf("/api/generar-pdf-evals-proyecto", "evals_proyecto")}>
-                          {generandoFuente === "/api/generar-pdf-evals-proyecto" ? t("ad.generating") : t("ad.dl_proj_evals")}
-                        </button>
-                        <button className="secondary" disabled={!!generandoFuente}
-                          onClick={() => descargarFuentePdf("/api/generar-pdf-seguimiento", "seguimiento_personal")}>
-                          {generandoFuente === "/api/generar-pdf-seguimiento" ? t("ad.generating") : t("ad.dl_personal_tracking")}
-                        </button>
-                        <button className="secondary" disabled={!!generandoFuente}
-                          onClick={() => descargarFuentePdf("/api/generar-pdf-evals-mensuales", "evals_mensuales")}>
-                          {generandoFuente === "/api/generar-pdf-evals-mensuales" ? t("ad.generating") : t("ad.dl_monthly_evals")}
-                        </button>
-                        {tieneEvaluacionesExtra && (
-                          <button className="secondary" disabled={!!generandoFuente}
-                            onClick={() => descargarFuentePdf("/api/generar-pdf-evals-extra", "evals_extra")}>
-                            {generandoFuente === "/api/generar-pdf-evals-extra" ? t("ad.generating") : t("ad.dl_extra_evals")}
-                          </button>
-                        )}
-                        {fuenteError && <p className="form-error">{fuenteError}</p>}
-                      </div>
-                    )}
-                  </div>
-                )}
-                <button className="secondary" onClick={() => onNavigate({ type: "subir-informe", advisee, from: "advisee-detail", advisees })}>
-                  {t("ad.upload_final")}
-                </button>
-                <button
-                  className={accesoIndividual ? "" : "secondary"}
-                  onClick={toggleAccesoIndividual}
-                  disabled={togglingAccesoIndividual}
-                >
-                  {togglingAccesoIndividual
-                    ? t("common.saving")
-                    : accesoIndividual
-                    ? t("ad.access_active_revoke")
-                    : t("ad.give_access")}
-                </button>
-              </div>
-            )}
-            <button className="secondary" disabled={!!generandoFuente}
-              onClick={() => descargarFuentePdf("/api/generar-pdf-completo", "info_completa")}>
-              {generandoFuente === "/api/generar-pdf-completo" ? t("ad.generating") : t("ad.view_available_info")}
-            </button>
-            {fuenteError && <p className="form-error">{fuenteError}</p>}
-            {fuenteOk && (
-              <span style={{ display: "inline-flex", alignItems: "center", gap: 6, color: "#166534", marginTop: 4 }}>
-                <DrawCheck size={20} color="#166534" /> {t("ad.downloaded")}
-              </span>
-            )}
-          </div>
-        </div>
+      <div className="profile-wrap" style={{ flex: 1 }}>
+        <div className="dash-layout">
 
-        <section className="notas-ca-section">
-          <div className="notas-ca-header">
-            <h3 className="notas-ca-titulo">{t("adplan.title")}</h3>
-          </div>
-          {planAdv === null ? (
-            <p className="fine">{t("common.loading")}</p>
-          ) : planAdv ? (
-            <>
-              <textarea
-                className="notas-ca-textarea"
-                rows={8}
-                value={planAdv}
-                onChange={(e) => setPlanAdv(e.target.value)}
-                placeholder={t("adplan.none_yet")}
-              />
-              <div className="notas-ca-acciones">
-                <button className="secondary" onClick={guardarPlanAdvisee} disabled={planAdvBusy}>
-                  {planAdvBusy ? t("common.saving") : t("eaw.plan_save")}
-                </button>
-                <button
-                  className="secondary"
-                  onClick={() => onNavigate({ type: "eval-anual", advisee, advisees, from: "advisee-detail" })}
-                >
-                  {t("adplan.open_assistant")}
-                </button>
-                {planAdvOk && (
-                  <span style={{ display: "inline-flex", alignItems: "center", gap: 6, color: "#166534", alignSelf: "center" }}>
-                    <DrawCheck size={20} color="#166534" /> {t("eaw.plan_saved")}
+          {/* LEFT — perfil del advisee */}
+          <aside className="dash-profile">
+            <p className="eyebrow" style={{ color: "var(--fg)", textAlign: "center", fontWeight: 500, margin: 0 }}>{t("ad.eyebrow")}</p>
+            <div className="profile-photo-wrap">
+              {advisee.foto
+                ? <img src={advisee.foto} alt={advisee.nombre} className="profile-photo" />
+                : <div className="profile-photo-placeholder">{advisee.nombre.charAt(0)}</div>
+              }
+              <div className="profile-id">
+                <h1 className="profile-name">{advisee.nombre}</h1>
+                {cargo && <p className="profile-cargo">{cargo}</p>}
+              </div>
+            </div>
+          </aside>
+
+          {/* RIGHT — To-do + To-see */}
+          <div className="dash-main">
+
+            {/* ── TO-DO ── */}
+            <section className="dash-section">
+              <p className="eyebrow" style={{ color: "var(--fg)", textAlign: "left", fontWeight: 500, display: "flex", alignItems: "center", justifyContent: "flex-start", gap: 6 }}>
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ width: 14, height: 14, flexShrink: 0 }}>
+                  <path d="M9 11l3 3L20 4" />
+                  <path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11" />
+                </svg>
+                To-do
+              </p>
+              <hr style={{ ...DASH_DIVIDER, margin: 0 }} />
+              <nav style={{ display: "flex", flexDirection: "column" }}>
+                <DashNavItem
+                  label={t("ad.edit_goals")}
+                  onClick={() => onNavigate({ type: "objetivos", advisee, advisees, from: "advisee-detail", vista: "form" })}
+                  external
+                />
+
+                <AdviseeNavGroup label={t("ad.manage_report")} open={gestionOpen} onToggle={() => setGestionOpen((v) => !v)}>
+                  <div className="advisee-gestion" style={{ border: "none", padding: 0 }}>
+                    <AdviseeNavGroup label={t("ad.make_final")} open={realizarOpen} onToggle={() => setRealizarOpen((v) => !v)}>
+                      <div className="opiniones-doc-opciones">
+                        <button className="secondary" onClick={() => onNavigate({ type: "eval-anual", advisee, advisees, from: "advisee-detail" })}>
+                          {t("ad.with_claude")}
+                        </button>
+                        <button className="secondary" onClick={() => setManualOpen((v) => !v)}>
+                          {manualOpen ? t("ad.close_manual") : t("ad.manual")}
+                        </button>
+                        {manualOpen && (
+                          <div className="opiniones-doc-opciones">
+                            <button className="secondary" disabled={!!generandoFuente}
+                              onClick={() => descargarFuentePdf("/api/generar-opiniones-ca", "opiniones")}>
+                              {generandoFuente === "/api/generar-opiniones-ca" ? t("ad.generating") : t("ad.dl_opinions")}
+                            </button>
+                            <button className="secondary" disabled={!!generandoFuente}
+                              onClick={() => descargarFuentePdf("/api/generar-pdf-evals-proyecto", "evals_proyecto")}>
+                              {generandoFuente === "/api/generar-pdf-evals-proyecto" ? t("ad.generating") : t("ad.dl_proj_evals")}
+                            </button>
+                            <button className="secondary" disabled={!!generandoFuente}
+                              onClick={() => descargarFuentePdf("/api/generar-pdf-seguimiento", "seguimiento_personal")}>
+                              {generandoFuente === "/api/generar-pdf-seguimiento" ? t("ad.generating") : t("ad.dl_personal_tracking")}
+                            </button>
+                            <button className="secondary" disabled={!!generandoFuente}
+                              onClick={() => descargarFuentePdf("/api/generar-pdf-evals-mensuales", "evals_mensuales")}>
+                              {generandoFuente === "/api/generar-pdf-evals-mensuales" ? t("ad.generating") : t("ad.dl_monthly_evals")}
+                            </button>
+                            {tieneEvaluacionesExtra && (
+                              <button className="secondary" disabled={!!generandoFuente}
+                                onClick={() => descargarFuentePdf("/api/generar-pdf-evals-extra", "evals_extra")}>
+                                {generandoFuente === "/api/generar-pdf-evals-extra" ? t("ad.generating") : t("ad.dl_extra_evals")}
+                              </button>
+                            )}
+                            {fuenteError && <p className="form-error">{fuenteError}</p>}
+                          </div>
+                        )}
+                      </div>
+                    </AdviseeNavGroup>
+                    <button className="secondary" onClick={() => onNavigate({ type: "subir-informe", advisee, from: "advisee-detail", advisees })}>
+                      {t("ad.upload_final")}
+                    </button>
+                    <button
+                      className={accesoIndividual ? "" : "secondary"}
+                      onClick={toggleAccesoIndividual}
+                      disabled={togglingAccesoIndividual}
+                    >
+                      {togglingAccesoIndividual
+                        ? t("common.saving")
+                        : accesoIndividual
+                        ? t("ad.access_active_revoke")
+                        : t("ad.give_access")}
+                    </button>
+                  </div>
+                </AdviseeNavGroup>
+
+                <DashNavItem
+                  label={t("ad.meetings_log")}
+                  onClick={() => onNavigate({ type: "registro-comentarios", advisee, advisees, from: "advisee-detail" })}
+                />
+              </nav>
+            </section>
+
+            {/* ── TO-SEE ── */}
+            <section className="dash-section">
+              <p className="eyebrow" style={{ color: "var(--fg)", textAlign: "left", fontWeight: 500, display: "flex", alignItems: "center", justifyContent: "flex-start", gap: 6 }}>
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ width: 14, height: 14, flexShrink: 0 }}>
+                  <path d="M1 12s4-7 11-7 11 7 11 7-4 7-11 7-11-7-11-7z" />
+                  <circle cx="12" cy="12" r="3" />
+                </svg>
+                To-see
+              </p>
+              <hr style={{ ...DASH_DIVIDER, margin: 0 }} />
+              <nav style={{ display: "flex", flexDirection: "column" }}>
+                <DashNavItem
+                  label={t("adplan.page_title")}
+                  onClick={() => onNavigate({ type: "plan-accion", advisee, advisees, from: "advisee-detail" })}
+                  external
+                />
+
+                <DashNavItem
+                  label={generandoFuente === "/api/generar-pdf-completo" ? t("ad.generating") : t("ad.view_available_info")}
+                  onClick={() => descargarFuentePdf("/api/generar-pdf-completo", "info_completa")}
+                  disabled={!!generandoFuente}
+                  download
+                />
+                {fuenteError && <p className="form-error" style={{ paddingLeft: 14 }}>{fuenteError}</p>}
+                {fuenteOk && (
+                  <span style={{ display: "inline-flex", alignItems: "center", gap: 6, color: "#166534", marginTop: 4, paddingLeft: 14 }}>
+                    <DrawCheck size={20} color="#166534" /> {t("ad.downloaded")}
                   </span>
                 )}
-              </div>
-            </>
-          ) : (
-            <>
-              <p className="fine">{t("adplan.none_yet")}</p>
-              <div className="notas-ca-acciones">
-                <button
-                  className="secondary"
-                  onClick={() => onNavigate({ type: "eval-anual", advisee, advisees, from: "advisee-detail" })}
-                >
-                  {t("adplan.open_assistant")}
-                </button>
-              </div>
-            </>
-          )}
-        </section>
 
-        <section className="notas-ca-section">
-          <div className="notas-ca-header">
-            <h3 className="notas-ca-titulo">{t("ad.meetings_log")}</h3>
-            {dictadoSoportado && (
-              <button
-                type="button"
-                className={grabando ? "notas-ca-dictado grabando" : "notas-ca-dictado secondary"}
-                onClick={toggleDictado}
-              >
-                {grabando ? t("ad.dictation_stop") : t("ad.dictation_start")}
-              </button>
-            )}
-          </div>
-          <form className="notas-ca-form" onSubmit={guardarNota}>
-            <textarea
-              className="notas-ca-textarea"
-              placeholder={t("ad.note_placeholder")}
-              value={nuevaNota}
-              onChange={(e) => setNuevaNota(e.target.value)}
-              rows={4}
-            />
-            {grabando && <span className="notas-ca-dictado-hint fine">{t("ad.dictation_listening")}</span>}
-            {dictadoError && <p className="form-error">{dictadoError}</p>}
-            {notaError && <p className="form-error">{notaError}</p>}
-            <button type="submit" disabled={guardandoNota || !nuevaNota.trim()}>
-              {guardandoNota ? t("common.saving") : t("ad.save_note")}
-            </button>
-          </form>
+                <DashNavItem
+                  label={t("ad.goals_history")}
+                  onClick={() => onNavigate({ type: "objetivos", advisee, advisees, from: "advisee-detail", vista: "historial" })}
+                  external
+                />
+              </nav>
+            </section>
 
-          <div className="notas-ca-historial">
-            {loadingNotas ? (
-              <p className="fine">{t("ad.loading_history")}</p>
-            ) : !notas || notas.length === 0 ? (
-              <p className="fine">{t("ad.no_notes")}</p>
-            ) : (
-              notas.map((nota, i) => (
-                <article key={i} className="nota-ca-item">
-                  <p className="nota-ca-fecha fine">{nota.fecha ? nota.fecha.slice(0, 10) : t("common.no_date")}</p>
-                  {nota.resumen_advisee && (
-                    <details className="nota-ca-resumen-wrap">
-                      <summary className="fine">{t("ad.view_included_evals")}</summary>
-                      <pre className="opinion-pre">{nota.resumen_advisee}</pre>
-                    </details>
-                  )}
-                  <p className="nota-ca-texto">{nota.opinion || "—"}</p>
-                </article>
-              ))
-            )}
           </div>
-        </section>
+        </div>
+      </div>
+      <Footer />
+    </main>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Plan de acción del advisee (página propia; mismo panel de perfil que la página de advisee)
+// ---------------------------------------------------------------------------
+
+function PlanAccionPage({ token, advisee, advisees, onBack, onNavigate }) {
+  const [plan, setPlan] = useState(null);   // texto del plan guardado; null = cargando, "" = sin plan
+  const [editando, setEditando] = useState(false);
+  const [borrador, setBorrador] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+
+  useEffect(() => {
+    apiRequest(`/api/eval-anual/plan-guardado?evaluado=${encodeURIComponent(advisee.nombre)}`, { token })
+      .then((r) => setPlan(r.plan || ""))
+      .catch(() => setPlan(""));
+  }, [token, advisee.nombre]);
+
+  function empezarEdicion(desdeCero) {
+    setBorrador(desdeCero ? "" : (plan || ""));
+    setError("");
+    setEditando(true);
+  }
+
+  async function guardar() {
+    setBusy(true); setError("");
+    try {
+      await apiRequest("/api/eval-anual/plan-guardar", { token, method: "POST", body: { evaluado: advisee.nombre, texto: borrador } });
+      setPlan(borrador.trim());
+      setEditando(false);
+    } catch (e) {
+      setError(e.message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <main className="page">
+      <nav className="nav">
+        <a className="brand" href="/"><img src="/src/logo.png" alt="igeneris" className="brand-logo" /></a>
+        <NavBack onBack={onBack} />
+      </nav>
+      <div className="profile-wrap" style={{ flex: 1 }}>
+        <div className="dash-layout">
+
+          {/* LEFT — perfil del advisee (mismo panel que la página de advisee) */}
+          <aside className="dash-profile">
+            <p className="eyebrow" style={{ color: "var(--fg)", textAlign: "center", fontWeight: 500, margin: 0 }}>{t("ad.eyebrow")}</p>
+            <div className="profile-photo-wrap">
+              {advisee.foto
+                ? <img src={advisee.foto} alt={advisee.nombre} className="profile-photo" />
+                : <div className="profile-photo-placeholder">{advisee.nombre.charAt(0)}</div>
+              }
+              <div className="profile-id">
+                <h1 className="profile-name">{advisee.nombre}</h1>
+                {advisee.cargo && <p className="profile-cargo">{advisee.cargo}</p>}
+              </div>
+            </div>
+          </aside>
+
+          {/* RIGHT — plan de acción */}
+          <div className="dash-main">
+            <section>
+              <h1 style={{ marginBottom: 8 }}>{t("adplan.page_title")}</h1>
+              <p className="fine" style={{ marginBottom: 24, maxWidth: 640 }}>{t("adplan.page_desc")}</p>
+
+              {plan === null ? (
+                <p className="fine">{t("common.loading")}</p>
+              ) : editando ? (
+                <>
+                  <textarea
+                    className="notas-ca-textarea"
+                    rows={12}
+                    value={borrador}
+                    onChange={(e) => setBorrador(e.target.value)}
+                    placeholder={t("adplan.none_yet")}
+                    autoFocus
+                  />
+                  {error && <p className="error" style={{ marginTop: 8 }}>{error}</p>}
+                  <div className="actions">
+                    <button onClick={guardar} disabled={busy}>
+                      {busy ? t("common.saving") : t("eaw.plan_save")}
+                    </button>
+                    <button className="secondary" onClick={() => setEditando(false)} disabled={busy}>
+                      {t("common.cancel")}
+                    </button>
+                  </div>
+                </>
+              ) : plan ? (
+                <>
+                  <div style={{ border: "1px solid var(--border)", borderRadius: "var(--radius-lg)", padding: "18px 20px", background: "var(--bg)", whiteSpace: "pre-wrap", fontSize: 15, lineHeight: 1.6, color: "#000" }}>
+                    {plan}
+                  </div>
+                  <div className="actions">
+                    <button onClick={() => empezarEdicion(false)}>{t("adplan.edit")}</button>
+                    <button className="secondary" onClick={() => empezarEdicion(true)}>{t("adplan.create_new")}</button>
+                  </div>
+                </>
+              ) : (
+                <>
+                  <p style={{ fontSize: 15, color: "var(--text-60)", lineHeight: 1.6, maxWidth: 640 }}>
+                    {t("adplan.none", { nombre: advisee.nombre })}
+                  </p>
+                  <div className="actions">
+                    <button onClick={() => empezarEdicion(true)}>{t("adplan.create_new")}</button>
+                  </div>
+                </>
+              )}
+            </section>
+          </div>
+        </div>
       </div>
       <Footer />
     </main>
@@ -4097,10 +4412,25 @@ function MisProyectosActivosPage({ token, user, onBack }) {
 
       <div style={{ flex: 1, width: "100%", paddingTop: "clamp(44px, 6vw, 68px)", paddingBottom: 48 }}>
         <p className="eyebrow">{t("mpa.kicker")}</p>
-        <h1 style={{ marginBottom: 28 }}>{t("mpa.title")}</h1>
+        <h1>{t("mpa.title")}</h1>
+        <p className="fine" style={{ marginTop: 10, marginBottom: 28, color: "#000" }}>{t("mpa.summary")}<em>{t("dash.nav_do_proj_evals")}</em>{t("mpa.summary_suffix")}</p>
 
         {loading ? (
-          <p className="fine">{t("common.loading")}</p>
+          <div>
+            {Array.from({ length: 2 }).map((_, i) => (
+              <div key={i} className="card" style={{ marginBottom: 20 }}>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 16 }}>
+                  <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+                    <Skeleton width={170} height={14} />
+                    <Skeleton width={90} height={11} />
+                  </div>
+                  <Skeleton width={100} height={6} radius={3} />
+                </div>
+                <Skeleton height={40} radius={8} style={{ marginBottom: 8 }} />
+                <Skeleton height={40} radius={8} />
+              </div>
+            ))}
+          </div>
         ) : proyectos.length === 0 ? (
           <p className="fine">{t("mpa.no_projects")}</p>
         ) : (
@@ -4114,8 +4444,6 @@ function MisProyectosActivosPage({ token, user, onBack }) {
             const disponibles = todosEmpleados.filter((e) => !equipoActual.includes(e));
             const total = estado ? estado.length : equipoActual.length;
             // Cuántas evaluaciones de compañeros ha COMPLETADO cada persona (como evaluador).
-            // Se prefiere el dato del backend (m.n_completadas); si no llega, se calcula aquí
-            // invirtiendo la relación evaluado→evaluadores del propio estado.
             const norm = (s) => (s || "").normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase().trim();
             const completadasMap = {};
             (estado || []).forEach((tgt) => (tgt.evaluadores || []).forEach((ev) => {
@@ -4130,9 +4458,7 @@ function MisProyectosActivosPage({ token, user, onBack }) {
             const pct = total ? Math.round((done / total) * 100) : 0;
             const msgEsError = msg.includes("Error") || msg.includes("error");
             return (
-              <React.Fragment key={nombre}>
-              {idx > 0 && <hr style={{ border: "none", borderTop: "1px solid var(--border)", margin: "24px 0" }} />}
-              <div className="card stagger-item" style={{ marginBottom: 16, animationDelay: `${Math.min(idx, 8) * 0.05}s` }}>
+              <div key={nombre} className="card stagger-item" style={{ marginBottom: 20, animationDelay: `${Math.min(idx, 8) * 0.05}s` }}>
                 {/* Header */}
                 <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 16, flexWrap: "wrap", marginBottom: 16 }}>
                   <div>
@@ -4144,23 +4470,27 @@ function MisProyectosActivosPage({ token, user, onBack }) {
 
                 {/* Members table */}
                 {!estado ? (
-                  <p className="fine">{t("mpa.loading_state")}</p>
+                  <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+                    <Skeleton height={34} radius={6} />
+                    <Skeleton height={34} radius={6} />
+                  </div>
                 ) : estado.length === 0 ? (
                   <p className="fine">{t("mpa.no_data")}</p>
                 ) : (
                   <div style={{ overflowX: "auto" }}>
-                    <table className="gest-table">
+                    <table className="gest-table" style={{ tableLayout: "fixed", width: "100%" }}>
                       <thead>
                         <tr>
-                          {[t("mpa.col_member"), t("mpa.col_completed"), t("mpa.col_selfeval"), t("mpa.col_status"), ""].map((h, hi) => (
-                            <th key={hi}>{h}</th>
+                          {[[t("mpa.col_member"), "25%"], [t("mpa.col_completed"), "25%"], [t("mpa.col_status"), "25%"], ["", "25%"]].map(([h, w], hi) => (
+                            <th key={hi} style={{ width: w }}>{h}</th>
                           ))}
                         </tr>
                       </thead>
                       <tbody>
                         {estado.map((m) => {
                           const nHechas = hechasDe(m);
-                          const peersCompleto = totalCompaneros === 0 || nHechas >= totalCompaneros;
+                          const totalEvals = totalCompaneros + 1; // compañeros + autoevaluación
+                          const hechasTotal = nHechas + (m.autoevaluacion_hecha ? 1 : 0);
                           const personaCompleto = personaHaCompletado(m);
                           const faltanPeers = Math.max(totalCompaneros - nHechas, 0);
                           const estadoTitle = personaCompleto
@@ -4173,24 +4503,19 @@ function MisProyectosActivosPage({ token, user, onBack }) {
                             <tr key={m.nombre}>
                               <td>{m.nombre}</td>
                               <td>
-                                <span className={`badge ${peersCompleto ? "badge-dark" : "badge-light"}`}>{nHechas}/{totalCompaneros}</span>
+                                <span className={`badge ${personaCompleto ? "badge-dark" : "badge-light"}`} title={estadoTitle}>{hechasTotal}/{totalEvals}</span>
                               </td>
                               <td>
-                                {m.autoevaluacion_hecha
-                                  ? <span style={{ color: "#000", fontSize: 14 }}>✓</span>
-                                  : <span style={{ color: "var(--accent)", fontSize: 14 }}>✗</span>}
-                              </td>
-                              <td>
-                                <span className={`badge ${personaCompleto ? "badge-dark" : "badge-light"}`} title={estadoTitle}>
+                                <span className={`badge ${personaCompleto ? "badge-success" : "badge-danger"}`} title={estadoTitle}>
                                   {personaCompleto ? t("mpa.complete") : t("mpa.pending")}
                                 </span>
                               </td>
                               <td>
                                 <button
+                                  className="mpa-remove"
                                   onClick={() => modificarMiembro("eliminar", nombre, m.nombre)}
                                   title={t("mpa.remove_member", { nombre: m.nombre })}
-                                  style={{ background: "none", border: "none", minHeight: "auto", padding: "2px 4px", color: "rgba(0,0,0,.3)", fontSize: 16, cursor: "pointer" }}
-                                >×</button>
+                                >{t("mpa.remove_short")}</button>
                               </td>
                             </tr>
                           );
@@ -4202,43 +4527,37 @@ function MisProyectosActivosPage({ token, user, onBack }) {
 
                 {msg && <p className={msgEsError ? "error" : "fine"} style={{ marginTop: 10 }}>{msg}</p>}
 
-                {/* Add member */}
-                {mostrarAnadir ? (
-                  <div style={{ display: "flex", gap: 8, marginTop: 12, alignItems: "center", flexWrap: "wrap" }}>
-                    <input
-                      type="text"
-                      list={`emp-list-${idx}`}
-                      value={valorAnadir}
-                      onChange={(e) => setAñadirValor((prev) => ({ ...prev, [nombre]: e.target.value }))}
-                      placeholder={t("mpa.select_person")}
-                      style={{ flex: 1, minWidth: 180 }}
-                    />
-                    <datalist id={`emp-list-${idx}`}>
-                      {disponibles.map((e) => <option key={e} value={e} />)}
-                    </datalist>
-                    <button disabled={!disponibles.includes(valorAnadir)} onClick={() => modificarMiembro("añadir", nombre, valorAnadir)}>{t("mpa.add")}</button>
-                    <button className="secondary" onClick={() => setAñadirMap((prev) => ({ ...prev, [nombre]: false }))}>{t("common.cancel")}</button>
-                  </div>
-                ) : (
-                  <button
-                    type="button"
-                    onClick={() => setAñadirMap((prev) => ({ ...prev, [nombre]: true }))}
-                    style={{ marginTop: 12, height: 32, minHeight: "auto", padding: "0 14px", background: "transparent", color: "#000", border: "1px solid var(--border)", borderRadius: "var(--radius-pill)", fontSize: 12, fontWeight: 400 }}
-                  >
-                    {t("mpa.add_member")}
-                  </button>
-                )}
-                <button
-                  type="button"
-                  onClick={() => enviarRecordatorio(nombre)}
-                  disabled={enviandoRec[nombre]}
-                  style={{ marginTop: 12, marginLeft: 8, height: 32, minHeight: "auto", padding: "0 14px", background: "transparent", color: "var(--accent)", border: "1px solid var(--accent)", borderRadius: "var(--radius-pill)", fontSize: 12, fontWeight: 400 }}
-                >
-                  {enviandoRec[nombre] ? t("mpa.rec_sending") : t("mpa.rec_button")}
-                </button>
+                {/* Actions */}
+                <div style={{ display: "flex", gap: 8, marginTop: 16, paddingTop: 14, borderTop: "1px solid var(--border)", alignItems: "center", flexWrap: "wrap" }}>
+                  {mostrarAnadir ? (
+                    <>
+                      <input
+                        type="text"
+                        list={`emp-list-${idx}`}
+                        value={valorAnadir}
+                        onChange={(e) => setAñadirValor((prev) => ({ ...prev, [nombre]: e.target.value }))}
+                        placeholder={t("mpa.select_person")}
+                        style={{ flex: 1, minWidth: 180 }}
+                      />
+                      <datalist id={`emp-list-${idx}`}>
+                        {disponibles.map((e) => <option key={e} value={e} />)}
+                      </datalist>
+                      <button disabled={!disponibles.includes(valorAnadir)} onClick={() => modificarMiembro("añadir", nombre, valorAnadir)}>{t("mpa.add")}</button>
+                      <button className="secondary" onClick={() => setAñadirMap((prev) => ({ ...prev, [nombre]: false }))}>{t("common.cancel")}</button>
+                    </>
+                  ) : (
+                    <>
+                      <button type="button" onClick={() => setAñadirMap((prev) => ({ ...prev, [nombre]: true }))} className="mpa-pill">
+                        {t("mpa.add_member")}
+                      </button>
+                      <button type="button" onClick={() => enviarRecordatorio(nombre)} disabled={enviandoRec[nombre]} className="mpa-pill">
+                        {enviandoRec[nombre] ? t("mpa.rec_sending") : t("mpa.rec_button")}
+                      </button>
+                    </>
+                  )}
+                </div>
                 {recMsg[nombre] && <p className="fine" style={{ marginTop: 8 }}>{recMsg[nombre]}</p>}
               </div>
-              </React.Fragment>
             );
           })
         )}
@@ -4278,6 +4597,7 @@ function ActivarEvaluacionesProyectoPage({ token, user, onBack, onActivado }) {
   const [status, setStatus] = useState("");
   const [enviado, setEnviado] = useState(false);
   const [busqueda, setBusqueda] = useState("");
+  const [campoFocus, setCampoFocus] = useState(false);
 
   const persona = user?.persona || user?.username || "";
 
@@ -4388,8 +4708,10 @@ function ActivarEvaluacionesProyectoPage({ token, user, onBack, onActivado }) {
               <>
                 <div style={{
                   display: "flex", flexWrap: "wrap", alignItems: "center", gap: 6,
-                  border: "1px solid var(--border)", borderRadius: "var(--radius-md)",
-                  padding: "6px 10px", minHeight: 38, background: "#fff",
+                  border: `1px solid ${campoFocus ? "var(--accent)" : "var(--border)"}`,
+                  borderRadius: "var(--radius-md)",
+                  padding: "6px 10px", minHeight: 38, background: "var(--bg)",
+                  transition: "border-color .15s",
                 }}>
                   <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" style={{ color: "rgba(0,0,0,.35)", flexShrink: 0 }}>
                     <circle cx="11" cy="11" r="8" /><line x1="21" y1="21" x2="16.65" y2="16.65" />
@@ -4399,8 +4721,8 @@ function ActivarEvaluacionesProyectoPage({ token, user, onBack, onActivado }) {
                       key={nombre}
                       style={{
                         display: "inline-flex", alignItems: "center", gap: 6,
-                        background: "#f4f4f1", border: "1px solid var(--border)",
-                        borderRadius: 999, padding: "3px 6px 3px 10px", fontSize: 12, whiteSpace: "nowrap",
+                        background: "var(--surface)", border: "1px solid var(--border)",
+                        borderRadius: "var(--radius-pill)", padding: "3px 6px 3px 10px", fontSize: 12, whiteSpace: "nowrap",
                       }}
                     >
                       {nombre}
@@ -4423,11 +4745,13 @@ function ActivarEvaluacionesProyectoPage({ token, user, onBack, onActivado }) {
                     type="text"
                     value={busqueda}
                     onChange={(e) => setBusqueda(e.target.value)}
+                    onFocus={() => setCampoFocus(true)}
+                    onBlur={() => setCampoFocus(false)}
                     placeholder={seleccionados.length ? "" : t("aep.search_by_name")}
                     style={{ flex: 1, minWidth: 100, border: "none", outline: "none", background: "transparent", fontSize: 13, padding: "4px 2px" }}
                   />
                 </div>
-                <div style={{ marginTop: 8, maxHeight: 220, overflowY: "auto", border: "1px solid var(--border)", borderRadius: "var(--radius-md)", background: "#fff" }}>
+                <div style={{ marginTop: 8, maxHeight: 220, overflowY: "auto", border: "1px solid var(--border)", borderRadius: "var(--radius-md)", background: "var(--bg)" }}>
                   {filtrados.map((nombre) => {
                     const checked = seleccionados.includes(nombre);
                     return (
@@ -4436,9 +4760,9 @@ function ActivarEvaluacionesProyectoPage({ token, user, onBack, onActivado }) {
                         onClick={() => toggleEmpleado(nombre)}
                         style={{ display: "flex", alignItems: "center", gap: 10, padding: "9px 12px", borderBottom: "1px solid var(--border)", cursor: "pointer", userSelect: "none" }}
                       >
-                        <span style={{ width: 14, height: 14, borderRadius: 4, border: `1px solid ${checked ? "#000" : "var(--border)"}`, background: checked ? "#000" : "#fff", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
+                        <span style={{ width: 14, height: 14, borderRadius: 4, border: `1px solid ${checked ? "var(--accent)" : "var(--border)"}`, background: "var(--bg)", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
                           {checked && (
-                            <svg width="9" height="7" viewBox="0 0 9 7" fill="none"><path d="M1 3.5l2.5 2.5 4.5-5" stroke="#fff" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/></svg>
+                            <svg width="9" height="7" viewBox="0 0 9 7" fill="none"><path d="M1 3.5l2.5 2.5 4.5-5" stroke="var(--accent)" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/></svg>
                           )}
                         </span>
                         <span style={{ fontSize: 13, fontWeight: 400, color: "#000" }}>{nombre}</span>
@@ -4463,10 +4787,11 @@ function ActivarEvaluacionesProyectoPage({ token, user, onBack, onActivado }) {
               type="submit"
               disabled={!canSubmit}
               style={{
-                marginTop: 16, height: 36, padding: "0 20px", borderRadius: "var(--radius-pill)",
-                border: "none", fontSize: 13, letterSpacing: "0.02em",
-                background: canSubmit ? "var(--accent)" : "var(--border)",
-                color: canSubmit ? "#fff" : "rgba(0,0,0,.35)",
+                marginTop: 16, height: 36, padding: "0 20px", borderRadius: "var(--radius-md)",
+                fontSize: 13, letterSpacing: "0.02em", fontWeight: 500,
+                background: "var(--bg)",
+                border: `1px solid ${canSubmit ? "var(--accent)" : "var(--border)"}`,
+                color: canSubmit ? "var(--accent)" : "rgba(0,0,0,.35)",
                 cursor: canSubmit ? "pointer" : "not-allowed",
               }}
             >
@@ -6126,10 +6451,20 @@ function App() {
         onNavigate={navigate}
       />
     );
+  } else if (page?.type === "registro-comentarios") {
+    content = (
+      <RegistroComentariosPage
+        token={token}
+        advisee={page.advisee}
+        onBack={() => navigate({ type: "advisee-detail", advisee: page.advisee, advisees: page.advisees })}
+      />
+    );
   } else if (page?.type === "mis-objetivos") {
     content = <MisObjetivosPage token={token} persona={user?.persona || user?.username || ""} onBack={() => navigate(null)} />;
   } else if (page?.type === "objetivos") {
-    content = <ObjetivosPage token={token} advisee={page.advisee} caName={user?.persona || ""} onBack={backTo(page)} />;
+    content = <ObjetivosPage token={token} advisee={page.advisee} caName={user?.persona || ""} onBack={backTo(page)} vista={page.vista || "form"} />;
+  } else if (page?.type === "plan-accion") {
+    content = <PlanAccionPage token={token} advisee={page.advisee} advisees={page.advisees} onBack={backTo(page)} onNavigate={navigate} />;
   } else if (page?.type === "subir-informe") {
     content = <SubirInformePage token={token} advisee={page.advisee} onBack={backTo(page)} />;
   } else if (page?.type === "eval-anual") {

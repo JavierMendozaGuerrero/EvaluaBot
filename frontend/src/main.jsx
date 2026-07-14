@@ -4719,13 +4719,6 @@ function MisProyectosActivosPage({ token, user, onBack }) {
 // (año de 4 dígitos + al menos dos tokens en MAYÚSCULAS/dígitos, sin espacios ni tildes).
 const FORMATO_PROYECTO = /^\d{4}(_[A-Z0-9]+){2,}$/;
 
-// Fecha por defecto para la fecha límite de una evaluación: hoy + 2 semanas (YYYY-MM-DD).
-function fechaLimitePorDefecto() {
-  const d = new Date();
-  d.setDate(d.getDate() + 14);
-  return d.toISOString().slice(0, 10);
-}
-
 // Formatea una fecha "YYYY-MM-DD" como "DD/MM/YYYY" para mostrar. Vacío si no hay fecha.
 function formatearFecha(iso) {
   if (!iso) return "";
@@ -5578,7 +5571,6 @@ function SolicitarEvaluacionExtraPage({ token, user, onBack }) {
   const [busqueda, setBusqueda] = useState("");
   const [evaluador, setEvaluador] = useState("");
   const [contexto, setContexto] = useState("");
-  const [fechaLimite, setFechaLimite] = useState(fechaLimitePorDefecto);
   const [loading, setLoading] = useState(false);
   const [status, setStatus] = useState("");
   const [enviado, setEnviado] = useState(false);
@@ -5596,14 +5588,13 @@ function SolicitarEvaluacionExtraPage({ token, user, onBack }) {
     e.preventDefault();
     if (!evaluador) { setStatus(t("sex.err_select_employee")); return; }
     if (!contexto.trim()) { setStatus(t("sex.err_context")); return; }
-    if (!fechaLimite) { setStatus(t("aep.err_deadline")); return; }
     setLoading(true);
     setStatus("");
     try {
       const data = await apiRequest("/api/solicitar-evaluacion-extra", {
         token,
         method: "POST",
-        body: { evaluador, contexto: contexto.trim(), fechaLimite },
+        body: { evaluador, contexto: contexto.trim() },
       });
       if (data.ok) {
         setStatus(t("sex.sent", { nombre: evaluador }));
@@ -5619,7 +5610,7 @@ function SolicitarEvaluacionExtraPage({ token, user, onBack }) {
   }
 
   const filtrados = todosEmpleados.filter((n) => n.toLowerCase().includes(busqueda.toLowerCase().trim()));
-  const canSubmit = Boolean(evaluador) && contexto.trim().length > 0 && Boolean(fechaLimite) && !loading;
+  const canSubmit = Boolean(evaluador) && contexto.trim().length > 0 && !loading;
 
   return (
     <main className="page">
@@ -5643,7 +5634,7 @@ function SolicitarEvaluacionExtraPage({ token, user, onBack }) {
               {status}
             </div>
             <div className="actions">
-              <button onClick={() => { setEnviado(false); setEvaluador(""); setContexto(""); setStatus(""); setBusqueda(""); setFechaLimite(fechaLimitePorDefecto()); }}>
+              <button onClick={() => { setEnviado(false); setEvaluador(""); setContexto(""); setStatus(""); setBusqueda(""); }}>
                 {t("sex.request_another")}
               </button>
               <button className="secondary" onClick={onBack}>{t("sex.back_home")}</button>
@@ -5701,20 +5692,6 @@ function SolicitarEvaluacionExtraPage({ token, user, onBack }) {
               rows={4}
               placeholder={t("sex.context_placeholder")}
               style={{ width: "100%", border: "1px solid #DBDBDE", borderRadius: "6px", padding: "12px 14px", fontSize: "14px", lineHeight: "1.6", resize: "vertical", background: "transparent", color: "#000000", outline: "none", fontFamily: "inherit", boxSizing: "border-box" }}
-            />
-
-            <label htmlFor="extra-deadline" style={{ marginTop: 24 }}>{t("aep.deadline")}</label>
-            <p className="fine" style={{ marginTop: -2, marginBottom: 8, color: "#000", fontSize: 11 }}>
-              {t("aep.deadline_hint")}
-            </p>
-            <input
-              id="extra-deadline"
-              type="date"
-              value={fechaLimite}
-              min={new Date().toISOString().slice(0, 10)}
-              onChange={(e) => setFechaLimite(e.target.value)}
-              style={{ maxWidth: 220 }}
-              required
             />
 
             {status && <p className="error" style={{ marginTop: 8 }}>{status}</p>}

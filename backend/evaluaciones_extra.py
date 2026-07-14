@@ -15,7 +15,7 @@ Estructura en Notion:
 
 import logging
 import threading
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from . import config
 from .clients import notion, slack_app
@@ -25,6 +25,7 @@ from .notion_service import (
     _parent_bbdd_en_pagina,
     _query_bbdd,
     idioma_por_slack_id,
+    obtener_frecuencias_evaluaciones,
     obtener_registros_empleados,
 )
 from .project_evals import _crear_bbdd, _crear_pagina_en_bbdd
@@ -43,7 +44,6 @@ _PROPS_SOLICITUDES = {
     "Solicitante": {"rich_text": {}},
     "Contexto": {"rich_text": {}},
     "Fecha_solicitud": {"date": {}},
-    "Fecha_limite": {"date": {}},
     "Completada": {"checkbox": {}},
 }
 
@@ -151,24 +151,34 @@ def _notificar_solicitud_evaluacion_extra(evaluado: str, evaluador: str, context
 # Solicitar una evaluación extra
 # ---------------------------------------------------------------------------
 
-def solicitar_evaluacion_extra(evaluado: str, evaluador: str, contexto: str, idioma: str = "es", fecha_limite: str = "") -> dict:
+def _deadline_extra(fecha_solicitud: str, dias) -> str:
+    """Deadline (YYYY-MM-DD) = fecha de solicitud + frecuencia 'extra' (días)."""
+    if not fecha_solicitud or not dias:
+        return ""
+    try:
+        base = datetime.fromisoformat(fecha_solicitud[:10])
+        return (base + timedelta(days=int(dias))).date().isoformat()
+    except Exception:
+        logging.exception("No se pudo calcular el deadline extra (%s, %s)", fecha_solicitud, dias)
+        return ""
+
+
+def solicitar_evaluacion_extra(evaluado: str, evaluador: str, contexto: str, idioma: str = "es") -> dict:
     """Crea la solicitud pendiente en Notion y notifica por Slack al evaluador.
-    `fecha_limite` (YYYY-MM-DD) es la fecha tope que fija quien la pide."""
+    El deadline se calcula = fecha de solicitud + frecuencia 'extra' (días) de la BD
+    'Frecuencia evaluaciones' (por defecto 2 semanas), no lo fija quien la pide."""
     db_id = _obtener_o_crear_bbdd_solicitudes()
     if not db_id:
         return {"ok": False, "error": t("evex.err_db_access", idioma)}
 
     try:
-        props = {
+        _crear_pagina_en_bbdd(db_id, {
             "Evaluador": {"title": [{"type": "text", "text": {"content": evaluador}}]},
             "Solicitante": {"rich_text": [{"type": "text", "text": {"content": evaluado}}]},
             "Contexto": {"rich_text": [{"type": "text", "text": {"content": contexto}}]},
             "Fecha_solicitud": {"date": {"start": datetime.now(timezone.utc).isoformat()}},
             "Completada": {"checkbox": False},
-        }
-        if fecha_limite:
-            props["Fecha_limite"] = {"date": {"start": fecha_limite}}
-        _crear_pagina_en_bbdd(db_id, props)
+        })
     except Exception:
         logging.exception("Error creando solicitud de evaluación extra de '%s' a '%s'", evaluado, evaluador)
         return {"ok": False, "error": t("evex.err_request", idioma)}
@@ -188,6 +198,7 @@ def obtener_solicitudes_pendientes(evaluador: str) -> list:
     if not db_id:
         return []
     objetivo = normalizar_nombre(evaluador)
+    dias_extra = obtener_frecuencias_evaluaciones().get("extra")
     try:
         resp = _query_bbdd(db_id, filter={
             "property": "Completada", "checkbox": {"equals": False},
@@ -206,14 +217,13 @@ def obtener_solicitudes_pendientes(evaluador: str) -> list:
             contexto = "".join(
                 p.get("plain_text", "") for p in (props.get("Contexto") or {}).get("rich_text", [])
             ).strip()
-            fecha = ((props.get("Fecha_solicitud") or {}).get("date") or {}).get("start", "")
-            fecha_limite = ((props.get("Fecha_limite") or {}).get("date") or {}).get("start", "")
+            fecha = (((props.get("Fecha_solicitud") or {}).get("date") or {}).get("start", "") or "")[:10]
             pendientes.append({
                 "page_id": fila.get("id", ""),
                 "evaluado": solicitante,
                 "contexto": contexto,
-                "fecha": (fecha or "")[:10],
-                "fecha_limite": (fecha_limite or "")[:10],
+                "fecha": fecha,
+                "fecha_limite": _deadline_extra(fecha, dias_extra),
             })
         pendientes.sort(key=lambda x: x.get("fecha", ""))
         return pendientes

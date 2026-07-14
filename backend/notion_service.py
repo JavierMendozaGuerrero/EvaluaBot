@@ -4503,7 +4503,7 @@ _PROPS_FRECUENCIAS = {
     "Frecuencia": {"number": {}},
 }
 # Frecuencia (días) con la que se siembra la BD la primera vez. Editable en Notion después.
-_FRECUENCIAS_DEFAULT = {"mensual": 30, "personal": 14, "ca": 30, "proyecto": 14}
+_FRECUENCIAS_DEFAULT = {"mensual": 30, "personal": 14, "ca": 30, "proyecto": 14, "extra": 14}
 
 
 def _asegurar_filas_frecuencias(db_id: str) -> None:

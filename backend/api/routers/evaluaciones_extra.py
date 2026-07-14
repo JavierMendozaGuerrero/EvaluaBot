@@ -9,7 +9,6 @@ from ...evaluaciones_extra import (
     solicitar_evaluacion_extra,
 )
 from ...notion_service import idioma_por_sesion
-from ...utils import sanear_fecha_limite as _sanear_fecha_limite
 
 router = APIRouter()
 
@@ -36,8 +35,7 @@ def solicitar_evaluacion_extra_route(datos: dict = Body(default={}), session=Dep
     contexto = datos.get("contexto", "").strip()
     if not evaluador or not contexto:
         return JSONResponse({"error": "Faltan campos obligatorios."}, status_code=400)
-    fecha_limite = _sanear_fecha_limite(datos.get("fechaLimite", ""))
-    return solicitar_evaluacion_extra(evaluado, evaluador, contexto, idi, fecha_limite=fecha_limite)
+    return solicitar_evaluacion_extra(evaluado, evaluador, contexto, idi)
 
 
 @router.post("/api/guardar-evaluacion-extra")

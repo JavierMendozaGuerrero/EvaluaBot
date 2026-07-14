@@ -4761,7 +4761,7 @@ function ActivarEvaluacionesProyectoPage({ token, user, onBack, onActivado }) {
     e.preventDefault();
     if (!proyecto.trim()) { setStatus(t("aep.err_type_project")); return; }
     if (!FORMATO_PROYECTO.test(proyecto.trim())) { setStatus(t("aep.err_format")); return; }
-    if (seleccionados.length === 0) { setStatus(t("aep.err_select_employee")); return; }
+    // Sin miembros seleccionados se permite: el proyecto se activa solo para ti.
     setLoading(true);
     setStatus("");
     try {
@@ -4785,7 +4785,7 @@ function ActivarEvaluacionesProyectoPage({ token, user, onBack, onActivado }) {
   }
 
   const filtrados = todosEmpleados.filter((n) => n.toLowerCase().includes(busqueda.toLowerCase().trim()));
-  const canSubmit = FORMATO_PROYECTO.test(proyecto.trim()) && seleccionados.length > 0 && !loading;
+  const canSubmit = FORMATO_PROYECTO.test(proyecto.trim()) && !loading;
   const plural = seleccionados.length !== 1;
   // En esta pantalla el status solo se muestra en el formulario cuando es un error
   // o validacion (el exito se muestra en la vista "enviado"). Siempre error aqui.
@@ -4918,6 +4918,11 @@ function ActivarEvaluacionesProyectoPage({ token, user, onBack, onActivado }) {
               <strong style={{ fontWeight: 500 }}>{seleccionados.length}</strong>{" "}
               {plural ? t("aep.members_selected_many") : t("aep.members_selected_one")}
             </p>
+            {seleccionados.length === 0 && (
+              <p style={{ fontSize: 12, fontWeight: 200, color: "rgba(0,0,0,.5)", marginTop: 4 }}>
+                {t("aep.solo_hint")}
+              </p>
+            )}
 
             {status && <p className={statusEsError ? "error" : "fine"} style={{ marginTop: 8 }}>{status}</p>}
 
@@ -4936,7 +4941,9 @@ function ActivarEvaluacionesProyectoPage({ token, user, onBack, onActivado }) {
               {loading
                 ? t("aep.activating")
                 : canSubmit
-                  ? t(plural ? "aep.activate_n_many" : "aep.activate_n_one", { n: seleccionados.length })
+                  ? (seleccionados.length === 0
+                      ? t("aep.activate_solo")
+                      : t(plural ? "aep.activate_n_many" : "aep.activate_n_one", { n: seleccionados.length }))
                   : t("dash.nav_activate_proj")}
             </button>
           </form>

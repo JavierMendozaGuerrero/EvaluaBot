@@ -1,0 +1,377 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>EvaluaBot · Resumen de arquitectura</title>
+<style>
+  :root {
+    --bg: #ffffff;
+    --surface: #f5f4f2;
+    --surface-2: #efeeeb;
+    --fg: #0b0a09;
+    --muted: rgba(11, 10, 9, 0.56);
+    --faint: rgba(11, 10, 9, 0.40);
+    --border: #dcdad6;
+    --border-strong: #0b0a09;
+    --accent: #f23c14;
+    --accent-soft: rgba(242, 60, 20, 0.10);
+    --ok: #1c7c54;
+    --ok-soft: rgba(28, 124, 84, 0.12);
+    --sans: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+    --mono: ui-monospace, "SF Mono", "Cascadia Code", "Roboto Mono", Menlo, Consolas, monospace;
+    --maxw: 1020px;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #0c0c0e;
+      --surface: #161619;
+      --surface-2: #1d1d21;
+      --fg: #f3f2f0;
+      --muted: rgba(243, 242, 240, 0.60);
+      --faint: rgba(243, 242, 240, 0.42);
+      --border: #2a2a2f;
+      --border-strong: #4a4a52;
+      --accent: #ff5a32;
+      --accent-soft: rgba(255, 90, 50, 0.14);
+      --ok: #4bbe8a;
+      --ok-soft: rgba(75, 190, 138, 0.16);
+    }
+  }
+  :root[data-theme="light"] {
+    --bg: #ffffff; --surface: #f5f4f2; --surface-2: #efeeeb; --fg: #0b0a09;
+    --muted: rgba(11,10,9,0.56); --faint: rgba(11,10,9,0.40); --border: #dcdad6;
+    --border-strong: #0b0a09; --accent: #f23c14; --accent-soft: rgba(242,60,20,0.10);
+    --ok: #1c7c54; --ok-soft: rgba(28,124,84,0.12);
+  }
+  :root[data-theme="dark"] {
+    --bg: #0c0c0e; --surface: #161619; --surface-2: #1d1d21; --fg: #f3f2f0;
+    --muted: rgba(243,242,240,0.60); --faint: rgba(243,242,240,0.42); --border: #2a2a2f;
+    --border-strong: #4a4a52; --accent: #ff5a32; --accent-soft: rgba(255,90,50,0.14);
+    --ok: #4bbe8a; --ok-soft: rgba(75,190,138,0.16);
+  }
+
+  * { box-sizing: border-box; }
+  html { -webkit-text-size-adjust: 100%; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--fg);
+    font-family: var(--sans);
+    font-weight: 400;
+    line-height: 1.5;
+    -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
+  }
+  h1, h2, h3, h4, p { margin: 0; }
+  .wrap { max-width: var(--maxw); margin: 0 auto; padding: 0 clamp(20px, 5vw, 56px); }
+
+  a { color: inherit; }
+  .eyebrow {
+    font-family: var(--mono);
+    font-size: 11px;
+    letter-spacing: 0.18em;
+    text-transform: uppercase;
+    color: var(--faint);
+    margin: 0 0 18px;
+  }
+  h2 {
+    font-size: clamp(22px, 3.2vw, 30px);
+    font-weight: 800;
+    letter-spacing: -0.02em;
+    line-height: 1.08;
+    text-wrap: balance;
+    margin: 0 0 22px;
+  }
+  section { padding: clamp(46px, 6vw, 76px) 0; border-top: 1px solid var(--border); }
+
+  /* ---- Top bar ---- */
+  header.bar {
+    position: sticky; top: 0; z-index: 10;
+    background: color-mix(in srgb, var(--bg) 86%, transparent);
+    backdrop-filter: saturate(1.4) blur(10px);
+    border-bottom: 1px solid var(--border);
+  }
+  .bar-in { display: flex; align-items: center; justify-content: space-between; height: 60px; }
+  .brand { font-weight: 800; letter-spacing: -0.03em; font-size: 20px; text-decoration: none; }
+  .brand .dot { color: var(--accent); }
+  .bar-meta { font-family: var(--mono); font-size: 11px; color: var(--faint); letter-spacing: 0.04em; }
+
+  /* ---- Hero ---- */
+  .hero { padding: clamp(56px, 9vw, 104px) 0 clamp(40px, 6vw, 64px); }
+  .hero .kick { font-family: var(--mono); font-size: 12px; letter-spacing: 0.16em; text-transform: uppercase; color: var(--accent); margin: 0 0 22px; }
+  .hero h1 {
+    font-size: clamp(38px, 7.5vw, 82px);
+    font-weight: 800;
+    letter-spacing: -0.045em;
+    line-height: 0.96;
+    margin: 0 0 26px;
+    text-wrap: balance;
+  }
+  .hero p.lead {
+    font-size: clamp(16px, 2.1vw, 21px);
+    color: var(--muted);
+    max-width: 60ch;
+    margin: 0;
+    line-height: 1.5;
+  }
+  .pills { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 30px; }
+  .pill {
+    font-family: var(--mono); font-size: 12px; letter-spacing: 0.02em;
+    padding: 7px 13px; border: 1px solid var(--border); border-radius: 999px;
+    color: var(--muted); background: var(--surface);
+  }
+  .pill b { color: var(--fg); font-weight: 600; }
+
+  /* ---- Stat strip ---- */
+  .stats { display: grid; grid-template-columns: repeat(4, 1fr); gap: 1px; background: var(--border); border: 1px solid var(--border); border-radius: 14px; overflow: hidden; }
+  .stat { background: var(--bg); padding: 22px 20px; }
+  .stat .n { font-size: clamp(26px, 4vw, 40px); font-weight: 800; letter-spacing: -0.03em; font-variant-numeric: tabular-nums; line-height: 1; }
+  .stat .n .u { color: var(--accent); }
+  .stat .l { font-size: 12.5px; color: var(--muted); margin-top: 9px; line-height: 1.35; }
+  @media (max-width: 720px) { .stats { grid-template-columns: repeat(2, 1fr); } }
+
+  /* ---- Pillars ---- */
+  .pillars { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; }
+  .pillar { border: 1px solid var(--border); border-radius: 14px; padding: 24px 22px; background: var(--surface); }
+  .pillar .tag { font-family: var(--mono); font-size: 11px; letter-spacing: 0.1em; text-transform: uppercase; color: var(--accent); }
+  .pillar h3 { font-size: 19px; font-weight: 700; letter-spacing: -0.01em; margin: 12px 0 8px; }
+  .pillar p { font-size: 14px; color: var(--muted); margin: 0; }
+  @media (max-width: 720px) { .pillars { grid-template-columns: 1fr; } }
+
+  /* ---- Diagram ---- */
+  .diagram { display: grid; grid-template-columns: 1fr; gap: 14px; }
+  .proc {
+    border: 1.5px solid var(--border-strong); border-radius: 16px; padding: 22px;
+    background: var(--surface);
+  }
+  .proc-head { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; flex-wrap: wrap; margin-bottom: 18px; }
+  .proc-head .t { font-weight: 800; letter-spacing: -0.02em; font-size: 17px; }
+  .proc-head .s { font-family: var(--mono); font-size: 11px; color: var(--faint); }
+  .threads { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; }
+  .thread { background: var(--bg); border: 1px solid var(--border); border-radius: 10px; padding: 12px 12px; font-size: 12.5px; line-height: 1.3; }
+  .thread .k { font-family: var(--mono); font-size: 10px; letter-spacing: 0.08em; text-transform: uppercase; color: var(--accent); display: block; margin-bottom: 5px; }
+  .thread.main { border-color: var(--border-strong); }
+  @media (max-width: 820px) { .threads { grid-template-columns: repeat(2, 1fr); } }
+  @media (max-width: 460px) { .threads { grid-template-columns: 1fr; } }
+
+  .externals { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; }
+  .ext {
+    border: 1px dashed var(--border-strong); border-radius: 12px; padding: 14px 16px;
+    text-align: center; background: transparent;
+  }
+  .ext .name { font-weight: 700; font-size: 14px; }
+  .ext .role { font-size: 11.5px; color: var(--muted); margin-top: 3px; }
+  .flow-label { text-align: center; font-family: var(--mono); font-size: 11px; letter-spacing: 0.1em; text-transform: uppercase; color: var(--faint); }
+  @media (max-width: 720px) { .externals { grid-template-columns: repeat(2, 1fr); } }
+
+  /* ---- Subsystems table ---- */
+  .tbl-wrap { overflow-x: auto; border: 1px solid var(--border); border-radius: 14px; }
+  table { width: 100%; border-collapse: collapse; font-size: 13.5px; min-width: 640px; }
+  thead th {
+    text-align: left; font-family: var(--mono); font-size: 11px; letter-spacing: 0.08em; text-transform: uppercase;
+    color: var(--muted); font-weight: 500; padding: 14px 18px; border-bottom: 1px solid var(--border); background: var(--surface);
+  }
+  tbody td { padding: 14px 18px; border-bottom: 1px solid var(--border); vertical-align: top; }
+  tbody tr:last-child td { border-bottom: none; }
+  tbody td:first-child { font-weight: 600; white-space: nowrap; }
+  td .mono { font-family: var(--mono); font-size: 12px; color: var(--muted); }
+
+  /* ---- Flow steps ---- */
+  .steps { display: grid; gap: 1px; background: var(--border); border: 1px solid var(--border); border-radius: 14px; overflow: hidden; }
+  .step { background: var(--bg); display: grid; grid-template-columns: 52px 1fr; gap: 18px; padding: 20px 22px; align-items: start; }
+  .step .num { font-family: var(--mono); font-weight: 700; font-size: 15px; color: var(--accent); font-variant-numeric: tabular-nums; padding-top: 2px; }
+  .step .body h4 { margin: 0 0 5px; font-size: 15px; font-weight: 700; letter-spacing: -0.01em; }
+  .step .body p { margin: 0; font-size: 13.5px; color: var(--muted); }
+  .step .body code { font-family: var(--mono); font-size: 12px; background: var(--surface-2); padding: 1px 5px; border-radius: 5px; }
+
+  /* ---- Security chips ---- */
+  .chips { display: flex; flex-wrap: wrap; gap: 10px; }
+  .chip {
+    display: inline-flex; align-items: center; gap: 9px;
+    border: 1px solid var(--border); border-radius: 999px; padding: 9px 15px 9px 13px;
+    font-size: 13px; background: var(--surface);
+  }
+  .chip .mk { width: 7px; height: 7px; border-radius: 50%; background: var(--ok); flex: none; }
+
+  /* ---- Footer ---- */
+  footer { border-top: 1px solid var(--border); padding: 40px 0 64px; }
+  .cta {
+    display: inline-flex; align-items: center; gap: 10px;
+    font-family: var(--mono); font-size: 13px; text-decoration: none;
+    border: 1px solid var(--border-strong); border-radius: 999px; padding: 12px 20px;
+    background: var(--fg); color: var(--bg); font-weight: 600;
+  }
+  .foot-meta { font-family: var(--mono); font-size: 11px; color: var(--faint); margin-top: 22px; letter-spacing: 0.03em; }
+
+  @media (prefers-reduced-motion: no-preference) {
+    .cta { transition: transform .15s ease; }
+    .cta:hover { transform: translateY(-1px); }
+  }
+</style>
+</head>
+<body>
+
+<header class="bar">
+  <div class="wrap bar-in">
+    <a class="brand" href="#top">igeneris<span class="dot">.</span></a>
+    <span class="bar-meta">EVALUABOT · ARQUITECTURA</span>
+  </div>
+</header>
+
+<a id="top"></a>
+<div class="wrap hero">
+  <p class="kick">People Analytics interno</p>
+  <h1>EvaluaBot en una página.</h1>
+  <p class="lead">Recoge feedback de empleados por <b>Slack</b>, lo guarda en <b>Notion</b> como única base de datos y sintetiza informes con <b>Claude</b>. Un solo proceso Python orquesta el bot, la programación de ciclos y una API web para Career Advisors y administración.</p>
+  <div class="pills">
+    <span class="pill"><b>Python 3.11</b> + FastAPI</span>
+    <span class="pill"><b>React 19</b> + Vite</span>
+    <span class="pill"><b>Slack Bolt</b> Socket Mode</span>
+    <span class="pill"><b>Notion</b> como BD</span>
+    <span class="pill"><b>Claude</b> sonnet-4-6 / haiku-4-5</span>
+  </div>
+</div>
+
+<section>
+  <div class="wrap">
+    <p class="eyebrow">De un vistazo</p>
+    <div class="stats">
+      <div class="stat"><div class="n">1</div><div class="l">proceso; el canal de Slack ocupa el hilo principal</div></div>
+      <div class="stat"><div class="n">8<span class="u"> ×</span></div><div class="l">threads daemon: envíos, recordatorios y la API web</div></div>
+      <div class="stat"><div class="n">~20<span class="u">k</span></div><div class="l">líneas de backend Python en ~35 módulos</div></div>
+      <div class="stat"><div class="n">3</div><div class="l">integraciones externas: Slack · Notion · Claude</div></div>
+    </div>
+  </div>
+</section>
+
+<section>
+  <div class="wrap">
+    <p class="eyebrow">Los tres mundos</p>
+    <h2>Cada dato pasa por Slack, vive en Notion y se sintetiza con Claude.</h2>
+    <div class="pillars">
+      <div class="pillar">
+        <span class="tag">Canal · Slack Bolt</span>
+        <h3>Recogida por DM</h3>
+        <p>Socket Mode sobre WebSocket. Un único evento <span style="font-family:var(--mono);font-size:12px">message</span> enruta por hilo hacia tres flujos: evaluación de proyecto, Career Advisor y reflexión personal. Preguntas una a una, con audio transcrito por Slack.</p>
+      </div>
+      <div class="pillar">
+        <span class="tag">Datos · Notion</span>
+        <h3>La base de datos</h3>
+        <p>Sin ORM ni BD relacional. Todo se persiste en páginas y databases de Notion, creadas de forma idempotente: una tabla por empleado, listas maestras, calendario, preguntas y permisos. Caché en memoria con TTL de 5 min.</p>
+      </div>
+      <div class="pillar">
+        <span class="tag">IA · Anthropic</span>
+        <h3>Síntesis de informes</h3>
+        <p>Claude redacta informes de evaluación y anuales con citas verificadas (anti-alucinación en dos pasadas), resúmenes para el CA y un asistente que recorre la evaluación anual área por área. Caché en disco por huella.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section>
+  <div class="wrap">
+    <p class="eyebrow">Topología del proceso</p>
+    <h2>Un proceso, ocho hilos y tres servicios externos.</h2>
+    <div class="diagram">
+      <div class="proc">
+        <div class="proc-head">
+          <span class="t">bot.py → backend/main.py</span>
+          <span class="s">start_socket_mode() bloquea el hilo principal</span>
+        </div>
+        <div class="threads">
+          <div class="thread main"><span class="k">hilo principal</span>Slack Socket Mode (slack_bot · ca_reviews · personal_eval)</div>
+          <div class="thread"><span class="k">envío</span>Proyecto / CA / Personal (3 ciclos)</div>
+          <div class="thread"><span class="k">recordatorio</span>Proyecto / CA / Personal (3 ciclos)</div>
+          <div class="thread"><span class="k">web + api</span>Recordatorio web · API FastAPI (uvicorn :8000)</div>
+        </div>
+      </div>
+      <p class="flow-label">↕ &nbsp; entrada / salida &nbsp; ↕</p>
+      <div class="externals">
+        <div class="ext"><div class="name">Slack</div><div class="role">WebSocket · Bolt</div></div>
+        <div class="ext"><div class="name">Notion API</div><div class="role">almacén de datos</div></div>
+        <div class="ext"><div class="name">Anthropic</div><div class="role">informes / resúmenes</div></div>
+        <div class="ext"><div class="name">SMTP + React SPA</div><div class="role">emails · web :5173</div></div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section>
+  <div class="wrap">
+    <p class="eyebrow">Subsistemas</p>
+    <h2>Quién hace qué.</h2>
+    <div class="tbl-wrap">
+      <table>
+        <thead>
+          <tr><th>Subsistema</th><th>Transporte</th><th>Módulos clave</th><th>Estado</th></tr>
+        </thead>
+        <tbody>
+          <tr><td>Canal Slack</td><td>Socket Mode</td><td><span class="mono">slack_bot · ca_reviews · personal_eval</span></td><td>Memoria (dicts + locks)</td></tr>
+          <tr><td>Scheduling</td><td>Threads while-True</td><td><span class="mono">+ recordatorios_web</span></td><td>Calendario en Notion</td></tr>
+          <tr><td>API web</td><td>HTTP/JSON · FastAPI</td><td><span class="mono">backend/api/**</span></td><td>Sesiones en memoria + disco</td></tr>
+          <tr><td>Datos</td><td>Notion REST</td><td><span class="mono">notion_service</span> (4.845 líneas)</td><td>Notion es la BD</td></tr>
+          <tr><td>IA / informes</td><td>Anthropic REST</td><td><span class="mono">reports · skill_* · eval_anual_sesion</span></td><td>Caché en disco</td></tr>
+          <tr><td>Frontend</td><td>SPA estática</td><td><span class="mono">frontend/src/main.jsx</span> (~6.800 líneas)</td><td>local / sessionStorage</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+</section>
+
+<section>
+  <div class="wrap">
+    <p class="eyebrow">Recorrido end-to-end</p>
+    <h2>De un mensaje de Slack al informe anual del CA.</h2>
+    <div class="steps">
+      <div class="step">
+        <div class="num">01</div>
+        <div class="body"><h4>Envío programado</h4><p>Según el calendario de Notion, <code>enviar_una_evaluacion</code> abre un DM a cada empleado y registra la asignación en el tracking de cumplimiento.</p></div>
+      </div>
+      <div class="step">
+        <div class="num">02</div>
+        <div class="body"><h4>Respuesta en el hilo</h4><p>La máquina de estados hace las preguntas una a una y <code>guardar_en_notion</code> escribe una fila en <code>Evaluaciones - {evaluado}</code> según la relación jerárquica.</p></div>
+      </div>
+      <div class="step">
+        <div class="num">03</div>
+        <div class="body"><h4>Revisión del Career Advisor</h4><p>Cada 4 semanas el CA recibe su DM, revisa las evaluaciones de sus advisees y guarda su opinión consolidada (opcionalmente resumida por Claude).</p></div>
+      </div>
+      <div class="step">
+        <div class="num">04</div>
+        <div class="body"><h4>Evaluación anual asistida</h4><p>En la web, el asistente reúne 7 fuentes de Notion; Claude interpreta con citas verificadas y el CA acuerda área por área hasta generar el informe <code>.docx / .html</code>.</p></div>
+      </div>
+      <div class="step">
+        <div class="num">05</div>
+        <div class="body"><h4>Publicación y acceso</h4><p>El CA publica el informe final (se conservan 2 versiones) y concede acceso al empleado, que lo consulta desde su dashboard.</p></div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section>
+  <div class="wrap">
+    <p class="eyebrow">Seguridad</p>
+    <h2>Decisiones que toma el servidor, no el cliente.</h2>
+    <div class="chips">
+      <span class="chip"><span class="mk"></span>PBKDF2-SHA256 · 120k iteraciones</span>
+      <span class="chip"><span class="mk"></span>Solo el hash del token en el servidor</span>
+      <span class="chip"><span class="mk"></span>Identidad ligada al empleado por email</span>
+      <span class="chip"><span class="mk"></span>Rate limiting en auth y generación</span>
+      <span class="chip"><span class="mk"></span>Tipo y visibilidad recalculados por jerarquía</span>
+      <span class="chip"><span class="mk"></span>/api/files acotado por slug · rol · extensión</span>
+      <span class="chip"><span class="mk"></span>Informe final con CSP default-src 'none'</span>
+      <span class="chip"><span class="mk"></span>Defensa anti-inyección en cada prompt a Claude</span>
+      <span class="chip"><span class="mk"></span>Feedback bottom-to-top anónimo y confidencial</span>
+    </div>
+  </div>
+</section>
+
+<footer>
+  <div class="wrap">
+    <a class="cta" href="arquitectura.md">Ver el documento completo →</a>
+    <p class="foot-meta">Resumen generado a partir de una lectura completa del código · backend Python + frontend React · 2026-07-14</p>
+  </div>
+</footer>
+
+</body>
+</html>

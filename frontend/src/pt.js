@@ -63,6 +63,8 @@ export const PT = {
   "aep.activate_another": "Ativar outro projeto",
   "aep.activate_n_many": "Ativar avaliações ({n} selecionados)",
   "aep.activate_n_one": "Ativar avaliações ({n} selecionado)",
+  "aep.activate_solo": "Ativar avaliações (apenas tu)",
+  "aep.solo_hint": "Se não selecionares ninguém, o projeto será ativado apenas para ti.",
   "aep.activated": "Avaliações ativadas para {n} pessoa(s). Foi-lhes enviada uma notificação pelo Slack.",
   "aep.activating": "A ativar...",
   "aep.back_home": "Voltar ao início",

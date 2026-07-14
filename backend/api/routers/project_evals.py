@@ -138,7 +138,9 @@ def activar_evaluaciones_proyecto(datos: dict = Body(default={}), session=Depend
     empleados = datos.get("empleados", [])
     if not proyecto:
         return JSONResponse({"error": t("pe.err_missing_project", idi)}, status_code=400)
-    if not empleados or not isinstance(empleados, list):
+    # Lista vacía permitida: activar_evaluaciones_empleados siempre incluye al manager,
+    # así que se puede activar un proyecto "en solitario" (sin más miembros).
+    if not isinstance(empleados, list):
         return JSONResponse({"error": t("pe.err_select_employee", idi)}, status_code=400)
     return activar_evaluaciones_empleados(manager, proyecto, empleados, idi)
 

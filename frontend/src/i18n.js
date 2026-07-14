@@ -488,6 +488,8 @@ export const STRINGS = {
   "aep.activating": { es: "Activando...", en: "Activating..." },
   "aep.activate_n_one": { es: "Activar evaluaciones ({n} seleccionado)", en: "Activate evaluations ({n} selected)" },
   "aep.activate_n_many": { es: "Activar evaluaciones ({n} seleccionados)", en: "Activate evaluations ({n} selected)" },
+  "aep.activate_solo": { es: "Activar evaluaciones (solo tú)", en: "Activate evaluations (only you)" },
+  "aep.solo_hint": { es: "Si no seleccionas a nadie, el proyecto se activará solo para ti.", en: "If you don’t select anyone, the project will be activated only for you." },
 
   // --- Evaluaciones de proyecto: listado (EvaluacionesProyectoPage) ---
   "ep.fill_eval": { es: "Rellenar evaluación", en: "Fill in evaluation" },

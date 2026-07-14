@@ -1,0 +1,327 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>EvaluaBot · Mapa de comunicación</title>
+<style>
+  :root {
+    --bg: #ffffff;
+    --surface: #f5f4f2;
+    --surface-2: #edece9;
+    --fg: #0b0a09;
+    --muted: rgba(11, 10, 9, 0.56);
+    --faint: rgba(11, 10, 9, 0.40);
+    --border: #dcdad6;
+    --border-strong: #0b0a09;
+    --accent: #f23c14;
+    --accent-soft: rgba(242, 60, 20, 0.08);
+    --wire: rgba(11, 10, 9, 0.30);
+    --sans: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+    --mono: ui-monospace, "SF Mono", "Cascadia Code", "Roboto Mono", Menlo, Consolas, monospace;
+    --maxw: 1080px;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #0c0c0e; --surface: #161619; --surface-2: #1f1f23; --fg: #f3f2f0;
+      --muted: rgba(243,242,240,0.60); --faint: rgba(243,242,240,0.42); --border: #2a2a2f;
+      --border-strong: #55555d; --accent: #ff5a32; --accent-soft: rgba(255,90,50,0.12);
+      --wire: rgba(243,242,240,0.34);
+    }
+  }
+  :root[data-theme="light"] {
+    --bg:#ffffff; --surface:#f5f4f2; --surface-2:#edece9; --fg:#0b0a09;
+    --muted:rgba(11,10,9,.56); --faint:rgba(11,10,9,.40); --border:#dcdad6;
+    --border-strong:#0b0a09; --accent:#f23c14; --accent-soft:rgba(242,60,20,.08); --wire:rgba(11,10,9,.30);
+  }
+  :root[data-theme="dark"] {
+    --bg:#0c0c0e; --surface:#161619; --surface-2:#1f1f23; --fg:#f3f2f0;
+    --muted:rgba(243,242,240,.60); --faint:rgba(243,242,240,.42); --border:#2a2a2f;
+    --border-strong:#55555d; --accent:#ff5a32; --accent-soft:rgba(255,90,50,.12); --wire:rgba(243,242,240,.34);
+  }
+
+  * { box-sizing: border-box; }
+  body { margin:0; background:var(--bg); color:var(--fg); font-family:var(--sans); line-height:1.5; -webkit-font-smoothing:antialiased; }
+  h1,h2,h3,h4,p { margin:0; }
+  .wrap { max-width:var(--maxw); margin:0 auto; padding:0 clamp(20px,5vw,56px); }
+  a { color:inherit; }
+  .eyebrow { font-family:var(--mono); font-size:11px; letter-spacing:.18em; text-transform:uppercase; color:var(--faint); margin:0 0 16px; }
+  h2 { font-size:clamp(21px,3vw,28px); font-weight:800; letter-spacing:-.02em; line-height:1.1; text-wrap:balance; margin:0 0 8px; }
+  .sub { color:var(--muted); font-size:15px; max-width:64ch; margin:0 0 30px; }
+  section { padding:clamp(42px,6vw,72px) 0; border-top:1px solid var(--border); }
+
+  header.bar { position:sticky; top:0; z-index:10; background:color-mix(in srgb,var(--bg) 86%,transparent); backdrop-filter:saturate(1.4) blur(10px); border-bottom:1px solid var(--border); }
+  .bar-in { display:flex; align-items:center; justify-content:space-between; height:60px; }
+  .brand { font-weight:800; letter-spacing:-.03em; font-size:20px; text-decoration:none; }
+  .brand .dot { color:var(--accent); }
+  .bar-meta { font-family:var(--mono); font-size:11px; color:var(--faint); }
+
+  .hero { padding:clamp(52px,8vw,92px) 0 clamp(30px,5vw,52px); }
+  .hero .kick { font-family:var(--mono); font-size:12px; letter-spacing:.16em; text-transform:uppercase; color:var(--accent); margin:0 0 20px; }
+  .hero h1 { font-size:clamp(34px,6.5vw,68px); font-weight:800; letter-spacing:-.045em; line-height:.98; margin:0 0 22px; text-wrap:balance; }
+  .hero p.lead { font-size:clamp(16px,2vw,20px); color:var(--muted); max-width:60ch; }
+
+  /* ---- Legend ---- */
+  .legend { display:grid; grid-template-columns:repeat(4,1fr); gap:1px; background:var(--border); border:1px solid var(--border); border-radius:14px; overflow:hidden; }
+  .ch { background:var(--bg); padding:16px 16px; }
+  .ch .top { display:flex; align-items:center; gap:9px; }
+  .ch .glyph { font-family:var(--mono); font-size:12px; font-weight:700; color:var(--accent); }
+  .ch .nm { font-weight:700; font-size:13.5px; }
+  .ch .d { font-size:12px; color:var(--muted); margin-top:6px; line-height:1.35; }
+  .ln { width:26px; height:0; border-top:2px var(--stroke,solid) var(--wire); flex:none; }
+  @media (max-width:820px){ .legend { grid-template-columns:repeat(2,1fr);} }
+  @media (max-width:460px){ .legend { grid-template-columns:1fr;} }
+
+  /* ---- Wiring map ---- */
+  .map { border:1px solid var(--border); border-radius:18px; padding:clamp(16px,3vw,30px); background:var(--surface); }
+  .cols2 { display:grid; grid-template-columns:1fr 1fr; gap:clamp(12px,3vw,34px); }
+  .colhead { font-family:var(--mono); font-size:11px; letter-spacing:.12em; text-transform:uppercase; color:var(--faint); text-align:center; margin-bottom:10px; }
+  .node { border:1px solid var(--border-strong); border-radius:12px; background:var(--bg); padding:14px 16px; text-align:center; }
+  .node .t { font-weight:700; font-size:14.5px; letter-spacing:-.01em; }
+  .node .m { font-family:var(--mono); font-size:11.5px; color:var(--muted); margin-top:5px; line-height:1.4; }
+  .node.ext { border-style:dashed; background:transparent; }
+  .node.shared { border-width:1.5px; background:var(--surface-2); }
+  .node.hub { border-color:var(--accent); }
+  .node.hub .t { color:var(--accent); }
+
+  /* connectors */
+  .conn { display:flex; flex-direction:column; align-items:center; gap:0; padding:4px 0; }
+  .conn .chip { font-family:var(--mono); font-size:11px; color:var(--fg); background:var(--bg); border:1px solid var(--border); border-radius:999px; padding:4px 11px; letter-spacing:.01em; white-space:nowrap; }
+  .conn .chip .g { color:var(--accent); font-weight:700; }
+  .conn .stem { width:0; height:14px; border-left:2px solid var(--wire); }
+  .conn .stem.dash { border-left-style:dashed; }
+  .conn .head { color:var(--wire); font-size:13px; line-height:.6; margin-top:-3px; }
+  .conn.row2 { display:grid; grid-template-columns:1fr 1fr; gap:clamp(12px,3vw,34px); }
+  .conn.row2 > div { display:flex; flex-direction:column; align-items:center; }
+
+  .full { margin:0; }
+  .maprow { padding:8px 0; }
+
+  .loop { margin-top:16px; border:1px dashed var(--accent); border-radius:12px; padding:12px 16px; background:var(--accent-soft); font-size:12.5px; color:var(--fg); }
+  .loop b { font-family:var(--mono); font-weight:700; }
+
+  /* ---- who calls who table ---- */
+  .tbl-wrap { overflow-x:auto; border:1px solid var(--border); border-radius:14px; }
+  table { width:100%; border-collapse:collapse; font-size:13px; min-width:720px; }
+  thead th { text-align:left; font-family:var(--mono); font-size:11px; letter-spacing:.06em; text-transform:uppercase; color:var(--muted); font-weight:500; padding:13px 16px; border-bottom:1px solid var(--border); background:var(--surface); }
+  tbody td { padding:12px 16px; border-bottom:1px solid var(--border); vertical-align:top; }
+  tbody tr:last-child td { border-bottom:none; }
+  td.a { font-weight:600; white-space:nowrap; }
+  td .via { font-family:var(--mono); font-size:11.5px; color:var(--accent); }
+  td .mono { font-family:var(--mono); font-size:11.5px; color:var(--muted); }
+
+  /* ---- traces ---- */
+  .trace { border:1px solid var(--border); border-radius:14px; overflow:hidden; margin-bottom:18px; }
+  .trace .th { padding:14px 18px; background:var(--surface); border-bottom:1px solid var(--border); font-weight:700; font-size:14px; display:flex; align-items:center; gap:10px; }
+  .trace .th .tag { font-family:var(--mono); font-size:10px; letter-spacing:.1em; text-transform:uppercase; color:var(--accent); border:1px solid var(--border); border-radius:999px; padding:3px 9px; }
+  .hop { display:grid; grid-template-columns:118px 1fr; gap:14px; padding:13px 18px; border-bottom:1px solid var(--border); align-items:baseline; }
+  .hop:last-child { border-bottom:none; }
+  .hop .chan { font-family:var(--mono); font-size:10.5px; color:var(--accent); letter-spacing:.02em; padding-top:2px; }
+  .hop .desc { font-size:13.5px; }
+  .hop .desc code { font-family:var(--mono); font-size:12px; background:var(--surface-2); padding:1px 5px; border-radius:5px; }
+  .hop .desc b { font-weight:700; }
+
+  footer { border-top:1px solid var(--border); padding:38px 0 60px; }
+  .cta { display:inline-flex; align-items:center; gap:10px; font-family:var(--mono); font-size:13px; text-decoration:none; border:1px solid var(--border-strong); border-radius:999px; padding:11px 20px; background:var(--fg); color:var(--bg); font-weight:600; }
+  .links { display:flex; gap:12px; flex-wrap:wrap; }
+  .cta.ghost { background:transparent; color:var(--fg); }
+  .foot-meta { font-family:var(--mono); font-size:11px; color:var(--faint); margin-top:20px; }
+</style>
+</head>
+<body>
+
+<header class="bar">
+  <div class="wrap bar-in">
+    <a class="brand" href="#top">igeneris<span class="dot">.</span></a>
+    <span class="bar-meta">EVALUABOT · COMUNICACIÓN</span>
+  </div>
+</header>
+
+<a id="top"></a>
+<div class="wrap hero">
+  <p class="kick">Cómo está conectado todo</p>
+  <h1>El cableado del sistema.</h1>
+  <p class="lead">Qué habla con qué, por qué canal y qué viaja por él. Tres planos —Slack, Web e IA— convergen en una única capa de datos (<span style="font-family:var(--mono);font-size:.9em">notion_service</span>) sobre Notion.</p>
+</div>
+
+<!-- ============ LEGEND ============ -->
+<section>
+  <div class="wrap">
+    <p class="eyebrow">Canales de comunicación</p>
+    <h2>Ocho formas de hablar.</h2>
+    <p class="sub">Cada conexión del mapa usa uno de estos canales. Los internos (llamada de función, memoria, disco) son dentro del mismo proceso; los externos cruzan la red.</p>
+    <div class="legend">
+      <div class="ch"><div class="top"><span class="glyph">⇅ WS</span><span class="nm">WebSocket</span></div><div class="d">Slack Socket Mode. Eventos y acciones de botón entran por un socket persistente; sin servidor HTTP entrante.</div></div>
+      <div class="ch"><div class="top"><span class="glyph">⇅ HTTP</span><span class="nm">HTTP + Bearer</span></div><div class="d">React ⇄ FastAPI. JSON sobre HTTPS con <span style="font-family:var(--mono)">Authorization: Bearer</span>. CORS gestionado por el backend.</div></div>
+      <div class="ch"><div class="top"><span class="glyph">→ fn</span><span class="nm">Llamada de función</span></div><div class="d">Import directo entre módulos Python del mismo proceso. Es la mayoría del "pegamento" interno.</div></div>
+      <div class="ch"><div class="top"><span class="glyph">↔ mem</span><span class="nm">Estado en memoria</span></div><div class="d">Dicts compartidos en <span style="font-family:var(--mono)">state.py</span> protegidos con <span style="font-family:var(--mono)">RLock</span>. Estado conversacional de Slack.</div></div>
+      <div class="ch"><div class="top"><span class="glyph">◇ REST</span><span class="nm">Notion REST</span></div><div class="d">notion-client. Lectura/escritura de páginas y databases. Única persistencia real.</div></div>
+      <div class="ch"><div class="top"><span class="glyph">◇ REST</span><span class="nm">Anthropic REST</span></div><div class="d">SDK anthropic. <span style="font-family:var(--mono)">messages.create</span> a Claude para informes y resúmenes.</div></div>
+      <div class="ch"><div class="top"><span class="glyph">✉ SMTP</span><span class="nm">SMTP</span></div><div class="d">Emails de reset de contraseña y códigos de registro (<span style="font-family:var(--mono)">users.py</span>).</div></div>
+      <div class="ch"><div class="top"><span class="glyph">▤ disk</span><span class="nm">Ficheros en disco</span></div><div class="d">Informes y cachés en <span style="font-family:var(--mono)">dashboard_web/</span>, servidos luego por <span style="font-family:var(--mono)">/api/files</span>.</div></div>
+    </div>
+  </div>
+</section>
+
+<!-- ============ WIRING MAP ============ -->
+<section>
+  <div class="wrap">
+    <p class="eyebrow">Mapa por capas</p>
+    <h2>De los usuarios a Notion, capa por capa.</h2>
+    <p class="sub">Dos columnas (plano Slack · plano Web) descienden hasta fundirse en la lógica de negocio, la capa de datos y los servicios externos. Las etiquetas de cada conector dicen el canal y qué viaja.</p>
+
+    <div class="map">
+      <!-- L1: actores -->
+      <div class="cols2 maprow">
+        <div>
+          <div class="colhead">Plano Slack</div>
+          <div class="node"><div class="t">Empleados · Career Advisors</div><div class="m">app de Slack (DM)</div></div>
+        </div>
+        <div>
+          <div class="colhead">Plano Web</div>
+          <div class="node"><div class="t">Navegador · React SPA</div><div class="m">frontend/src/main.jsx</div></div>
+        </div>
+      </div>
+
+      <!-- C1 -->
+      <div class="conn row2 maprow">
+        <div>
+          <span class="chip"><span class="g">⇅ WS</span> &nbsp;Socket Mode · eventos + acciones</span>
+          <span class="stem"></span><span class="head">▼</span>
+        </div>
+        <div>
+          <span class="chip"><span class="g">⇅ HTTP</span> &nbsp;JSON + Bearer token</span>
+          <span class="stem"></span><span class="head">▼</span>
+        </div>
+      </div>
+
+      <!-- L2: entrypoints -->
+      <div class="cols2 maprow">
+        <div class="node hub"><div class="t">Handlers Slack Bolt</div><div class="m">slack_bot · ca_reviews · personal_eval<br>@event("message") · @action(...)</div></div>
+        <div class="node hub"><div class="t">API FastAPI</div><div class="m">backend/api/routers/*<br>Depends(require_session)</div></div>
+      </div>
+
+      <!-- C2 -->
+      <div class="conn row2 maprow">
+        <div>
+          <span class="chip"><span class="g">↔ mem</span> &nbsp;state.py · conversación (dict+RLock)</span>
+          <span class="stem"></span><span class="head">▼</span>
+        </div>
+        <div>
+          <span class="chip"><span class="g">→ fn</span> &nbsp;llamada directa</span>
+          <span class="stem"></span><span class="head">▼</span>
+        </div>
+      </div>
+
+      <!-- L3: business shared -->
+      <div class="maprow">
+        <div class="node shared"><div class="t">Lógica de negocio</div><div class="m">project_evals · evaluaciones_extra · eval_tracking · users · reports · skill_informes_anual · skill_opiniones_ca · skill_resumen_evaluacion · eval_anual_sesion</div></div>
+      </div>
+
+      <!-- C3 -->
+      <div class="conn maprow">
+        <span class="chip"><span class="g">→ fn</span> &nbsp;lectura / escritura de datos</span>
+        <span class="stem"></span><span class="head">▼</span>
+      </div>
+
+      <!-- L4: data layer -->
+      <div class="maprow">
+        <div class="node shared"><div class="t">notion_service.py &nbsp;·&nbsp; capa de datos</div><div class="m">creación idempotente · mapeo propiedad↔dict · caché memoria (TTL 5 min)</div></div>
+      </div>
+
+      <!-- C bus -->
+      <div class="conn maprow">
+        <span class="chip"><span class="g">→ fn</span> &nbsp;SDKs compartidos</span>
+        <span class="stem"></span><span class="head">▼</span>
+      </div>
+      <div class="maprow">
+        <div class="node hub"><div class="t">clients.py &nbsp;·&nbsp; bus de clientes</div><div class="m">slack_app (Bolt) &nbsp;·&nbsp; notion (NotionClient) &nbsp;·&nbsp; anthropic_client</div></div>
+      </div>
+
+      <!-- C4 -->
+      <div class="conn maprow"><span class="stem dash"></span><span class="head">▼</span></div>
+
+      <!-- L5: externals -->
+      <div class="cols2 maprow" style="grid-template-columns:repeat(4,1fr);">
+        <div class="node ext"><div class="t">Slack</div><div class="m">◇ WS</div></div>
+        <div class="node ext"><div class="t">Notion API</div><div class="m">◇ REST · la BD</div></div>
+        <div class="node ext"><div class="t">Anthropic</div><div class="m">◇ REST · Claude</div></div>
+        <div class="node ext"><div class="t">SMTP</div><div class="m">✉ emails</div></div>
+      </div>
+
+      <div class="loop">
+        <b>▤ Bucle de ficheros:</b> las <span style="font-family:var(--mono)">skill_*</span> escriben informes (.html/.pdf/.docx) en <b>dashboard_web/</b> → <span style="font-family:var(--mono)">/api/files/{archivo}</span> los sirve al navegador con control de acceso por rol · slug · extensión. El estado (sesiones, cachés de informe) también persiste ahí.
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ============ WHO CALLS WHO ============ -->
+<section>
+  <div class="wrap">
+    <p class="eyebrow">Quién llama a quién</p>
+    <h2>Las conexiones principales, una a una.</h2>
+    <div class="tbl-wrap">
+      <table>
+        <thead>
+          <tr><th>Origen</th><th>Canal</th><th>Destino</th><th>Qué viaja</th></tr>
+        </thead>
+        <tbody>
+          <tr><td class="a">Slack (usuario)</td><td><span class="via">⇅ WebSocket</span></td><td class="a">Handlers Bolt</td><td>Eventos de mensaje en hilo y clics de botón (action_id)</td></tr>
+          <tr><td class="a">Handlers Bolt</td><td><span class="via">↔ memoria</span></td><td class="a">state.py</td><td>Estado conversacional por <span class="mono">user_id</span> (modo, respuestas, ts del hilo)</td></tr>
+          <tr><td class="a">Handlers Bolt</td><td><span class="via">→ función</span></td><td class="a">notion_service · eval_tracking</td><td>Guardar evaluación, marcar completada, leer preguntas/empleados</td></tr>
+          <tr><td class="a">React SPA</td><td><span class="via">⇅ HTTP+Bearer</span></td><td class="a">FastAPI routers</td><td>Peticiones JSON; el token va en la cabecera, nunca en la URL</td></tr>
+          <tr><td class="a">FastAPI routers</td><td><span class="via">→ función</span></td><td class="a">users.py</td><td><span class="mono">require_session</span> valida el hash del token; resuelve rol/persona</td></tr>
+          <tr><td class="a">FastAPI routers</td><td><span class="via">→ función</span></td><td class="a">project_evals · reports · eval_anual_sesion…</td><td>Delegan la lógica; el servidor recalcula tipo y visibilidad por jerarquía</td></tr>
+          <tr><td class="a">reports · skill_*</td><td><span class="via">◇ Anthropic</span></td><td class="a">Claude (vía clients.py)</td><td><span class="mono">messages.create</span>: system + evidencia con citas; salida JSON/texto</td></tr>
+          <tr><td class="a">notion_service · eval_tracking</td><td><span class="via">◇ Notion</span></td><td class="a">Notion API (vía clients.py)</td><td>Query/crear/actualizar páginas y databases; paginado de 100</td></tr>
+          <tr><td class="a">skill_* · eval_anual_sesion</td><td><span class="via">▤ disco</span></td><td class="a">dashboard_web/</td><td>Escriben .html/.pdf/.docx + cachés por huella SHA-256</td></tr>
+          <tr><td class="a">React SPA</td><td><span class="via">⇅ HTTP+Bearer</span></td><td class="a">/api/files</td><td>Descarga el informe (fetch+blob); acceso acotado por slug/rol</td></tr>
+          <tr><td class="a">users.py</td><td><span class="via">✉ SMTP</span></td><td class="a">Servidor de correo</td><td>Enlace de reset (30 min) y código de registro (6 dígitos)</td></tr>
+          <tr><td class="a">Ciclos (threads)</td><td><span class="via">→ función</span></td><td class="a">notion_service (calendario)</td><td>Leen fecha base + frecuencia; deciden cuándo abrir el DM</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+</section>
+
+<!-- ============ TRACES ============ -->
+<section>
+  <div class="wrap">
+    <p class="eyebrow">Trazas de extremo a extremo</p>
+    <h2>Un dato viajando por el sistema.</h2>
+    <p class="sub">Dos recorridos completos, salto a salto, con el canal usado en cada tramo.</p>
+
+    <div class="trace">
+      <div class="th"><span class="tag">Slack</span> Un empleado evalúa a un compañero</div>
+      <div class="hop"><div class="chan">→ función (thread)</div><div class="desc"><b>Envío programado:</b> el ciclo lee el calendario en Notion y <code>enviar_una_evaluacion</code> abre el DM.</div></div>
+      <div class="hop"><div class="chan">◇ Notion</div><div class="desc"><code>registrar_envio</code> anota la asignación en la tabla de cumplimiento.</div></div>
+      <div class="hop"><div class="chan">⇅ WebSocket</div><div class="desc">El empleado responde en el hilo → llega el evento <code>message</code> al handler.</div></div>
+      <div class="hop"><div class="chan">↔ memoria</div><div class="desc">La máquina de estados avanza en <code>state.conversaciones[user_id]</code> y hace la siguiente pregunta.</div></div>
+      <div class="hop"><div class="chan">◇ Notion</div><div class="desc"><code>guardar_en_notion</code> crea la fila en <code>Evaluaciones - {evaluado}</code> según la relación jerárquica; <code>marcar_completada</code> cierra el tracking.</div></div>
+    </div>
+
+    <div class="trace">
+      <div class="th"><span class="tag">Web + IA</span> El CA genera un informe anual</div>
+      <div class="hop"><div class="chan">⇅ HTTP+Bearer</div><div class="desc">El CA pulsa "Generar" en la SPA → <code>POST /api/generar-anual</code> con el token.</div></div>
+      <div class="hop"><div class="chan">→ función</div><div class="desc">El router valida sesión (<code>require_session</code>) y llama a <code>generar_informe_anual</code>.</div></div>
+      <div class="hop"><div class="chan">◇ Notion</div><div class="desc"><code>notion_service</code> reúne las 7 fuentes del empleado (mensuales, proyecto, opiniones CA, objetivos…).</div></div>
+      <div class="hop"><div class="chan">◇ Anthropic</div><div class="desc">Claude interpreta con citas obligatorias; una 2ª llamada audita las afirmaciones no soportadas.</div></div>
+      <div class="hop"><div class="chan">▤ disco</div><div class="desc">Se escriben <code>informe_anual_{slug}.docx/.html</code> en <code>dashboard_web/</code> + caché por huella.</div></div>
+      <div class="hop"><div class="chan">⇅ HTTP+Bearer</div><div class="desc">La SPA abre el fichero vía <code>/api/files</code> (fetch+blob); acceso comprobado por rol y slug.</div></div>
+    </div>
+  </div>
+</section>
+
+<footer>
+  <div class="wrap">
+    <div class="links">
+      <a class="cta" href="arquitectura.md">Documento completo →</a>
+      <a class="cta ghost" href="arquitectura_resumen.html">Resumen visual →</a>
+    </div>
+    <p class="foot-meta">Mapa de comunicación · un proceso Python, tres planos, una capa de datos · 2026-07-14</p>
+  </div>
+</footer>
+
+</body>
+</html>

@@ -62,6 +62,7 @@ from backend.notion_service import (
     _extraer_titulo_pagina,
     _tipo_objeto_busqueda_bbdd,
 )
+from backend.utils import normalizar_nombre
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
 log = logging.getLogger("migration")
@@ -141,7 +142,7 @@ def buscar_global(nombre: str) -> str | None:
                     titulo = _extraer_titulo_bbdd(item)
                 else:
                     titulo = _extraer_titulo_pagina(item)
-                if titulo.strip().lower() == nombre.strip().lower():
+                if normalizar_nombre(titulo) == normalizar_nombre(nombre):
                     return item["id"]
         except Exception:
             pass

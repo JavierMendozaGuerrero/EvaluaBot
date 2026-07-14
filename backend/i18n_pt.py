@@ -63,6 +63,7 @@ TEXTOS_PT = {
     "bc.btn_hide_evals": "Ocultar",
     "bc.btn_save_yes": "✅ Sim, guardar",
     "bc.btn_show_evals": "Ver avaliações",
+    "bc.evals_modal_title": "Avaliações",
     "bc.cannot_save_not_associated": "Não consigo guardar esta opinião: *{advisee}* não aparece associado a ti em `Lista CA`.\nOs teus advisees atuais:\n{opcoes}",
     "bc.clarify_claude": "Responde `sim` para gerar um resumo com Claude, ou `não` para continuar diretamente.",
     "bc.claude_no_update": "❌ Não, continuar sem resumo",

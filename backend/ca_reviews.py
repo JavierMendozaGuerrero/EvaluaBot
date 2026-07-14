@@ -67,6 +67,10 @@ ca_dm_canal: dict = {}                 # user_id -> dm_channel_id
 ca_hora_dm: dict = {}                  # user_id -> timestamp de envío
 ca_ultimo_recordatorio_dm: dict = {}   # user_id -> timestamp del último recordatorio
 conversaciones_ca: dict = {}           # user_id -> estado de conversación
+# canal DM -> {"ts", "texto"}: último mensaje del hilo con botones vivos, para
+# retirárselos cuando llega un mensaje nuevo o se pulsa otro botón (ver helpers
+# más abajo). Los mensajes de "Ver evaluaciones" no se registran aquí.
+_ca_botones_transitorios: dict = {}
 _lock = threading.Lock()
 _cache_bbdd: dict = {}
 _cache_nombre_usuario: dict = {}
@@ -488,6 +492,70 @@ def _valor_desplegable(tipo: str, advisee: str) -> str:
     return json.dumps({"t": tipo, "a": advisee})
 
 
+# ---------------------------------------------------------------------------
+# Botones "de un solo uso": retirar los de mensajes obsoletos
+# ---------------------------------------------------------------------------
+# Mismo patrón que la evaluación mensual (slack_bot.py): recordamos el último
+# mensaje con botones de cada hilo (clave = canal DM, porque la CA transcurre en
+# un DM 1:1) para poder retirarle los botones cuando llega un mensaje nuevo o se
+# pulsa otro botón. Los mensajes de "Ver evaluaciones" NO se registran ni se
+# cierran al pulsarlos: sus botones se conservan siempre.
+
+def _recordar_botones_ca(channel: str, resp, texto: str) -> None:
+    """Guarda el mensaje interactivo recién enviado como el último con botones vivos."""
+    try:
+        ts = resp.get("ts") if isinstance(resp, dict) else resp["ts"]
+    except Exception:
+        ts = None
+    if channel and ts:
+        _ca_botones_transitorios[channel] = {"ts": ts, "texto": texto or " "}
+
+
+def _olvidar_botones_ca(channel: str) -> None:
+    """Descarta el puntero al último mensaje con botones sin editarlo (ya lo hizo el handler)."""
+    _ca_botones_transitorios.pop(channel, None)
+
+
+def _quitar_botones_anteriores_ca(channel: str, client=None) -> None:
+    """Retira los botones del último mensaje interactivo del hilo (si sigue vivo)."""
+    info = _ca_botones_transitorios.pop(channel, None)
+    if not info:
+        return
+    cli = client or slack_app.client
+    try:
+        cli.chat_update(
+            channel=channel,
+            ts=info["ts"],
+            blocks=[{"type": "section", "text": {"type": "mrkdwn", "text": info["texto"]}}],
+            text=info["texto"],
+        )
+    except Exception:
+        pass
+
+
+def _cerrar_botones_click_ca(body, client=None) -> None:
+    """Quita los botones del mensaje que se acaba de pulsar (conserva su texto)."""
+    msg = body.get("message", {}) or {}
+    ch = (body.get("channel") or {}).get("id")
+    ts = msg.get("ts")
+    _ca_botones_transitorios.pop(ch, None)
+    if not ch or not ts:
+        return
+    bloques = [b for b in (msg.get("blocks") or []) if b.get("type") != "actions"]
+    if not bloques:
+        bloques = [{"type": "section", "text": {"type": "mrkdwn", "text": msg.get("text") or " "}}]
+    cli = client or slack_app.client
+    try:
+        cli.chat_update(
+            channel=ch,
+            ts=ts,
+            blocks=bloques,
+            text=msg.get("text") or " ",
+        )
+    except Exception:
+        pass
+
+
 def _bloques_resumen_colapsado(tipo: str, advisee: str, idioma: str) -> list:
     """Vista plegada de un tipo: solo la cabecera + botón para desplegar."""
     return [
@@ -514,28 +582,27 @@ def _bloques_resumen_vacio(tipo: str, advisee: str, idioma: str) -> list:
     ]
 
 
-def _bloques_resumen_expandido(tipo: str, advisee: str, resumen: str, idioma: str) -> list:
-    """Vista desplegada de un tipo: cabecera + evaluaciones + botón para volver a plegar."""
+def _build_resumen_ca_view(tipo: str, advisee: str, resumen: str, idioma: str) -> dict:
+    """Modal con las evaluaciones de un tipo recibidas por el advisee (se abre al
+    pulsar 'Ver evaluaciones', en vez de desplegarse dentro del hilo)."""
     secciones = [
         {"type": "section", "text": {"type": "mrkdwn", "text": trozo}}
         for trozo in _chunk_mrkdwn(resumen)
+    ] if resumen else [
+        {"type": "section", "text": {"type": "mrkdwn", "text": t("bc.sin_evals_tipo", idioma)}}
     ]
-    return [
+    blocks = [
         {"type": "section", "text": {"type": "mrkdwn", "text": _header_por_tipo(tipo, advisee, idioma)}},
         {"type": "divider"},
         *secciones,
-        {
-            "type": "actions",
-            "elements": [
-                {
-                    "type": "button",
-                    "text": {"type": "plain_text", "text": t("bc.btn_hide_evals", idioma), "emoji": True},
-                    "value": _valor_desplegable(tipo, advisee),
-                    "action_id": "ca_ocultar_evaluaciones",
-                },
-            ],
-        },
     ]
+    return {
+        "type": "modal",
+        "callback_id": "ca_resumen_ver",
+        "title": {"type": "plain_text", "text": t("bc.evals_modal_title", idioma)},
+        "close": {"type": "plain_text", "text": t("bm.close", idioma)},
+        "blocks": blocks[:100],
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -847,6 +914,7 @@ def _enviar_lista_advisees(user_id, channel, thread_ts, estado, idioma, logger, 
         quitar_pendiente("ca", user_id)
         marcar_completada_por_slack_id(user_id, "ca")
         _editar_dm_inicial_ca(user_id, idioma)
+        _quitar_botones_anteriores_ca(channel)
         slack_app.client.chat_postMessage(
             channel=channel, thread_ts=thread_ts, text=prefijo + t("bc.all_advisees_done", idioma),
         )
@@ -871,13 +939,15 @@ def _enviar_lista_advisees(user_id, channel, thread_ts, estado, idioma, logger, 
             {"type": "section", "text": {"type": "mrkdwn", "text": texto_header}},
             {"type": "actions", "elements": elementos},
         ] + fila_atras("atras_ca", "bc.back_btn", estado, idioma)
-        slack_app.client.chat_postMessage(
+        resp = slack_app.client.chat_postMessage(
             channel=channel,
             thread_ts=thread_ts,
             text=texto_header,
             blocks=blocks,
         )
+        _recordar_botones_ca(channel, resp, texto_header)
     else:
+        _quitar_botones_anteriores_ca(channel)
         slack_app.client.chat_postMessage(channel=channel, thread_ts=thread_ts, text=texto_header)
 
 
@@ -903,9 +973,10 @@ def _enviar_pregunta_permiso_claude(channel, thread_ts, idioma, estado):
             ],
         },
     ] + fila_atras("atras_ca", "bc.back_btn", estado, idioma)
-    slack_app.client.chat_postMessage(
+    resp = slack_app.client.chat_postMessage(
         channel=channel, thread_ts=thread_ts, text=t("bc.claude_summary_q", idioma), blocks=blocks,
     )
+    _recordar_botones_ca(channel, resp, t("bc.claude_summary_q", idioma))
 
 
 def _enviar_pregunta_opinion(channel, thread_ts, idioma, estado):
@@ -923,7 +994,8 @@ def _enviar_pregunta_opinion(channel, thread_ts, idioma, estado):
     else:
         texto = f"✍️ {preguntas.get('opinion_con_claude', '')}"
     bloques = [{"type": "section", "text": {"type": "mrkdwn", "text": texto}}] + fila_atras("atras_ca", "bc.back_btn", estado, idioma)
-    slack_app.client.chat_postMessage(channel=channel, thread_ts=thread_ts, text=texto, blocks=bloques)
+    resp = slack_app.client.chat_postMessage(channel=channel, thread_ts=thread_ts, text=texto, blocks=bloques)
+    _recordar_botones_ca(channel, resp, texto)
 
 
 def _enviar_confirmacion_ca(channel, thread_ts, idioma, estado):
@@ -943,27 +1015,31 @@ def _enviar_confirmacion_ca(channel, thread_ts, idioma, estado):
     ]
     if tiene_historial(estado):
         elementos.append(boton_atras("atras_ca", "bc.back_btn", idioma))
-    slack_app.client.chat_postMessage(
+    bloques = [
+        {"type": "section", "text": {"type": "mrkdwn", "text": texto_conf}},
+        {"type": "actions", "elements": elementos},
+    ]
+    resp = slack_app.client.chat_postMessage(
         channel=channel,
         thread_ts=thread_ts,
         text=texto_conf,
-        blocks=[
-            {"type": "section", "text": {"type": "mrkdwn", "text": texto_conf}},
-            {"type": "actions", "elements": elementos},
-        ],
+        blocks=bloques,
     )
+    _recordar_botones_ca(channel, resp, texto_conf)
 
 
 def _enviar_menu_modificacion_ca(channel, thread_ts, idioma, estado):
     bloques = _bloques_menu_modificacion_ca(idioma) + fila_atras("atras_ca", "bc.back_btn", estado, idioma)
-    slack_app.client.chat_postMessage(channel=channel, thread_ts=thread_ts, text=t("bc.mod_which", idioma), blocks=bloques)
+    resp = slack_app.client.chat_postMessage(channel=channel, thread_ts=thread_ts, text=t("bc.mod_which", idioma), blocks=bloques)
+    _recordar_botones_ca(channel, resp, t("bc.mod_which", idioma))
 
 
 def _enviar_pregunta_valor_modificacion_ca(channel, thread_ts, idioma, estado):
     campo = estado.get("campo_modificando")
     texto = _texto_pregunta_ca_por_clave(campo, idioma) if campo else _texto_menu_modificacion_ca(idioma)
     bloques = [{"type": "section", "text": {"type": "mrkdwn", "text": texto}}] + fila_atras("atras_ca", "bc.back_btn", estado, idioma)
-    slack_app.client.chat_postMessage(channel=channel, thread_ts=thread_ts, text=texto, blocks=bloques)
+    resp = slack_app.client.chat_postMessage(channel=channel, thread_ts=thread_ts, text=texto, blocks=bloques)
+    _recordar_botones_ca(channel, resp, texto)
 
 
 def _reenviar_pregunta_actual_ca(user_id, channel, thread_ts, estado, logger):
@@ -997,6 +1073,10 @@ def manejar_mensaje_ca(event, logger) -> None:
         es_activo = user_id in ca_dm_activas
     if not es_activo:
         return
+
+    # Ha llegado un mensaje nuevo al hilo: cualquier mensaje con botones anterior queda
+    # obsoleto, así que le retiramos los botones para que no se puedan volver a pulsar.
+    _quitar_botones_anteriores_ca(channel)
 
     conv_key = user_id
 
@@ -1289,7 +1369,8 @@ def manejar_mensaje_ca(event, logger) -> None:
             _preg = obtener_preguntas_seguimiento_ca(_idi).get("opinion_con_claude", "")
             texto_fallo = f"⚠️ No se pudo generar el resumen con Claude.\n\n{_preg}"
             bloques = [{"type": "section", "text": {"type": "mrkdwn", "text": texto_fallo}}] + fila_atras("atras_ca", "bc.back_btn", estado, _idi)
-            slack_app.client.chat_postMessage(channel=channel, thread_ts=thread_ts, text=texto_fallo, blocks=bloques)
+            _resp = slack_app.client.chat_postMessage(channel=channel, thread_ts=thread_ts, text=texto_fallo, blocks=bloques)
+            _recordar_botones_ca(channel, _resp, texto_fallo)
 
     elif accion == "pedir_opinion_sin_claude":
         _enviar_pregunta_opinion(channel, thread_ts, _idi, estado)
@@ -1344,6 +1425,7 @@ def _handle_ca_elegir_advisee(ack, body, client, logger):
                 blocks=[{"type": "section", "text": {"type": "mrkdwn", "text": t("bc.advisee_selected", _idi, name=advisee_name)}}],
                 text=t("bc.advisee_selected_plain", _idi, name=advisee_name),
             )
+            _olvidar_botones_ca(channel)
         except Exception:
             logger.warning("No se pudo actualizar el mensaje de selección de advisee")
         evento = {
@@ -1373,6 +1455,7 @@ def _handle_ca_advisee_no(ack, body, client, logger):
                 blocks=[{"type": "section", "text": {"type": "mrkdwn", "text": t("bc.finished_update", _idi)}}],
                 text=t("bc.finished_update", _idi),
             )
+            _olvidar_botones_ca(channel)
         except Exception:
             pass
         evento = {
@@ -1398,46 +1481,26 @@ def _leer_tipo_advisee(body):
 
 @slack_app.action("ca_ver_evaluaciones")
 def _handle_ca_ver_evaluaciones(ack, body, client, logger):
-    """Despliega en el propio mensaje las evaluaciones de ese tipo recibidas por el advisee."""
+    """Abre en una ventana (modal) las evaluaciones de ese tipo recibidas por el advisee.
+    El mensaje del hilo conserva su botón, para poder volver a consultar la info."""
     ack()
+    trigger_id = body.get("trigger_id")
+    if not trigger_id:
+        return
     try:
         user_id = body["user"]["id"]
         tipo, advisee = _leer_tipo_advisee(body)
-        msg = body.get("message", {})
-        channel = body["channel"]["id"]
         _idi = idioma_por_slack_id(user_id)
         with _lock:
             estado = conversaciones_ca.get(user_id, {})
             textos = (estado.get("resumenes_ver", {}) or {}).get(advisee, {})
         resumen = textos.get(tipo, "") if isinstance(textos, dict) else (textos or "")
-        client.chat_update(
-            channel=channel,
-            ts=msg["ts"],
-            text=_header_por_tipo(tipo, advisee, _idi),
-            blocks=_bloques_resumen_expandido(tipo, advisee, resumen, _idi),
+        client.views_open(
+            trigger_id=trigger_id,
+            view=_build_resumen_ca_view(tipo, advisee, resumen, _idi),
         )
     except Exception:
-        logger.exception("Error desplegando evaluaciones del advisee")
-
-
-@slack_app.action("ca_ocultar_evaluaciones")
-def _handle_ca_ocultar_evaluaciones(ack, body, client, logger):
-    """Vuelve a plegar el mensaje de evaluaciones de ese tipo."""
-    ack()
-    try:
-        user_id = body["user"]["id"]
-        tipo, advisee = _leer_tipo_advisee(body)
-        msg = body.get("message", {})
-        channel = body["channel"]["id"]
-        _idi = idioma_por_slack_id(user_id)
-        client.chat_update(
-            channel=channel,
-            ts=msg["ts"],
-            text=_header_por_tipo(tipo, advisee, _idi),
-            blocks=_bloques_resumen_colapsado(tipo, advisee, _idi),
-        )
-    except Exception:
-        logger.exception("Error plegando evaluaciones del advisee")
+        logger.exception("Error abriendo modal de evaluaciones del advisee")
 
 
 # ---------------------------------------------------------------------------
@@ -1679,6 +1742,7 @@ def ciclo_envio_ca() -> None:
 @slack_app.action("ca_confirmar")
 def _handle_ca_confirmar(ack, body, logger):
     ack()
+    _cerrar_botones_click_ca(body)
     try:
         evento = {
             "user": body["user"]["id"],
@@ -1694,6 +1758,7 @@ def _handle_ca_confirmar(ack, body, logger):
 @slack_app.action("ca_modificar")
 def _handle_ca_modificar(ack, body, logger):
     ack()
+    _cerrar_botones_click_ca(body)
     try:
         evento = {
             "user": body["user"]["id"],
@@ -1710,6 +1775,7 @@ def _handle_ca_modificar(ack, body, logger):
 def _handle_mod_ca_opcion(ack, body, logger):
     """Botón del menú '¿Qué respuesta quieres modificar?' (CA): reinyecta el número."""
     ack()
+    _cerrar_botones_click_ca(body)
     try:
         val = ""
         for a in body.get("actions", []):
@@ -1741,6 +1807,7 @@ def _handle_ca_atras(ack, body, client, logger):
                 blocks=[{"type": "section", "text": {"type": "mrkdwn", "text": t("bc.back_done", idi)}}],
                 text=t("bc.back_done", idi),
             )
+            _olvidar_botones_ca(channel)
         except Exception:
             logger.warning("No se pudo actualizar el mensaje al volver atrás (CA)")
 
@@ -1771,6 +1838,7 @@ def _handle_permiso_claude(ack, body, client, logger):
                 blocks=[{"type": "section", "text": {"type": "mrkdwn", "text": texto_sel}}],
                 text=texto_sel,
             )
+            _olvidar_botones_ca(channel)
         except Exception:
             logger.warning("No se pudo actualizar el mensaje de permiso Claude")
         evento = {

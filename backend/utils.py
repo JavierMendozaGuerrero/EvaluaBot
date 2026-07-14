@@ -1,9 +1,16 @@
 import re
+import unicodedata
 from datetime import datetime, timedelta, timezone
 
 
 def normalizar_nombre(valor):
-    return " ".join((valor or "").strip().lower().split())
+    # Pliega tildes/diacríticos (NFD + descartar marcas 'Mn') para que las
+    # búsquedas de nombres en Notion ignoren los acentos: "Pedrós" == "Pedros".
+    texto = " ".join((valor or "").strip().lower().split())
+    return "".join(
+        char for char in unicodedata.normalize("NFD", texto)
+        if unicodedata.category(char) != "Mn"
+    )
 
 
 def sanear_fecha_limite(valor, dias_defecto: int = 14) -> str:

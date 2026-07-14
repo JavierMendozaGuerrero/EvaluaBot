@@ -253,11 +253,13 @@ def _bloques_menu_modificacion_area(estado):
 
 
 def _enviar_menu_modificacion_area(dm_channel, thread_ts, estado):
-    slack_app.client.chat_postMessage(
+    _texto = t("bm.mod_which", estado.get("idioma", "es"))
+    resp = slack_app.client.chat_postMessage(
         channel=dm_channel, thread_ts=thread_ts,
-        text=t("bm.mod_which", estado.get("idioma", "es")),
+        text=_texto,
         blocks=_bloques_menu_modificacion_area(estado),
     )
+    _recordar_botones(dm_channel, resp, _texto)
 
 
 def _clave_modificacion_area(texto, estado):
@@ -318,6 +320,91 @@ _sugerencias_por_usuario: dict = {}  # user_id -> [nombre, ...]
 _VALORACION_CLAVES = {"q1", "mo_contribucion"}
 
 
+# --- Gestión de botones "de un solo uso" -------------------------------------
+# Recordamos el último mensaje con botones enviado a cada hilo (clave = canal DM)
+# para poder retirarle los botones cuando llega un mensaje nuevo o se pulsa otro,
+# y evitar así que se puedan volver a pulsar botones ya obsoletos.
+_ultimo_msg_botones: dict = {}  # dm_channel -> {"ts": str, "texto": str}
+
+
+def _recordar_botones(dm_channel: str, resp, texto: str) -> None:
+    """Guarda el mensaje interactivo recién enviado como el último con botones vivos."""
+    try:
+        ts = resp.get("ts") if isinstance(resp, dict) else resp["ts"]
+    except Exception:
+        ts = None
+    if dm_channel and ts:
+        _ultimo_msg_botones[dm_channel] = {"ts": ts, "texto": texto or " "}
+
+
+def _olvidar_botones(dm_channel: str) -> None:
+    """Descarta el puntero al último mensaje con botones sin editarlo (ya lo hizo el handler)."""
+    _ultimo_msg_botones.pop(dm_channel, None)
+
+
+def _quitar_botones_anteriores(dm_channel: str, client=None) -> None:
+    """Retira los botones del último mensaje interactivo del hilo (si sigue vivo)."""
+    info = _ultimo_msg_botones.pop(dm_channel, None)
+    if not info:
+        return
+    cli = client or slack_app.client
+    try:
+        cli.chat_update(
+            channel=dm_channel,
+            ts=info["ts"],
+            blocks=[{"type": "section", "text": {"type": "mrkdwn", "text": info["texto"]}}],
+            text=info["texto"],
+        )
+    except Exception:
+        pass
+
+
+def _cerrar_botones_click(body, client=None) -> None:
+    """Quita los botones del mensaje que se acaba de pulsar (conserva su texto)."""
+    msg = body.get("message", {}) or {}
+    ch = (body.get("channel") or {}).get("id")
+    ts = msg.get("ts")
+    _ultimo_msg_botones.pop(ch, None)
+    if not ch or not ts:
+        return
+    bloques = [b for b in (msg.get("blocks") or []) if b.get("type") != "actions"]
+    if not bloques:
+        bloques = [{"type": "section", "text": {"type": "mrkdwn", "text": msg.get("text") or " "}}]
+    cli = client or slack_app.client
+    try:
+        cli.chat_update(
+            channel=ch,
+            ts=ts,
+            blocks=bloques,
+            text=msg.get("text") or " ",
+        )
+    except Exception:
+        pass
+
+
+def _mensaje_privacidad(relacion: str, idioma: str = "es") -> str:
+    """Aviso de privacidad según la posición jerárquica de la persona evaluada.
+
+    'inferior' = la persona evaluada está POR ENCIMA del evaluador -> solo Ana.
+    'superior' / 'igual' = está por debajo o al mismo nivel -> el CA de la persona.
+    """
+    if relacion == "inferior":
+        return t("bm.privacidad_arriba", idioma)
+    return t("bm.privacidad_abajo", idioma)
+
+
+def _enviar_privacidad(dm_channel: str, thread_ts: str, relacion: str, idioma: str = "es") -> None:
+    """Envía el aviso de privacidad justo después de elegir a la persona a evaluar."""
+    try:
+        slack_app.client.chat_postMessage(
+            channel=dm_channel,
+            thread_ts=thread_ts,
+            text=_mensaje_privacidad(relacion, idioma),
+        )
+    except Exception:
+        logging.warning("No se pudo enviar el aviso de privacidad")
+
+
 def _bloques_valoracion(texto_pregunta: str, user_id: str, estado: dict = None) -> list:
     idioma = (estado or {}).get("idioma", "es")
     return [
@@ -358,7 +445,8 @@ def _enviar_pregunta_texto(channel: str, thread_ts: str, texto: str, estado: dic
     """Envía una pregunta de texto libre, con botón '⬅️ Atrás' si hay historial al que volver."""
     if estado is not None and tiene_historial(estado):
         bloques = [{"type": "section", "text": {"type": "mrkdwn", "text": texto}}] + fila_atras("atras_negocio", "bm.back_btn", estado, idioma)
-        slack_app.client.chat_postMessage(channel=channel, thread_ts=thread_ts, text=texto, blocks=bloques)
+        resp = slack_app.client.chat_postMessage(channel=channel, thread_ts=thread_ts, text=texto, blocks=bloques)
+        _recordar_botones(channel, resp, texto)
     else:
         slack_app.client.chat_postMessage(channel=channel, thread_ts=thread_ts, text=texto)
 
@@ -376,7 +464,7 @@ def _enviar_pedir_primer_miembro(channel: str, thread_ts: str, texto: str, estad
     ]
     if estado is not None and tiene_historial(estado):
         elementos.append(boton_atras("atras_negocio", "bm.back_btn", idioma))
-    slack_app.client.chat_postMessage(
+    resp = slack_app.client.chat_postMessage(
         channel=channel,
         thread_ts=thread_ts,
         text=texto,
@@ -385,10 +473,11 @@ def _enviar_pedir_primer_miembro(channel: str, thread_ts: str, texto: str, estad
             {"type": "actions", "elements": elementos},
         ],
     )
+    _recordar_botones(channel, resp, texto)
 
 
 def _enviar_pregunta_situacion(channel: str, thread_ts: str, idioma: str, estado: dict) -> None:
-    slack_app.client.chat_postMessage(
+    resp = slack_app.client.chat_postMessage(
         channel=channel,
         thread_ts=thread_ts,
         text=t("bm.situation_q", idioma),
@@ -403,6 +492,7 @@ def _enviar_pregunta_situacion(channel: str, thread_ts: str, idioma: str, estado
             },
         ] + fila_atras("atras_negocio", "bm.back_btn", estado, idioma),
     )
+    _recordar_botones(channel, resp, t("bm.situation_q", idioma))
 
 
 def _bloques_sugerencias(texto_intro: str, sugerencias: list, user_id: str) -> list:
@@ -486,6 +576,7 @@ def _handle_valoracion_interactiva(ack, body, client, logger):
             )
         except Exception:
             logger.warning("No se pudo actualizar el mensaje de valoración interactiva")
+        _olvidar_botones(channel)
         accion, texto = _aplicar_respuesta_valoracion(user_id, valor)
         with lock:
             estado = conversaciones.get(user_id)
@@ -519,6 +610,7 @@ def _handle_area_interactiva(ack, body, client, logger):
             )
         except Exception:
             logger.warning("No se pudo actualizar el mensaje de área")
+        _olvidar_botones(dm_channel)
 
         accion = None
         with lock:
@@ -572,6 +664,7 @@ def _handle_situacion_interactiva(ack, body, client, logger):
             )
         except Exception:
             logger.warning("No se pudo actualizar el mensaje de situación")
+        _olvidar_botones(dm_channel)
 
         with lock:
             es_activo = user_id in evaluaciones_dm_activas
@@ -609,6 +702,7 @@ def _handle_barbecho_entregar(ack, body, logger):
             )
         except Exception:
             pass
+        _olvidar_botones(dm_channel)
 
         with lock:
             es_activo = user_id in evaluaciones_dm_activas
@@ -656,6 +750,7 @@ def _handle_barbecho_modificar(ack, body, logger):
             )
         except Exception:
             pass
+        _olvidar_botones(dm_channel)
 
         with lock:
             es_activo = user_id in evaluaciones_dm_activas
@@ -695,6 +790,7 @@ def _handle_sugerencia_interactiva(ack, body, client, logger):
             )
         except Exception:
             logger.warning("No se pudo actualizar el mensaje de sugerencias")
+        _olvidar_botones(dm_channel)
 
         _sugerencias_por_usuario.pop(user_id, None)
 
@@ -751,6 +847,7 @@ def _handle_sugerencia_interactiva(ack, body, client, logger):
 
         accion = None
         pregunta = None
+        _rel_priv = None
         with lock:
             estado = conversaciones.get(user_id)
             if not estado:
@@ -764,6 +861,7 @@ def _handle_sugerencia_interactiva(ack, body, client, logger):
                     accion = "pedir_persona"
                     pregunta = t("bm.already_evaluated", _idi, emp=_empleado, proy=proyecto_actual or '?')
                 else:
+                    _rel_priv = _relacion
                     push_historial(estado)
                     estado["respuestas"]["evaluado"] = _empleado
                     if _cargo_evaluador and _cargo_evaluador != _cargo_ev_peek:
@@ -813,13 +911,17 @@ def _handle_sugerencia_interactiva(ack, body, client, logger):
                     preguntas_area=estado.get("preguntas_area"),
                 )
 
+        if _rel_priv is not None:
+            _enviar_privacidad(dm_channel, thread_ts, _rel_priv, estado.get("idioma", "es"))
+
         if accion == "preguntar_valoracion":
-            client.chat_postMessage(
+            resp = client.chat_postMessage(
                 channel=dm_channel,
                 thread_ts=thread_ts,
                 blocks=_bloques_valoracion(pregunta, user_id, estado=estado),
                 text=pregunta,
             )
+            _recordar_botones(dm_channel, resp, pregunta)
         elif accion == "mostrar_resumen":
             _enviar_resumen_con_botones(dm_channel, thread_ts, pregunta, estado.get("idioma", "es"), estado=estado)
         elif pregunta:
@@ -877,6 +979,7 @@ def _handle_autoeval_solo(ack, body, client, logger):
             )
         except Exception:
             logger.warning("No se pudo actualizar el mensaje de autoevaluación")
+        _olvidar_botones(dm_channel)
 
         # Carga de preguntas por área (las mismas que evaluar a un compañero);
         # la relación con uno mismo es "igual".
@@ -938,13 +1041,17 @@ def _handle_autoeval_solo(ack, body, client, logger):
                 accion = "preguntar_valoracion"
                 pregunta = preguntas[0]["texto"]
 
+        # Autoevaluación: la persona evaluada es uno mismo (relación 'igual') -> lo verá su CA.
+        _enviar_privacidad(dm_channel, thread_ts, _relacion, estado.get("idioma", "es"))
+
         if accion == "preguntar_valoracion":
-            client.chat_postMessage(
+            resp = client.chat_postMessage(
                 channel=dm_channel,
                 thread_ts=thread_ts,
                 blocks=_bloques_valoracion(pregunta, user_id, estado=estado),
                 text=pregunta,
             )
+            _recordar_botones(dm_channel, resp, pregunta)
         elif pregunta:
             _enviar_pregunta_texto(dm_channel, thread_ts, pregunta, estado, estado.get("idioma", "es"))
     except Exception:
@@ -1045,7 +1152,7 @@ def _enviar_mas_proyectos(channel, thread_ts, idioma="es", estado: dict = None):
     ]
     if estado is not None and tiene_historial(estado):
         elementos.append(boton_atras("atras_negocio", "bm.back_btn", idioma))
-    slack_app.client.chat_postMessage(
+    resp = slack_app.client.chat_postMessage(
         channel=channel,
         thread_ts=thread_ts,
         text=texto,
@@ -1054,6 +1161,7 @@ def _enviar_mas_proyectos(channel, thread_ts, idioma="es", estado: dict = None):
             {"type": "actions", "elements": elementos},
         ],
     )
+    _recordar_botones(channel, resp, texto)
 
 
 def _enviar_mas_miembros(channel, thread_ts, idioma="es", estado: dict = None):
@@ -1073,7 +1181,7 @@ def _enviar_mas_miembros(channel, thread_ts, idioma="es", estado: dict = None):
     ]
     if estado is not None and tiene_historial(estado):
         elementos.append(boton_atras("atras_negocio", "bm.back_btn", idioma))
-    slack_app.client.chat_postMessage(
+    resp = slack_app.client.chat_postMessage(
         channel=channel,
         thread_ts=thread_ts,
         text=texto,
@@ -1082,11 +1190,12 @@ def _enviar_mas_miembros(channel, thread_ts, idioma="es", estado: dict = None):
             {"type": "actions", "elements": elementos},
         ],
     )
+    _recordar_botones(channel, resp, texto)
 
 
 def _enviar_boton_modificar(channel: str, thread_ts: str, idioma="es") -> None:
     texto = t("bm.edit_window_notice", idioma)
-    slack_app.client.chat_postMessage(
+    resp = slack_app.client.chat_postMessage(
         channel=channel,
         thread_ts=thread_ts,
         text=texto,
@@ -1104,6 +1213,7 @@ def _enviar_boton_modificar(channel: str, thread_ts: str, idioma="es") -> None:
             },
         ],
     )
+    _recordar_botones(channel, resp, texto)
 
 
 def _enviar_lista_modificar(channel: str, thread_ts: str, evaluaciones: list, idioma="es") -> None:
@@ -1117,7 +1227,7 @@ def _enviar_lista_modificar(channel: str, thread_ts: str, evaluaciones: list, id
         }
         for i, ev in enumerate(evaluaciones)
     ]
-    slack_app.client.chat_postMessage(
+    resp = slack_app.client.chat_postMessage(
         channel=channel,
         thread_ts=thread_ts,
         text=texto,
@@ -1126,11 +1236,12 @@ def _enviar_lista_modificar(channel: str, thread_ts: str, evaluaciones: list, id
             {"type": "actions", "elements": botones},
         ],
     )
+    _recordar_botones(channel, resp, texto)
 
 
 def _enviar_pregunta_mas_modificaciones(channel: str, thread_ts: str, idioma="es") -> None:
     texto = t("bm.answers_updated_more", idioma)
-    slack_app.client.chat_postMessage(
+    resp = slack_app.client.chat_postMessage(
         channel=channel,
         thread_ts=thread_ts,
         text=texto,
@@ -1154,6 +1265,7 @@ def _enviar_pregunta_mas_modificaciones(channel: str, thread_ts: str, idioma="es
             },
         ],
     )
+    _recordar_botones(channel, resp, texto)
 
 
 def _enviar_resumen_con_botones(channel, thread_ts, text, idioma="es", estado: dict = None):
@@ -1172,7 +1284,7 @@ def _enviar_resumen_con_botones(channel, thread_ts, text, idioma="es", estado: d
     ]
     if estado is not None and tiene_historial(estado):
         elementos.append(boton_atras("atras_negocio", "bm.back_btn", idioma))
-    slack_app.client.chat_postMessage(
+    resp = slack_app.client.chat_postMessage(
         channel=channel,
         thread_ts=thread_ts,
         text=text,
@@ -1181,6 +1293,7 @@ def _enviar_resumen_con_botones(channel, thread_ts, text, idioma="es", estado: d
             {"type": "actions", "elements": elementos},
         ],
     )
+    _recordar_botones(channel, resp, text)
 
 
 def _reenviar_pregunta_actual_negocio(estado: dict, dm_channel: str, thread_ts: str, user_id: str) -> None:
@@ -1188,11 +1301,12 @@ def _reenviar_pregunta_actual_negocio(estado: dict, dm_channel: str, thread_ts: 
     idi = estado.get("idioma", "es")
     modo = estado.get("modo")
     if modo == "esperando_area":
-        slack_app.client.chat_postMessage(
+        _resp = slack_app.client.chat_postMessage(
             channel=dm_channel, thread_ts=thread_ts,
             blocks=_bloques_area(t("bm.ask_area_q", idi), user_id, estado=estado),
             text=t("bm.ask_area_q", idi),
         )
+        _recordar_botones(dm_channel, _resp, t("bm.ask_area_q", idi))
     elif modo == "esperando_situacion":
         _enviar_pregunta_situacion(dm_channel, thread_ts, idi, estado)
     elif modo == "esperando_proyecto":
@@ -1213,11 +1327,12 @@ def _reenviar_pregunta_actual_negocio(estado: dict, dm_channel: str, thread_ts: 
         if idx < len(todas):
             pregunta_actual = todas[idx]
             if pregunta_actual["clave"] in _VALORACION_CLAVES:
-                slack_app.client.chat_postMessage(
+                _resp = slack_app.client.chat_postMessage(
                     channel=dm_channel, thread_ts=thread_ts,
                     blocks=_bloques_valoracion(pregunta_actual["texto"], user_id, estado=estado),
                     text=pregunta_actual["texto"],
                 )
+                _recordar_botones(dm_channel, _resp, pregunta_actual["texto"])
             else:
                 _enviar_pregunta_texto(dm_channel, thread_ts, pregunta_actual["texto"], estado, idi)
     elif modo == "confirmacion":
@@ -1240,10 +1355,11 @@ def _reenviar_pregunta_actual_negocio(estado: dict, dm_channel: str, thread_ts: 
         ]
         if tiene_historial(estado):
             elementos.append(boton_atras("atras_negocio", "bm.back_btn", idi))
-        slack_app.client.chat_postMessage(
+        _resp = slack_app.client.chat_postMessage(
             channel=dm_channel, thread_ts=thread_ts, text=texto_resumen,
             blocks=[{"type": "section", "text": {"type": "mrkdwn", "text": texto_resumen}}, {"type": "actions", "elements": elementos}],
         )
+        _recordar_botones(dm_channel, _resp, texto_resumen)
 
 
 @slack_app.action("atras_negocio")
@@ -1265,6 +1381,7 @@ def _handle_negocio_atras(ack, body, client, logger):
             )
         except Exception:
             logger.warning("No se pudo actualizar el mensaje al volver atrás (evaluación mensual)")
+        _olvidar_botones(dm_channel)
 
         with lock:
             estado = conversaciones.get(user_id)
@@ -1451,6 +1568,10 @@ def handle_message_events(event, logger):
 
     dm_channel = evaluacion_dm_canal.get(user_id, channel)
     texto = (event.get("text") or "").strip()
+
+    # El usuario ha escrito: cualquier mensaje con botones anterior queda obsoleto,
+    # así que le retiramos los botones para que no se puedan volver a pulsar.
+    _quitar_botones_anteriores(dm_channel)
 
     def reply(text):
         slack_app.client.chat_postMessage(channel=dm_channel, thread_ts=thread_ts, text=text)
@@ -1698,6 +1819,7 @@ def handle_message_events(event, logger):
                         if _cargo_evaluador_pre and _cargo_evaluador_pre != _cargo_ev_peek:
                             estado["cargo_evaluador"] = _cargo_evaluador_pre
                         estado["relacion_jerarquica"] = _relacion_pre
+                        estado["_privacidad_pend"] = _relacion_pre
                         _area_actual = estado.get("area", "negocio")
                         if _area_actual in ("middleoffice", "palantir"):
                             for _k in [k for k in estado["respuestas"] if k not in ("evaluado", "proyecto")]:
@@ -1799,8 +1921,17 @@ def handle_message_events(event, logger):
             if campo and texto:
                 if campo == "evaluado":
                     if not _empleado_pre:
-                        accion = "pedir_valor_modificacion"
-                        pregunta = t("bm.self_eval", estado["idioma"]) if _autoevaluacion_pre else _invalido_pre
+                        if _autoevaluacion_pre:
+                            accion = "pedir_valor_modificacion"
+                            pregunta = t("bm.self_eval", estado["idioma"])
+                        elif _mo_invalido:
+                            accion = "pedir_valor_modificacion"
+                            pregunta = t("bm.ask_who", estado["idioma"])
+                        else:
+                            # Mostrar las sugerencias como botones (mismo comportamiento
+                            # que al elegir a la persona por primera vez).
+                            accion = "pedir_persona_invalida"
+                            pregunta = _invalido_pre
                     else:
                         if _cargo_evaluador_pre and _cargo_evaluador_pre != _cargo_ev_peek:
                             estado["cargo_evaluador"] = _cargo_evaluador_pre
@@ -1957,6 +2088,13 @@ def handle_message_events(event, logger):
                 accion = "preguntar"
                 pregunta = t("bm.reply_yes_no", estado["idioma"])
 
+    # Si acabamos de elegir a la persona a evaluar, mostramos el aviso de privacidad
+    # (quién verá la evaluación) justo antes de la primera pregunta.
+    with lock:
+        _rel_priv = estado.pop("_privacidad_pend", None) if estado else None
+    if _rel_priv is not None:
+        _enviar_privacidad(dm_channel, thread_ts, _rel_priv, estado.get("idioma", "es"))
+
     # Despacho de acciones — fuera del lock
     # Estas acciones pertenecen al flujo secuencial principal, por lo que sí ofrecen
     # el botón "Atrás" cuando hay historial.
@@ -1983,7 +2121,7 @@ def handle_message_events(event, logger):
         ]
         if tiene_historial(estado):
             elementos.append(boton_atras("atras_negocio", "bm.back_btn", _idi))
-        slack_app.client.chat_postMessage(
+        _resp = slack_app.client.chat_postMessage(
             channel=dm_channel,
             thread_ts=thread_ts,
             text=texto_resumen,
@@ -1992,6 +2130,7 @@ def handle_message_events(event, logger):
                 {"type": "actions", "elements": elementos},
             ],
         )
+        _recordar_botones(dm_channel, _resp, texto_resumen)
         return
     if accion == "guardar_barbecho":
         nombre = _nombre_real(user_id, logger)
@@ -2014,22 +2153,24 @@ def handle_message_events(event, logger):
         return
     if accion == "pedir_area":
         _texto_area = pregunta or t("bm.ask_area_q", estado["idioma"])
-        slack_app.client.chat_postMessage(
+        _resp = slack_app.client.chat_postMessage(
             channel=dm_channel,
             thread_ts=thread_ts,
             blocks=_bloques_area(_texto_area, user_id, estado=estado),
             text=_texto_area,
         )
+        _recordar_botones(dm_channel, _resp, _texto_area)
         return
     if accion == "pedir_persona_invalida":
         _sug = _sugerencias_por_usuario.get(user_id, [])
         if _sug:
-            slack_app.client.chat_postMessage(
+            _resp = slack_app.client.chat_postMessage(
                 channel=dm_channel,
                 thread_ts=thread_ts,
                 blocks=_bloques_sugerencias(pregunta or "", _sug, user_id) + fila_atras("atras_negocio", "bm.back_btn", estado, estado.get("idioma", "es")),
                 text=pregunta or "",
             )
+            _recordar_botones(dm_channel, _resp, pregunta or "")
         else:
             _enviar_pregunta_texto(dm_channel, thread_ts, pregunta if pregunta else "", estado, estado.get("idioma", "es"))
         return
@@ -2049,12 +2190,13 @@ def handle_message_events(event, logger):
         _enviar_mas_proyectos(dm_channel, thread_ts, estado.get("idioma", "es"), estado=estado)
         return
     if accion == "preguntar_valoracion":
-        slack_app.client.chat_postMessage(
+        _resp = slack_app.client.chat_postMessage(
             channel=dm_channel,
             thread_ts=thread_ts,
             blocks=_bloques_valoracion(pregunta, user_id, estado=estado),
             text=pregunta,
         )
+        _recordar_botones(dm_channel, _resp, pregunta)
         return
     if accion == "mostrar_resumen":
         _enviar_resumen_con_botones(dm_channel, thread_ts, pregunta, estado.get("idioma", "es"), estado=estado)
@@ -2161,6 +2303,7 @@ def handle_message_events(event, logger):
 @slack_app.action("proyecto_confirmar")
 def handle_proyecto_confirmar(ack, body, logger):
     ack()
+    _cerrar_botones_click(body)
     user_id = body["user"]["id"]
     channel = body["channel"]["id"]
     msg = body.get("message", {})
@@ -2238,6 +2381,7 @@ def handle_proyecto_confirmar(ack, body, logger):
 @slack_app.action("proyecto_mas_si")
 def handle_proyecto_mas_si(ack, body):
     ack()
+    _cerrar_botones_click(body)
     user_id = body["user"]["id"]
     channel = body["channel"]["id"]
     msg = body.get("message", {})
@@ -2277,6 +2421,7 @@ def handle_proyecto_mas_si(ack, body):
 @slack_app.action("proyecto_mas_no")
 def handle_proyecto_mas_no(ack, body):
     ack()
+    _cerrar_botones_click(body)
     user_id = body["user"]["id"]
     channel = body["channel"]["id"]
     msg = body.get("message", {})
@@ -2312,6 +2457,7 @@ def handle_proyecto_mas_no(ack, body):
 @slack_app.action("proyecto_modificar_eval")
 def handle_proyecto_modificar_eval(ack, body, logger):
     ack()
+    _cerrar_botones_click(body)
     user_id = body["user"]["id"]
     channel = body["channel"]["id"]
     msg = body.get("message", {})
@@ -2340,6 +2486,7 @@ def handle_proyecto_modificar_eval(ack, body, logger):
 @slack_app.action(re.compile(r"^proyecto_sel_mod_\d+$"))
 def handle_proyecto_seleccionar_modificar(ack, body, logger):
     ack()
+    _cerrar_botones_click(body)
     user_id = body["user"]["id"]
     channel = body["channel"]["id"]
     msg = body.get("message", {})
@@ -2383,6 +2530,7 @@ def handle_proyecto_seleccionar_modificar(ack, body, logger):
 @slack_app.action("proyecto_modif_mas_si")
 def handle_proyecto_modif_mas_si(ack, body, logger):
     ack()
+    _cerrar_botones_click(body)
     user_id = body["user"]["id"]
     channel = body["channel"]["id"]
     msg = body.get("message", {})
@@ -2410,6 +2558,7 @@ def handle_proyecto_modif_mas_si(ack, body, logger):
 @slack_app.action("proyecto_modif_mas_no")
 def handle_proyecto_modif_mas_no(ack, body, logger):
     ack()
+    _cerrar_botones_click(body)
     user_id = body["user"]["id"]
     channel = body["channel"]["id"]
     msg = body.get("message", {})
@@ -2437,6 +2586,7 @@ def handle_proyecto_modif_mas_no(ack, body, logger):
 @slack_app.action("proyecto_proyectos_si")
 def handle_proyecto_proyectos_si(ack, body):
     ack()
+    _cerrar_botones_click(body)
     user_id = body["user"]["id"]
     channel = body["channel"]["id"]
     msg = body.get("message", {})
@@ -2461,6 +2611,7 @@ def handle_proyecto_proyectos_si(ack, body):
 @slack_app.action("proyecto_proyectos_no")
 def handle_proyecto_proyectos_no(ack, body):
     ack()
+    _cerrar_botones_click(body)
     user_id = body["user"]["id"]
     channel = body["channel"]["id"]
     msg = body.get("message", {})
@@ -2487,6 +2638,7 @@ def handle_proyecto_proyectos_no(ack, body):
 @slack_app.action("proyecto_modificar")
 def handle_proyecto_modificar(ack, body, logger):
     ack()
+    _cerrar_botones_click(body)
     user_id = body["user"]["id"]
     channel = body["channel"]["id"]
     msg = body.get("message", {})

@@ -1,0 +1,41 @@
+# Qué NO meter en la imagen Docker. Reduce el tamaño y, sobre todo,
+# evita filtrar secretos (.env) dentro del contenedor.
+
+# Secretos y configuración local — NUNCA dentro de la imagen.
+.env
+.env.*
+.env_*
+!.env.example
+
+# Entornos virtuales de Python
+.venv/
+venv/
+env/
+
+# Cachés y artefactos de Python
+__pycache__/
+**/__pycache__/
+*.py[cod]
+.pytest_cache/
+
+# Git
+.git/
+.gitignore
+
+# Frontend: se despliega aparte (Firebase/Vercel), el backend no lo necesita.
+frontend/
+
+# Archivos generados en local (en producción viven en el bucket de Cloud Storage).
+backend/dashboard_web/*
+!backend/dashboard_web/.gitkeep
+dashboard_web/
+
+# Configuración de herramientas de desarrollo
+.claude/
+docs/
+*.log
+.DS_Store
+
+# El propio Dockerfile y este archivo no hacen falta dentro de la imagen.
+Dockerfile
+.dockerignore

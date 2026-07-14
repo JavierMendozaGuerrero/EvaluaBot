@@ -41,7 +41,9 @@ PERSONAL_OFFSET_HORAS = int(os.environ.get("PERSONAL_OFFSET_HORAS", "2"))
 # reiniciar el bot, en como mucho este intervalo.
 RECHECK_CALENDARIO_SEGUNDOS = int(os.environ.get("RECHECK_CALENDARIO_SEGUNDOS", "3600"))
 
-PUERTO_WEB = int(os.environ.get("PUERTO_WEB", "8000"))
+# Cloud Run (y otros PaaS) inyectan el puerto a escuchar en la variable PORT.
+# En local seguimos usando PUERTO_WEB. Prioridad: PORT > PUERTO_WEB > 8000.
+PUERTO_WEB = int(os.environ.get("PORT") or os.environ.get("PUERTO_WEB") or "8000")
 CARPETA_WEB = os.path.join(BASE_DIR, "dashboard_web")
 PREFIJO_BBDD_EVALUADO = "Evaluaciones - "
 FRONTEND_ORIGIN = os.environ.get("FRONTEND_ORIGIN", "http://localhost:5173").strip()

@@ -911,9 +911,17 @@ def _enviar_pregunta_permiso_claude(channel, thread_ts, idioma, estado):
 def _enviar_pregunta_opinion(channel, thread_ts, idioma, estado):
     preguntas = obtener_preguntas_seguimiento_ca(idioma)
     if estado.get("opinion_via_claude"):
-        texto = f"{t('bc.claude_summary_header', idioma)}\n\n{estado.get('resumen_actual', '')}\n\n{preguntas.get('opinion_con_claude', '')}"
+        # El resumen de Claude es largo y Slack lo colapsa con "Mostrar más", dejando la
+        # petición de opinión escondida al final. Por eso enviamos el resumen en un mensaje
+        # y la petición ("✍️ Añade a continuación...") en otro aparte, siempre visible.
+        resumen = f"{t('bc.claude_summary_header', idioma)}\n\n{estado.get('resumen_actual', '')}"
+        slack_app.client.chat_postMessage(
+            channel=channel, thread_ts=thread_ts, text=resumen,
+            blocks=[{"type": "section", "text": {"type": "mrkdwn", "text": resumen}}],
+        )
+        texto = f"✍️ {preguntas.get('opinion_con_claude', '')}"
     else:
-        texto = preguntas.get("opinion_sin_claude", "")
+        texto = f"✍️ {preguntas.get('opinion_con_claude', '')}"
     bloques = [{"type": "section", "text": {"type": "mrkdwn", "text": texto}}] + fila_atras("atras_ca", "bc.back_btn", estado, idioma)
     slack_app.client.chat_postMessage(channel=channel, thread_ts=thread_ts, text=texto, blocks=bloques)
 

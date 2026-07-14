@@ -1,0 +1,480 @@
+<title>Cómo funciona EvaluaBot</title>
+<style>
+  :root {
+    --paper: #f5f7fa;
+    --surface: #ffffff;
+    --surface-2: #eef1f6;
+    --ink: #16191d;
+    --muted: #5b6470;
+    --line: #e2e6ec;
+    --accent: #1a73e8;
+    --accent-soft: #e8f0fe;
+    --slack: #7b3a84;
+    --notion: #3a352f;
+    --claude: #b8552f;
+    --gmail: #cf2f22;
+    --web: #1a73e8;
+    --ok: #1e8e5a;
+    --shadow: 0 1px 2px rgba(16,25,45,.06), 0 8px 24px rgba(16,25,45,.06);
+    --radius: 16px;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --paper: #0e1116;
+      --surface: #161b22;
+      --surface-2: #1c222b;
+      --ink: #e7eaef;
+      --muted: #97a1af;
+      --line: #262d37;
+      --accent: #6aa4ff;
+      --accent-soft: #16233a;
+      --slack: #c58fcd;
+      --notion: #cbc6bd;
+      --claude: #e58a60;
+      --gmail: #f0766a;
+      --web: #6aa4ff;
+      --ok: #47cf8e;
+      --shadow: 0 1px 2px rgba(0,0,0,.4), 0 10px 30px rgba(0,0,0,.35);
+    }
+  }
+  :root[data-theme="light"] {
+    --paper: #f5f7fa; --surface: #ffffff; --surface-2: #eef1f6; --ink: #16191d;
+    --muted: #5b6470; --line: #e2e6ec; --accent: #1a73e8; --accent-soft: #e8f0fe;
+    --slack: #7b3a84; --notion: #3a352f; --claude: #b8552f; --gmail: #cf2f22; --web: #1a73e8; --ok: #1e8e5a;
+    --shadow: 0 1px 2px rgba(16,25,45,.06), 0 8px 24px rgba(16,25,45,.06);
+  }
+  :root[data-theme="dark"] {
+    --paper: #0e1116; --surface: #161b22; --surface-2: #1c222b; --ink: #e7eaef;
+    --muted: #97a1af; --line: #262d37; --accent: #6aa4ff; --accent-soft: #16233a;
+    --slack: #c58fcd; --notion: #cbc6bd; --claude: #e58a60; --gmail: #f0766a; --web: #6aa4ff; --ok: #47cf8e;
+    --shadow: 0 1px 2px rgba(0,0,0,.4), 0 10px 30px rgba(0,0,0,.35);
+  }
+
+  * { box-sizing: border-box; }
+  html { -webkit-text-size-adjust: 100%; }
+  body {
+    margin: 0;
+    background: var(--paper);
+    color: var(--ink);
+    font-family: "Segoe UI", system-ui, -apple-system, Roboto, Helvetica, Arial, sans-serif;
+    line-height: 1.6;
+    -webkit-font-smoothing: antialiased;
+  }
+  .wrap { max-width: 960px; margin: 0 auto; padding: clamp(20px, 4vw, 44px); }
+
+  .eyebrow {
+    display: inline-flex; align-items: center; gap: 8px;
+    font-size: 12.5px; font-weight: 700; letter-spacing: .12em; text-transform: uppercase;
+    color: var(--accent); background: var(--accent-soft);
+    padding: 6px 12px; border-radius: 999px;
+  }
+
+  h1 {
+    font-size: clamp(30px, 6vw, 52px); line-height: 1.04; letter-spacing: -0.03em;
+    font-weight: 800; margin: 18px 0 10px; text-wrap: balance;
+  }
+  .lede { font-size: clamp(16px, 2.4vw, 20px); color: var(--muted); max-width: 60ch; margin: 0; }
+
+  h2 {
+    font-size: clamp(22px, 3.6vw, 30px); letter-spacing: -0.02em; font-weight: 800;
+    margin: 0 0 6px; text-wrap: balance;
+  }
+  .section-note { color: var(--muted); margin: 0 0 22px; max-width: 62ch; }
+
+  section { margin-top: clamp(44px, 8vw, 76px); }
+  .num {
+    font-variant-numeric: tabular-nums; color: var(--accent); font-weight: 800;
+    margin-right: 8px;
+  }
+
+  /* Frase grande */
+  .thesis {
+    background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius);
+    box-shadow: var(--shadow); padding: clamp(22px, 4vw, 34px);
+    font-size: clamp(19px, 2.8vw, 26px); line-height: 1.4; font-weight: 600; letter-spacing: -0.01em;
+  }
+  .thesis b { color: var(--accent); font-weight: 800; }
+
+  /* Nodo bot central */
+  .hub {
+    display: grid; place-items: center; text-align: center;
+    background: linear-gradient(180deg, var(--surface), var(--surface-2));
+    border: 1px solid var(--line); border-radius: var(--radius); box-shadow: var(--shadow);
+    padding: 26px 20px; margin-bottom: 10px;
+  }
+  .hub .chip {
+    font-size: 12px; font-weight: 700; letter-spacing: .1em; text-transform: uppercase; color: var(--muted);
+  }
+  .hub .big { font-size: clamp(22px, 4vw, 30px); font-weight: 800; letter-spacing: -0.02em; margin: 6px 0 4px; }
+  .hub .sub { color: var(--muted); font-size: 15px; max-width: 46ch; }
+  .down-arrow { text-align: center; color: var(--muted); font-size: 22px; line-height: 1; margin: 4px 0 14px; }
+
+  /* Rejilla de conexiones */
+  .nodes { display: grid; grid-template-columns: repeat(2, 1fr); gap: 14px; }
+  @media (max-width: 620px) { .nodes { grid-template-columns: 1fr; } }
+  .node {
+    position: relative; background: var(--surface); border: 1px solid var(--line);
+    border-radius: 14px; padding: 18px 18px 18px 20px; box-shadow: var(--shadow);
+    overflow: hidden;
+    transition: transform .18s ease, box-shadow .18s ease;
+  }
+  .node::before {
+    content: ""; position: absolute; left: 0; top: 0; bottom: 0; width: 5px; background: var(--c, var(--accent));
+  }
+  .node:hover { transform: translateY(-3px); box-shadow: 0 12px 30px rgba(16,25,45,.12); }
+  .node .head { display: flex; align-items: center; gap: 10px; margin-bottom: 6px; }
+  .node .ico {
+    width: 34px; height: 34px; flex: none; border-radius: 9px; display: grid; place-items: center;
+    font-size: 18px; background: color-mix(in srgb, var(--c) 15%, transparent);
+  }
+  .node .name { font-weight: 800; font-size: 16px; letter-spacing: -0.01em; }
+  .node .role { font-size: 12px; font-weight: 700; letter-spacing: .04em; text-transform: uppercase; color: var(--c); }
+  .node p { margin: 4px 0 0; color: var(--muted); font-size: 14.5px; }
+  .node .flow {
+    display: inline-block; margin-top: 10px; font-size: 12.5px; font-weight: 700;
+    color: var(--ink); background: var(--surface-2); border: 1px solid var(--line);
+    padding: 4px 10px; border-radius: 999px;
+  }
+
+  .slack { --c: var(--slack); }
+  .notion { --c: var(--notion); }
+  .claude { --c: var(--claude); }
+  .gmail { --c: var(--gmail); }
+  .web { --c: var(--web); }
+
+  /* Flujo paso a paso */
+  .steps { display: grid; gap: 12px; counter-reset: step; }
+  .step {
+    display: grid; grid-template-columns: 44px 1fr; gap: 16px; align-items: start;
+    background: var(--surface); border: 1px solid var(--line); border-radius: 14px;
+    padding: 16px 18px; box-shadow: var(--shadow);
+  }
+  .step .n {
+    counter-increment: step; width: 44px; height: 44px; border-radius: 12px;
+    background: var(--accent-soft); color: var(--accent); font-weight: 800; font-size: 18px;
+    display: grid; place-items: center; font-variant-numeric: tabular-nums;
+  }
+  .step .n::before { content: counter(step); }
+  .step h3 { margin: 4px 0 2px; font-size: 16px; letter-spacing: -0.01em; }
+  .step p { margin: 0; color: var(--muted); font-size: 14.5px; }
+
+  /* Comparativa antes/después */
+  .compare { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+  @media (max-width: 620px) { .compare { grid-template-columns: 1fr; } }
+  .card {
+    background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius);
+    padding: 20px; box-shadow: var(--shadow);
+  }
+  .card.now { border-top: 4px solid var(--muted); }
+  .card.gcp { border-top: 4px solid var(--accent); }
+  .card h3 { margin: 4px 0 12px; font-size: 18px; letter-spacing: -0.01em; display: flex; align-items: center; gap: 8px; }
+  .card ul { margin: 0; padding: 0; list-style: none; display: grid; gap: 10px; }
+  .card li { display: grid; grid-template-columns: 20px 1fr; gap: 10px; font-size: 14.5px; color: var(--ink); }
+  .card li .mk { color: var(--accent); font-weight: 800; }
+  .card.now li .mk { color: var(--muted); }
+  .card li span:last-child { color: var(--muted); }
+  .card li b { color: var(--ink); font-weight: 700; }
+
+  /* Claves */
+  .keys { display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px; }
+  @media (max-width: 760px) { .keys { grid-template-columns: 1fr; } }
+  .key {
+    background: var(--surface); border: 1px solid var(--line); border-radius: 14px; padding: 20px;
+    box-shadow: var(--shadow);
+  }
+  .key .k-ico { font-size: 24px; }
+  .key h3 { margin: 10px 0 6px; font-size: 16.5px; letter-spacing: -0.01em; }
+  .key p { margin: 0; color: var(--muted); font-size: 14px; }
+
+  /* Diagrama GCP */
+  .gcp-stack { display: grid; gap: 12px; }
+  .gcp-row { display: grid; grid-template-columns: repeat(2, 1fr); gap: 12px; }
+  @media (max-width: 620px) { .gcp-row { grid-template-columns: 1fr; } }
+  .gbox {
+    background: var(--surface); border: 1px solid var(--line); border-left: 5px solid var(--accent);
+    border-radius: 12px; padding: 14px 16px; box-shadow: var(--shadow);
+  }
+  .gbox .g-name { font-weight: 800; font-size: 15px; }
+  .gbox .g-what { color: var(--muted); font-size: 13.5px; margin-top: 2px; }
+  .gbox.central { border-left-color: var(--accent); background: var(--accent-soft); }
+
+  /* TL;DR */
+  .tldr {
+    background: var(--ink); color: var(--paper); border-radius: var(--radius);
+    padding: clamp(24px, 4vw, 36px);
+  }
+  :root[data-theme="dark"] .tldr, .tldr { color: #f5f7fa; }
+  @media (prefers-color-scheme: dark) { .tldr { background: #1c222b; border: 1px solid var(--line); } }
+  :root[data-theme="dark"] .tldr { background: #1c222b; border: 1px solid var(--line); }
+  :root[data-theme="light"] .tldr { background: #16191d; border: none; }
+  .tldr h2 { color: #fff; }
+  .tldr ul { margin: 14px 0 0; padding-left: 0; list-style: none; display: grid; gap: 12px; }
+  .tldr li { display: grid; grid-template-columns: 26px 1fr; gap: 10px; font-size: 15.5px; }
+  .tldr li .b { color: var(--accent); font-weight: 800; }
+  .tldr b { color: #fff; }
+
+  .foot { margin-top: 40px; padding-top: 18px; border-top: 1px solid var(--line); color: var(--muted); font-size: 13px; }
+
+  @media (prefers-reduced-motion: reduce) {
+    * { transition: none !important; animation: none !important; }
+  }
+  .reveal { opacity: 0; transform: translateY(14px); animation: rise .6s ease forwards; }
+  @keyframes rise { to { opacity: 1; transform: none; } }
+</style>
+
+<div class="wrap">
+
+  <header class="reveal">
+    <span class="eyebrow">☁️ EvaluaBot · Guía para dirección</span>
+    <h1>Cómo funciona EvaluaBot<br>y cómo lo llevamos a Google Cloud</h1>
+    <p class="lede">Una explicación sencilla, sin tecnicismos, de las piezas del sistema, cómo se conectan y qué hace falta para mudarlo a la nube de Google.</p>
+  </header>
+
+  <section class="reveal">
+    <div class="thesis">
+      EvaluaBot es, en el fondo, <b>un empleado digital que nunca duerme</b>: vive dentro de Slack, pregunta a la gente por sus evaluaciones, guarda todo en Notion y, cuando se lo piden, redacta informes con inteligencia artificial.
+    </div>
+  </section>
+
+  <!-- LAS PIEZAS -->
+  <section>
+    <h2><span class="num">1</span>Las piezas y cómo se conectan</h2>
+    <p class="section-note">En el centro está <b>el Bot</b> (el cerebro). Él solito habla con 5 sitios distintos. Cada uno tiene un trabajo muy concreto.</p>
+
+    <div class="hub">
+      <span class="chip">El cerebro</span>
+      <div class="big">🤖 El Bot</div>
+      <div class="sub">Un programa siempre encendido. Escucha, pregunta, guarda y ordena. No decide nada raro: solo sigue el guion.</div>
+    </div>
+    <div class="down-arrow" aria-hidden="true">↓ habla con ↓</div>
+
+    <div class="nodes">
+      <div class="node slack">
+        <div class="head">
+          <div class="ico">💬</div>
+          <div>
+            <div class="name">Slack</div>
+            <div class="role">La puerta de entrada</div>
+          </div>
+        </div>
+        <p>Donde los empleados reciben la pregunta y responden. Es la ventanilla por la que entran y salen los mensajes.</p>
+        <span class="flow">Bot ⇄ Slack · en tiempo real</span>
+      </div>
+
+      <div class="node notion">
+        <div class="head">
+          <div class="ico">🗂️</div>
+          <div>
+            <div class="name">Notion</div>
+            <div class="role">El archivador</div>
+          </div>
+        </div>
+        <p>Es la “base de datos”: el cuaderno donde se guarda absolutamente todo (empleados, evaluaciones, usuarios). No hay otra base de datos.</p>
+        <span class="flow">Bot → guarda y lee → Notion</span>
+      </div>
+
+      <div class="node claude">
+        <div class="head">
+          <div class="ico">✍️</div>
+          <div>
+            <div class="name">Claude (IA)</div>
+            <div class="role">El redactor</div>
+          </div>
+        </div>
+        <p>La inteligencia artificial que escribe los informes a partir de las evaluaciones. Es como un becario redactor experto.</p>
+        <span class="flow">Bot → pide informe → Claude</span>
+      </div>
+
+      <div class="node web">
+        <div class="head">
+          <div class="ico">🖥️</div>
+          <div>
+            <div class="name">La Web (React)</div>
+            <div class="role">El escaparate</div>
+          </div>
+        </div>
+        <p>La página donde los responsables entran, ven los informes y los descargan. El Bot le sirve los datos por detrás.</p>
+        <span class="flow">Web ⇄ Bot</span>
+      </div>
+
+      <div class="node gmail">
+        <div class="head">
+          <div class="ico">✉️</div>
+          <div>
+            <div class="name">Email (Gmail)</div>
+            <div class="role">El cartero</div>
+          </div>
+        </div>
+        <p>Solo se usa para una cosa: enviar el correo cuando alguien olvida su contraseña de la web.</p>
+        <span class="flow">Bot → email → usuario</span>
+      </div>
+
+      <div class="node" style="--c: var(--ok);">
+        <div class="head">
+          <div class="ico">⏰</div>
+          <div>
+            <div class="name">El reloj interno</div>
+            <div class="role">El despertador</div>
+          </div>
+        </div>
+        <p>Dentro del Bot hay alarmas: manda las evaluaciones cuando toca y recuerda a quien no ha respondido. Por eso debe estar siempre encendido.</p>
+        <span class="flow">Automático · sin intervención</span>
+      </div>
+    </div>
+  </section>
+
+  <!-- EL DÍA A DÍA -->
+  <section>
+    <h2><span class="num">2</span>Qué pasa en el día a día</h2>
+    <p class="section-note">El recorrido típico, de principio a fin, cuando llega el momento de evaluar.</p>
+    <div class="steps">
+      <div class="step">
+        <div class="n"></div>
+        <div>
+          <h3>El Bot lanza la pregunta en Slack</h3>
+          <p>Cuando toca por calendario, escribe a los empleados: “haz tu evaluación”.</p>
+        </div>
+      </div>
+      <div class="step">
+        <div class="n"></div>
+        <div>
+          <h3>La persona responde en el chat</h3>
+          <p>El Bot le va preguntando paso a paso: el proyecto, a quién evalúa y su valoración.</p>
+        </div>
+      </div>
+      <div class="step">
+        <div class="n"></div>
+        <div>
+          <h3>Se guarda todo en Notion</h3>
+          <p>Cada respuesta queda archivada, ordenada por persona, en el “cuaderno” de Notion.</p>
+        </div>
+      </div>
+      <div class="step">
+        <div class="n"></div>
+        <div>
+          <h3>Los responsables entran en la web</h3>
+          <p>Con su usuario y contraseña ven las evaluaciones de su equipo.</p>
+        </div>
+      </div>
+      <div class="step">
+        <div class="n"></div>
+        <div>
+          <h3>La IA redacta el informe</h3>
+          <p>Con un clic, Claude escribe el informe y se puede descargar en Word o PDF.</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- MIGRACIÓN -->
+  <section>
+    <h2><span class="num">3</span>La mudanza a Google Cloud</h2>
+    <p class="section-note">Hoy el Bot vive en un ordenador que hay que mantener encendido a mano. Migrar es <b>mudarlo a un edificio gestionado</b> (Google Cloud) que se ocupa de tenerlo encendido, seguro y ordenado.</p>
+
+    <div class="compare">
+      <div class="card now">
+        <h3>🏠 Hoy</h3>
+        <ul>
+          <li><span class="mk">•</span><span>Corre en <b>un ordenador nuestro</b> que hay que mantener encendido.</span></li>
+          <li><span class="mk">•</span><span>Si se apaga o se reinicia, <b>el Bot deja de escuchar</b> a Slack.</span></li>
+          <li><span class="mk">•</span><span>Las <b>contraseñas y llaves</b> están en un archivo en el equipo.</span></li>
+          <li><span class="mk">•</span><span>Los <b>informes generados</b> se guardan en el disco de ese ordenador.</span></li>
+          <li><span class="mk">•</span><span>El mantenimiento (actualizar, vigilar) <b>lo hacemos nosotros</b>.</span></li>
+        </ul>
+      </div>
+      <div class="card gcp">
+        <h3>☁️ En Google Cloud</h3>
+        <ul>
+          <li><span class="mk">✓</span><span>Google mantiene el Bot <b>siempre encendido</b> por nosotros.</span></li>
+          <li><span class="mk">✓</span><span>Si algo falla, <b>se reinicia solo</b> y vuelve a conectarse.</span></li>
+          <li><span class="mk">✓</span><span>Las llaves viven en una <b>caja fuerte</b> (Secret Manager).</span></li>
+          <li><span class="mk">✓</span><span>Los informes se guardan en un <b>almacén en la nube</b> (Cloud Storage).</span></li>
+          <li><span class="mk">✓</span><span>Menos mantenimiento manual y <b>acceso desde cualquier sitio</b>.</span></li>
+        </ul>
+      </div>
+    </div>
+  </section>
+
+  <!-- QUÉ USAMOS EN GOOGLE -->
+  <section>
+    <h2><span class="num">4</span>Qué “cajas” de Google usaríamos</h2>
+    <p class="section-note">Cada necesidad tiene un servicio de Google que la resuelve. Explicado con su equivalente del mundo real.</p>
+    <div class="gcp-stack">
+      <div class="gbox central">
+        <div class="g-name">☁️ Cloud Run — la oficina donde vive el Bot</div>
+        <div class="g-what">Mantiene el programa siempre encendido, uno solo, sin que tengamos que preocuparnos del ordenador. Es la pieza principal.</div>
+      </div>
+      <div class="gcp-row">
+        <div class="gbox">
+          <div class="g-name">🔐 Secret Manager — la caja fuerte</div>
+          <div class="g-what">Guarda las contraseñas y llaves de Slack, Notion y la IA, bien protegidas.</div>
+        </div>
+        <div class="gbox">
+          <div class="g-name">📦 Cloud Storage — el almacén</div>
+          <div class="g-what">Guarda los informes (Word, PDF) para que no se pierdan al reiniciar.</div>
+        </div>
+      </div>
+      <div class="gcp-row">
+        <div class="gbox">
+          <div class="g-name">🌐 Firebase Hosting — el escaparate</div>
+          <div class="g-what">Publica la web de informes para que los responsables entren desde el navegador.</div>
+        </div>
+        <div class="gbox">
+          <div class="g-name">📊 Cloud Logging — la cámara de seguridad</div>
+          <div class="g-what">Registra qué hace el sistema, para revisar si algo falla. Viene incluido.</div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- LAS 3 CLAVES -->
+  <section>
+    <h2><span class="num">5</span>Las 3 cosas que hay que entender</h2>
+    <p class="section-note">Si tu supervisor solo recuerda tres ideas, que sean estas.</p>
+    <div class="keys">
+      <div class="key">
+        <div class="k-ico">🔌</div>
+        <h3>Tiene que estar siempre encendido</h3>
+        <p>El Bot mantiene una “línea abierta” con Slack. Si se apaga, se corta y deja de enterarse de las respuestas.</p>
+      </div>
+      <div class="key">
+        <div class="k-ico">☝️</div>
+        <h3>Es uno solo, no muchos</h3>
+        <p>No se puede clonar en varias copias: hay un único Bot con la memoria de las conversaciones en curso.</p>
+      </div>
+      <div class="key">
+        <div class="k-ico">🗂️</div>
+        <h3>No hay base de datos que migrar</h3>
+        <p>Los datos ya están en Notion. La mudanza es solo del Bot y sus llaves, no de la información.</p>
+      </div>
+    </div>
+  </section>
+
+  <!-- TL;DR -->
+  <section>
+    <div class="tldr">
+      <h2>En resumen</h2>
+      <ul>
+        <li><span class="b">1</span><span>EvaluaBot es <b>un programa siempre encendido</b> que conecta Slack, Notion y una IA.</span></li>
+        <li><span class="b">2</span><span>Migrar significa <b>mudarlo a Google Cloud</b>, que lo mantiene encendido, seguro y sin que gestionemos el ordenador.</span></li>
+        <li><span class="b">3</span><span>La pieza clave es <b>Cloud Run</b> (la oficina), con una caja fuerte para las llaves y un almacén para los informes.</span></li>
+        <li><span class="b">4</span><span>Los <b>datos no se tocan</b>: siguen en Notion. Y hace falta muy poco cambio en el programa.</span></li>
+      </ul>
+    </div>
+  </section>
+
+  <p class="foot">Documento explicativo para dirección · EvaluaBot → Google Cloud. Las cifras técnicas detalladas están en <b>docs/MIGRACION_GCP.md</b>.</p>
+
+</div>
+
+<script>
+  // Aparición suave y escalonada, respetando la preferencia de reducir movimiento.
+  (function () {
+    if (window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches) return;
+    var secs = document.querySelectorAll("section, header");
+    secs.forEach(function (s, i) {
+      s.classList.add("reveal");
+      s.style.animationDelay = (i * 0.06) + "s";
+    });
+  })();
+</script>

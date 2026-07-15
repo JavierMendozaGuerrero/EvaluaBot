@@ -13,6 +13,10 @@ env/
 *.log
 .DS_Store
 
+# Cada dev tiene su propio deploy.sh (usuario SSH, carpeta y puerto del NAS).
+# Se crea copiando deploy-template.sh, que sí va versionado.
+deploy.sh
+
 backend/dashboard_web/*
 !backend/dashboard_web/.gitkeep
 backend/slack_lists_config.json

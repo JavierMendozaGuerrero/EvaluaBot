@@ -166,7 +166,7 @@ def _deadline_extra(fecha_solicitud: str, dias) -> str:
 def solicitar_evaluacion_extra(evaluado: str, evaluador: str, contexto: str, idioma: str = "es") -> dict:
     """Crea la solicitud pendiente en Notion y notifica por Slack al evaluador.
     El deadline se calcula = fecha de solicitud + frecuencia 'extra' (días) de la BD
-    'Frecuencia evaluaciones' (por defecto 2 semanas), no lo fija quien la pide."""
+    'Deadlines evaluaciones' (por defecto 2 semanas), no lo fija quien la pide."""
     db_id = _obtener_o_crear_bbdd_solicitudes()
     if not db_id:
         return {"ok": False, "error": t("evex.err_db_access", idioma)}

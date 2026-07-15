@@ -876,7 +876,7 @@ def activar_evaluaciones_empleados(manager: str, proyecto: str, empleados: list,
     Activa evaluaciones de proyecto para los empleados indicados.
     Crea/actualiza registros en la BD de activaciones y envía notificaciones Slack.
     Guarda la fecha de activación; el deadline se calcula = fecha_activación + la frecuencia
-    'proyecto' (días) configurada en la BD 'Frecuencia evaluaciones'.
+    'proyecto' (días) configurada en la BD 'Deadlines evaluaciones'.
     """
     db_id = _obtener_o_crear_bbdd_activaciones()
     if not db_id:
@@ -1378,7 +1378,7 @@ def obtener_progreso_proyectos_empleado(persona: str) -> list:
     with ThreadPoolExecutor(max_workers=min(8, len(nombres))) as ex:
         for nombre, comp in zip(nombres, ex.map(lambda p: obtener_evals_completadas_proyecto(persona, p), nombres)):
             completadas_por_proy[nombre] = comp
-    # Deadline = fecha de activación + frecuencia 'proyecto' (días) de la BD 'Frecuencia evaluaciones'.
+    # Deadline = fecha de activación + frecuencia 'proyecto' (días) de la BD 'Deadlines evaluaciones'.
     dias_proyecto = obtener_frecuencias_evaluaciones().get("proyecto")
     salida = []
     for p in activos:

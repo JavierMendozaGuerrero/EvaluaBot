@@ -101,11 +101,29 @@ divergencia, pero cualquier toggle irá a la nueva.
    (evaluadores Natalia Vega, Alicia Sardina…); el duplicado tiene filas por defecto
    y **es el que el bot usa ahora** → las evaluaciones MO están leyendo relaciones
    equivocadas. Split-brain activo de datos, no solo estética.
-2. **"Log evaluacion anual asistida" colgada de la página raíz** (09/07), creada por
-   `_obtener_o_crear_bbdd_sesiones_anual`
-   ([notion_service.py:1484](../backend/notion_service.py#L1484)). Además su
-   condición `_coincide_parent_bbdd(bbdd, parent_raíz)` rechaza cualquier original
-   que viva en otra página → garantiza recreación en la raíz.
+2. ~~**"Log evaluacion anual asistida" colgada de la página raíz**~~ — **RESUELTO el
+   15/07.** `_obtener_o_crear_bbdd_sesiones_anual` usaba `_parent_bbdd_referencia()`
+   (la raíz) cuando `arquitectura.md` ya la situaba bajo TO-SEE; ahora usa
+   `_parent_bbdd_en_pagina(config.NOTION_TOSEE_PAGE_NAME, crear=False)`
+   ([notion_service.py:1507](../backend/notion_service.py#L1507)).
+
+   El split-brain estaba activo: 14 filas en el duplicado de la raíz y 21 en el
+   original de TO-SEE. Ambas resultaron ser **solo datos de prueba** (`CA=javireneclaude`,
+   "esto es una prueba", "hola"), así que se archivaron las 21 filas y el duplicado
+   de la raíz se mandó a la papelera en vez de fusionar. Se volcaron las 35 filas a
+   JSON antes de borrar; la copia **no se versiona** (lleva texto de evaluación sobre
+   empleados con nombre) y quedó en el equipo de Javier, fuera del repo. Todo lo
+   archivado sigue además recuperable desde la papelera de Notion.
+
+   **Ojo para el resto de casos de esta lista:** `notion.databases.update(archived=True)`
+   **no archiva y no lanza error** — un no-op silencioso. Hay que usar `in_trash=True`.
+   Y `pages.update` sobre el id de una BD da `ObjectNotFound`.
+
+   Sigue pendiente el fallo de fondo: `_coincide_parent_bbdd`
+   ([notion_service.py:73](../backend/notion_service.py#L73)) devuelve `True` sin
+   comprobar el padre cuando el objeto es un `data_source` — y con notion-client
+   3.1.0 siempre lo es. O sea, el filtro por padre del fallback de `notion.search`
+   hoy no filtra nada, en este caso y en todos los demás de esta lista.
 3. **Carrera en BDs "Evaluaciones" por proyecto/persona:** dos BDs idénticas creadas
    el 08/07 a las 13:51 bajo la misma página. En
    `_obtener_o_crear_bbdd_evaluacion_proyecto`

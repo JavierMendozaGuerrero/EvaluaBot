@@ -1504,11 +1504,13 @@ def _obtener_o_crear_bbdd_sesiones_anual_locked() -> str | None:
     db_id = _cache_bbdd_sesiones_anual["db_id"]
     if db_id:
         return db_id
-    parent = _parent_bbdd_referencia()
+    # El log vive bajo TO-SEE, no en la raíz. Si la página no existe (instalación
+    # sin migrar), _parent_bbdd_en_pagina cae a la raíz y se comporta como antes.
+    parent = _parent_bbdd_en_pagina(config.NOTION_TOSEE_PAGE_NAME, crear=False)
     titulo = "Log evaluacion anual asistida"
     try:
-        # 1) Escanear los hijos de la raíz (donde la crea este código): consistencia
-        #    inmediata frente al lag de indexación de notion.search.
+        # 1) Escanear los hijos del padre: consistencia inmediata frente al lag de
+        #    indexación de notion.search, que además no ve las BD movidas a mano.
         found_id = _buscar_bbdd_en_pagina_id(parent["page_id"], titulo)
         if found_id:
             _cache_bbdd_sesiones_anual["db_id"] = found_id
@@ -4482,15 +4484,17 @@ def _obtener_o_crear_bbdd_calendario() -> str | None:
                 return None
 
         _cache_calendario_db["db_id"] = db_id
-    # Fuera del lock (como en 'Frecuencia evaluaciones'): añade descripción y fila de
+    # Fuera del lock (como en 'Deadlines evaluaciones'): añade descripción y fila de
     # ejemplo sin bloquear a otros hilos durante las llamadas a la API.
     _asegurar_calendario_autoexplicativo(db_id)
     return db_id
 
 
 # ---------------------------------------------------------------------------
-# Frecuencia de evaluaciones de Slack (BD 'Frecuencia evaluaciones': Tipo + Frecuencia días).
+# Frecuencia de evaluaciones de Slack (BD 'Deadlines evaluaciones': Tipo + Frecuencia días).
 # El deadline de una tarea de Slack = su fecha de envío + su frecuencia en días.
+# La BD se llamó 'Frecuencia evaluaciones' hasta el 15/07/2026; se sigue aceptando ese
+# título al resolverla para no crear una copia vacía en workspaces sin renombrar aún.
 # ---------------------------------------------------------------------------
 _cache_frecuencias_db: dict = {"db_id": None}
 _lock_frecuencias = threading.Lock()
@@ -4504,6 +4508,9 @@ _PROPS_FRECUENCIAS = {
 }
 # Frecuencia (días) con la que se siembra la BD la primera vez. Editable en Notion después.
 _FRECUENCIAS_DEFAULT = {"mensual": 30, "personal": 14, "ca": 30, "proyecto": 14, "extra": 14}
+
+_TITULO_FRECUENCIAS = "Deadlines evaluaciones"
+_TITULOS_FRECUENCIAS_LEGACY = ("Frecuencia evaluaciones",)
 
 
 def _asegurar_filas_frecuencias(db_id: str) -> None:
@@ -4528,7 +4535,7 @@ def _asegurar_filas_frecuencias(db_id: str) -> None:
                 "Frecuencia": {"number": dias},
             })
     except Exception:
-        logging.exception("Error sembrando 'Frecuencia evaluaciones'")
+        logging.exception("Error sembrando '%s'", _TITULO_FRECUENCIAS)
 
 
 def _obtener_o_crear_bbdd_frecuencias() -> str | None:
@@ -4539,29 +4546,37 @@ def _obtener_o_crear_bbdd_frecuencias() -> str | None:
             if parent.get("type") != "page_id":
                 parent = _parent_bbdd_referencia()
             parent_id = parent.get("page_id")
+            titulos = (_TITULO_FRECUENCIAS, *_TITULOS_FRECUENCIAS_LEGACY)
             if parent_id:
-                db_id = _buscar_bbdd_en_pagina_id(parent_id, "Frecuencia evaluaciones")
+                for titulo in titulos:
+                    db_id = _buscar_bbdd_en_pagina_id(parent_id, titulo)
+                    if db_id:
+                        break
             if not db_id:
-                try:
-                    res = notion.search(
-                        query="Frecuencia evaluaciones",
-                        filter={"value": _tipo_objeto_busqueda_bbdd(), "property": "object"},
-                        page_size=10,
-                    )
+                aceptados = {normalizar_nombre(t) for t in titulos}
+                for titulo in titulos:
+                    try:
+                        res = notion.search(
+                            query=titulo,
+                            filter={"value": _tipo_objeto_busqueda_bbdd(), "property": "object"},
+                            page_size=10,
+                        )
+                    except Exception:
+                        continue
                     for bbdd in res.get("results", []):
-                        if normalizar_nombre(_extraer_titulo_bbdd(bbdd)) == "frecuencia evaluaciones":
+                        if normalizar_nombre(_extraer_titulo_bbdd(bbdd)) in aceptados:
                             db_id = _data_source_id(bbdd)
                             break
-                except Exception:
-                    pass
+                    if db_id:
+                        break
             if not db_id:
                 try:
                     if _usa_data_sources():
                         nueva = notion.databases.create(
                             parent=parent,
-                            title=[{"type": "text", "text": {"content": "Frecuencia evaluaciones"}}],
+                            title=[{"type": "text", "text": {"content": _TITULO_FRECUENCIAS}}],
                             initial_data_source={
-                                "title": [{"type": "text", "text": {"content": "Frecuencia evaluaciones"}}],
+                                "title": [{"type": "text", "text": {"content": _TITULO_FRECUENCIAS}}],
                                 "properties": _PROPS_FRECUENCIAS,
                             },
                         )
@@ -4569,12 +4584,12 @@ def _obtener_o_crear_bbdd_frecuencias() -> str | None:
                     else:
                         nueva = notion.databases.create(
                             parent=parent,
-                            title=[{"type": "text", "text": {"content": "Frecuencia evaluaciones"}}],
+                            title=[{"type": "text", "text": {"content": _TITULO_FRECUENCIAS}}],
                             properties=_PROPS_FRECUENCIAS,
                         )
                     db_id = _data_source_id(nueva)
                 except Exception:
-                    logging.exception("Error creando 'Frecuencia evaluaciones' en Notion")
+                    logging.exception("Error creando '%s' en Notion", _TITULO_FRECUENCIAS)
                     return None
             _cache_frecuencias_db["db_id"] = db_id
     _asegurar_filas_frecuencias(db_id)
@@ -4582,7 +4597,7 @@ def _obtener_o_crear_bbdd_frecuencias() -> str | None:
 
 
 def obtener_frecuencias_evaluaciones() -> dict:
-    """{tipo: días} de la BD 'Frecuencia evaluaciones' (cacheado). Cae a los defaults."""
+    """{tipo: días} de la BD 'Deadlines evaluaciones' (cacheado). Cae a los defaults."""
     ahora = time.time()
     with _lock_frecuencias:
         c = _cache_frecuencias_val
@@ -4602,7 +4617,7 @@ def obtener_frecuencias_evaluaciones() -> dict:
                 if tipo in _FRECUENCIAS_DEFAULT and isinstance(num, (int, float)) and num > 0:
                     data[tipo] = int(num)
         except Exception:
-            logging.exception("Error leyendo 'Frecuencia evaluaciones'")
+            logging.exception("Error leyendo '%s'", _TITULO_FRECUENCIAS)
     with _lock_frecuencias:
         _cache_frecuencias_val["data"] = data
         _cache_frecuencias_val["ts"] = time.time()

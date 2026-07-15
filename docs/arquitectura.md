@@ -94,7 +94,7 @@ con defaults):
 Página raíz (NOTION_PARENT_PAGE_ID)
 ├── TO-DO
 │   ├── Datos a Monitorizar            → Lista de empleados, Lista CA, Calendario,
-│   │   └── Gestión de MiddleOffice       Frecuencia evaluaciones, Usuarios Web,
+│   │   └── Gestión de MiddleOffice       Deadlines evaluaciones, Usuarios Web,
 │   │        ├── Cargos de MiddleOffice    Cargos/Relaciones MO
 │   │        └── Relaciones de evaluaciones MiddleOffice
 │   ├── Datos opcionalmente modificables → Criterios de evaluaciones, Ejemplos de Guía
@@ -127,7 +127,7 @@ ubicaciones "antiguas" y "nuevas" (retrocompatibilidad).
 - **`Lista CA`**: fila por CA con columnas `A1, A2, …` = sus advisees.
 - **`Usuarios Web`**: `Name`, `Username`, `Persona`, `Email`, `Is admin`, `Salt`, `Password hash`, `Fecha alta`.
 - **`Calendario evaluaciones`**: fechas base `personal` y `proyecto_ca`.
-- **`Frecuencia evaluaciones`**: `{tipo: días}` para mensual/personal/ca/proyecto/extra.
+- **`Deadlines evaluaciones`**: `{tipo: días}` para mensual/personal/ca/proyecto/extra.
 - **`Preguntas *`**: banco de preguntas por área y por relación jerárquica (Top-Bottom / Bottom-Top / Same Level).
 
 ### 3.3 Inicialización idempotente y estética

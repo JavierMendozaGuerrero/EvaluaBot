@@ -282,6 +282,7 @@ El módulo soporta **dos APIs de Notion**: la clásica basada en `databases` y l
 
 ### `_obtener_o_crear_bbdd_sesiones_anual()` — [notion_service.py:1278](../backend/notion_service.py#L1278)
 - **Qué hace:** obtiene/crea la base "Log evaluacion anual asistida" (columnas Advisee, CA, Anio, Dimension, ValoracionCA, ValoracionIA, Eleccion, Divergencia, TextoFinal, Fecha). Cachea.
+- **Dónde la crea:** bajo la página **TO-SEE** (`config.NOTION_TOSEE_PAGE_NAME`). Si esa página no existe (instalación sin migrar), cae a la raíz. Hasta el 15/07 la creaba siempre en la raíz, lo que duplicó la base — ver [diagnóstico de páginas vacías](../diagnostico_paginas_vacias_notion.md).
 - **Devuelve:** str db_id o None.
 
 ### `guardar_log_evaluacion_anual(advisee, ca, anio, entradas)` — [notion_service.py:1325](../backend/notion_service.py#L1325)

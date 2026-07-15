@@ -943,17 +943,67 @@ function AdminPanel({ token, onBack }) {
   );
 }
 
+// Tarjeta de un objetivo. Con onEliminar muestra el botón de cerrarlo; los objetivos
+// antiguos llegan sin él (ya están cerrados) y con la firma de quién los cerró.
+function ObjetivoCard({ obj, onEliminar, eliminando, children }) {
+  // Tipo y fecha en que se marcó el objetivo, en una sola línea (cualquiera puede faltar).
+  const meta = [obj.tipo, formatearFecha(obj.fecha)].filter(Boolean).join(" · ");
+  return (
+    <article className="objetivo-item">
+      {meta && <p className="opinion-fecha fine">{meta}</p>}
+      <p className="objetivo-titulo"><strong>{obj.titulo}</strong></p>
+      {obj.kpis && <p className="objetivo-texto fine"><em>{t("obj.kpis_label")}</em> {obj.kpis}</p>}
+      {children}
+      {obj.eliminado_por && (
+        <p className="opinion-fecha fine">
+          {t("goals.closed_by", { quien: obj.eliminado_por, fecha: formatearFecha(obj.fecha_eliminacion) })}
+        </p>
+      )}
+      {onEliminar && (
+        <div style={{ marginTop: "8px" }}>
+          <button
+            className="link-button objetivo-eliminar"
+            disabled={eliminando}
+            onClick={() => onEliminar(obj.page_id)}
+          >
+            <span aria-hidden="true">×</span>
+            {eliminando ? t("common.deleting") : t("common.delete")}
+          </button>
+        </div>
+      )}
+    </article>
+  );
+}
+
 function MisObjetivosPage({ token, persona, onBack }) {
   const [objetivos, setObjetivos] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [deleting, setDeleting] = useState(null);
   const [error, setError] = useState("");
 
+  // Solo los vigentes: los que uno cierra pasan al histórico, que ve su CA.
+  function recargar() {
+    return apiRequest(`/api/objetivos?nombre=${encodeURIComponent(persona)}`, { token })
+      .then((data) => setObjetivos(data.objetivos || []));
+  }
+
   useEffect(() => {
-    apiRequest(`/api/objetivos?nombre=${encodeURIComponent(persona)}`, { token })
-      .then((data) => setObjetivos(data.objetivos || []))
-      .catch((err) => setError(err.message))
-      .finally(() => setLoading(false));
+    recargar().catch((err) => setError(err.message)).finally(() => setLoading(false));
   }, [token, persona]);
+
+  async function eliminar(page_id) {
+    if (!window.confirm(t("goals.confirm_delete"))) return;
+    setError("");
+    setDeleting(page_id);
+    try {
+      await apiRequest("/api/objetivos", { token, method: "DELETE", body: { page_id, nombre: persona } });
+      await recargar();
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setDeleting(null);
+    }
+  }
 
   return (
     <main className="page">
@@ -973,11 +1023,13 @@ function MisObjetivosPage({ token, persona, onBack }) {
           <p>{t("common.loading")}</p>
         ) : objetivos.length ? (
           <div className="objetivos-list">
-            {objetivos.map((obj, i) => (
-              <article key={i} className="objetivo-item">
-                <p className="objetivo-titulo"><strong>{obj.titulo}</strong></p>
-                {obj.kpis && <p className="objetivo-texto fine"><em>KPIs:</em> {obj.kpis}</p>}
-              </article>
+            {objetivos.map((obj) => (
+              <ObjetivoCard
+                key={obj.page_id}
+                obj={obj}
+                onEliminar={eliminar}
+                eliminando={deleting === obj.page_id}
+              />
             ))}
           </div>
         ) : (
@@ -989,8 +1041,9 @@ function MisObjetivosPage({ token, persona, onBack }) {
   );
 }
 
-function ObjetivosPage({ token, advisee, caName, onBack, vista = "form" }) {
+function ObjetivosPage({ token, advisee, caName, onBack, vista = "form", onCambiarVista }) {
   const [objetivos, setObjetivos] = useState([]);
+  const [antiguos, setAntiguos] = useState([]);
   const [form, setForm] = useState({ titulo: "", kpis: "", descripcion: "", tipo: "" });
   const [pendientes, setPendientes] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -999,15 +1052,22 @@ function ObjetivosPage({ token, advisee, caName, onBack, vista = "form" }) {
   const [error, setError] = useState("");
   const [success, setSuccess] = useState("");
   const [enviado, setEnviado] = useState(false);
+  const esHistorial = vista === "historial";
 
   function recargar() {
-    return apiRequest(`/api/objetivos?nombre=${encodeURIComponent(advisee.nombre)}`, { token })
-      .then((data) => setObjetivos(data.objetivos || []));
+    const url = `/api/objetivos?nombre=${encodeURIComponent(advisee.nombre)}`;
+    const actuales = apiRequest(url, { token }).then((data) => setObjetivos(data.objetivos || []));
+    // Los antiguos solo hacen falta en la vista del CA; el formulario de alta no los usa.
+    if (!esHistorial) return actuales;
+    return Promise.all([
+      actuales,
+      apiRequest(`${url}&antiguos=true`, { token }).then((data) => setAntiguos(data.objetivos || [])),
+    ]);
   }
 
   useEffect(() => {
     recargar().catch((err) => setError(err.message)).finally(() => setLoading(false));
-  }, [token, advisee.nombre]);
+  }, [token, advisee.nombre, esHistorial]);
 
   function objetivoLimpio() {
     return {
@@ -1030,11 +1090,12 @@ function ObjetivosPage({ token, advisee, caName, onBack, vista = "form" }) {
     setPendientes((prev) => prev.filter((_, i) => i !== idx));
   }
 
-  // Agrupa los objetivos por año y, dentro de cada año, por mes.
-  // objetivos ya viene ordenado por fecha descendente desde el backend.
-  const objetivosPorAnio = useMemo(() => {
+  // Agrupa los objetivos ANTIGUOS por año y, dentro de cada año, por mes. Los actuales
+  // van en lista plana: son pocos y están todos vigentes, agruparlos no aporta nada.
+  // antiguos ya viene ordenado por fecha descendente desde el backend.
+  const antiguosPorAnio = useMemo(() => {
     const anios = new Map(); // anio -> Map(mesIdx -> [obj])
-    for (const obj of objetivos) {
+    for (const obj of antiguos) {
       const fecha = obj.fecha || "";
       const anio = fecha.slice(0, 4) || t("common.no_date");
       const mesIdx = fecha.length >= 7 ? parseInt(fecha.slice(5, 7), 10) - 1 : -1;
@@ -1044,7 +1105,7 @@ function ObjetivosPage({ token, advisee, caName, onBack, vista = "form" }) {
       meses.get(mesIdx).push(obj);
     }
     return [...anios.entries()].map(([anio, meses]) => [anio, [...meses.entries()]]);
-  }, [objetivos]);
+  }, [antiguos]);
 
   async function guardar(e) {
     e.preventDefault();
@@ -1113,47 +1174,63 @@ function ObjetivosPage({ token, advisee, caName, onBack, vista = "form" }) {
 
           {/* RIGHT — introducir objetivos (form) o historial */}
           <div className="dash-main">
-            {vista === "historial" ? (
+            {esHistorial ? (
               <section className="objetivos-historial">
-                <p className="kicker">{t("goals.history")}</p>
+                <p className="kicker">{t("goals.kicker")}</p>
                 <h2>{t("goals.of_person", { nombre: advisee.nombre })}</h2>
+                {onCambiarVista && (
+                  <button className="link-button objetivos-ir-a" onClick={() => onCambiarVista("form")}>
+                    {t("goals.go_form", { nombre: advisee.nombre })}
+                  </button>
+                )}
+                {error && <p className="error">{error}</p>}
                 {loading ? (
                   <p>{t("common.loading")}</p>
-                ) : objetivos.length ? (
-                  <div className="objetivos-anios">
-                    {objetivosPorAnio.map(([anio, meses], anioIdx) => (
-                      <details key={anio} className="objetivos-anio" open={anioIdx === 0}>
-                        <summary className="objetivos-anio-head"><span>{anio}</span></summary>
-                        {meses.map(([mesIdx, items], mesPos) => (
-                          <details key={mesIdx} className="objetivos-mes" open={mesPos === 0}>
-                            <summary className="objetivos-mes-head">{mesIdx >= 0 ? nombreMes(mesIdx) : t("common.no_date")}</summary>
-                            <div className="objetivos-list">
-                              {items.map((obj) => (
-                                <article key={obj.page_id} className="objetivo-item">
-                                  {obj.tipo && <p className="opinion-fecha fine">{obj.tipo}</p>}
-                                  <p className="objetivo-titulo"><strong>{obj.titulo}</strong></p>
-                                  {obj.kpis && <p className="objetivo-texto fine"><em>KPIs:</em> {obj.kpis}</p>}
-                                  {obj.descripcion && <p className="objetivo-texto">{obj.descripcion}</p>}
-                                  <div style={{ marginTop: "8px" }}>
-                                    <button
-                                      className="link-button"
-                                      style={{ color: "var(--muted)", fontSize: "12px" }}
-                                      disabled={deleting === obj.page_id}
-                                      onClick={() => eliminar(obj.page_id)}
-                                    >
-                                      {deleting === obj.page_id ? t("common.deleting") : t("common.delete")}
-                                    </button>
-                                  </div>
-                                </article>
-                              ))}
-                            </div>
+                ) : (
+                  <>
+                    <h3 className="objetivos-seccion">{t("goals.current")}</h3>
+                    {objetivos.length ? (
+                      <div className="objetivos-list">
+                        {objetivos.map((obj) => (
+                          <ObjetivoCard
+                            key={obj.page_id}
+                            obj={obj}
+                            onEliminar={eliminar}
+                            eliminando={deleting === obj.page_id}
+                          >
+                            {obj.descripcion && <p className="objetivo-texto">{obj.descripcion}</p>}
+                          </ObjetivoCard>
+                        ))}
+                      </div>
+                    ) : (
+                      <p>{t("goals.none_current", { nombre: advisee.nombre })}</p>
+                    )}
+
+                    <h3 className="objetivos-seccion">{t("goals.old")}</h3>
+                    {antiguos.length ? (
+                      <div className="objetivos-anios">
+                        {antiguosPorAnio.map(([anio, meses], anioIdx) => (
+                          <details key={anio} className="objetivos-anio" open={anioIdx === 0}>
+                            <summary className="objetivos-anio-head"><span>{anio}</span></summary>
+                            {meses.map(([mesIdx, items], mesPos) => (
+                              <details key={mesIdx} className="objetivos-mes" open={mesPos === 0}>
+                                <summary className="objetivos-mes-head">{mesIdx >= 0 ? nombreMes(mesIdx) : t("common.no_date")}</summary>
+                                <div className="objetivos-list">
+                                  {items.map((obj) => (
+                                    <ObjetivoCard key={obj.page_id} obj={obj}>
+                                      {obj.descripcion && <p className="objetivo-texto">{obj.descripcion}</p>}
+                                    </ObjetivoCard>
+                                  ))}
+                                </div>
+                              </details>
+                            ))}
                           </details>
                         ))}
-                      </details>
-                    ))}
-                  </div>
-                ) : (
-                  <p>{t("goals.none_for", { nombre: advisee.nombre })}</p>
+                      </div>
+                    ) : (
+                      <p>{t("goals.none_old")}</p>
+                    )}
+                  </>
                 )}
               </section>
             ) : enviado ? (
@@ -1163,6 +1240,12 @@ function ObjetivosPage({ token, advisee, caName, onBack, vista = "form" }) {
             ) : (
               <form onSubmit={guardar}>
                 <h2>{t("goals.new")}</h2>
+                {onCambiarVista && (
+                  // type="button": dentro de un <form> el defecto es submit y guardaría.
+                  <button type="button" className="link-button objetivos-ir-a" onClick={() => onCambiarVista("historial")}>
+                    {t("goals.go_history", { nombre: advisee.nombre })}
+                  </button>
+                )}
                 {error && <p className="error">{error}</p>}
                 {success && <p className="fine">{success}</p>}
 
@@ -2375,6 +2458,7 @@ function HistorialEvaluacionesPage({ token, evaluado, evaluador, proyecto, onBac
               <thead>
                 <tr>
                   <th>{t("hist.col_date")}</th>
+                  <th>{t("hist.col_project")}</th>
                   <th>{t("hist.col_score")}</th>
                   <th>{t("hist.col_justif")}</th>
                   <th>{t("hist.col_relation")}</th>
@@ -2384,6 +2468,7 @@ function HistorialEvaluacionesPage({ token, evaluado, evaluador, proyecto, onBac
                 {historial.map((ev, i) => (
                   <tr key={i}>
                     <td className="hist-fecha">{formatFecha(ev.fecha)}</td>
+                    <td className="hist-proyecto">{ev.proyecto || <span style={{ opacity: 0.35 }}>—</span>}</td>
                     <td className="hist-valo">
                       {ev.q1
                         ? <span className={`hist-valo-badge valo-${ev.q1}`}>{ev.q1}</span>
@@ -2673,6 +2758,8 @@ function Dashboard({ token, user, onLogout, onNavigate, onBackToRoleSelect = nul
   const [paisGuardando, setPaisGuardando] = useState(false);
   const [paisMsg, setPaisMsg] = useState("");
   const [misObjetivos, setMisObjetivos] = useState([]);
+  const [objEliminando, setObjEliminando] = useState(null);
+  const [objError, setObjError] = useState("");
   const [informesOpen, setInformesOpen] = useState(false);
   const [objOpen, setObjOpen] = useState(false);
   const [tareasOpen, setTareasOpen] = useState(false);
@@ -2799,6 +2886,27 @@ function Dashboard({ token, user, onLogout, onNavigate, onBackToRoleSelect = nul
       .then(apply)
       .catch(() => {});
   }, [token, user?.persona]);
+
+  // Cerrar un objetivo propio: pasa a los antiguos, que ve el CA.
+  async function eliminarMiObjetivo(page_id) {
+    const persona = user?.persona;
+    if (!persona || !window.confirm(t("goals.confirm_delete"))) return;
+    setObjError("");
+    setObjEliminando(page_id);
+    try {
+      await apiRequest("/api/objetivos", { token, method: "DELETE", body: { page_id, nombre: persona } });
+      // Esta lista se sirve desde sessionStorage (SWR), así que hay que refrescar
+      // también la caché: si no, al remontar el dashboard reaparecería el cerrado.
+      const path = `/api/objetivos?nombre=${encodeURIComponent(persona)}`;
+      const data = await apiRequest(path, { token });
+      _setCache(path, data);
+      setMisObjetivos(data.objetivos || []);
+    } catch (err) {
+      setObjError(err.message);
+    } finally {
+      setObjEliminando(null);
+    }
+  }
 
   useEffect(() => {
     if (isAdmin) return;
@@ -3065,13 +3173,19 @@ function Dashboard({ token, user, onLogout, onNavigate, onBackToRoleSelect = nul
             </div>
             <hr style={{ ...DASH_DIVIDER, margin: 0 }} />
             <DashCollapsible title={t("dash.my_goals")} open={objOpen} onToggle={() => setObjOpen((v) => !v)}>
+              {objError && <p className="form-error" style={{ paddingLeft: 16 }}>{objError}</p>}
               {misObjetivos.length ? (
                 <div style={{ display: "flex", flexDirection: "column", gap: 8, paddingLeft: 16 }}>
-                  {misObjetivos.map((obj, i) => (
-                    <div key={i} style={{ display: "flex", flexDirection: "column", gap: 1 }}>
+                  {misObjetivos.map((obj) => (
+                    <div key={obj.page_id} style={{ display: "flex", flexDirection: "column", gap: 1 }}>
                       <p style={{ fontSize: 13, color: "#000", display: "flex", alignItems: "center", gap: 10 }}>
                         <span style={{ display: "inline-block", width: 4, height: 4, borderRadius: "50%", background: "var(--accent)", flexShrink: 0 }} />
-                        {obj.titulo}
+                        <span>
+                          {obj.titulo}
+                          {obj.fecha && (
+                            <span style={{ color: "rgba(0,0,0,.45)", fontWeight: 200 }}> · {formatearFecha(obj.fecha)}</span>
+                          )}
+                        </span>
                       </p>
                       {obj.kpis && (
                         <p style={{ fontSize: 13, fontWeight: 200, color: "rgba(0,0,0,.55)", display: "flex", alignItems: "flex-start", gap: 10, paddingLeft: 24 }}>
@@ -3085,6 +3199,15 @@ function Dashboard({ token, user, onLogout, onNavigate, onBackToRoleSelect = nul
                           <span>{obj.descripcion}</span>
                         </p>
                       )}
+                      <button
+                        className="link-button objetivo-eliminar"
+                        style={{ alignSelf: "flex-start", marginLeft: 24, marginTop: 2 }}
+                        disabled={objEliminando === obj.page_id}
+                        onClick={() => eliminarMiObjetivo(obj.page_id)}
+                      >
+                        <span aria-hidden="true">×</span>
+                        {objEliminando === obj.page_id ? t("common.deleting") : t("common.delete")}
+                      </button>
                     </div>
                   ))}
                 </div>
@@ -3257,6 +3380,18 @@ function Dashboard({ token, user, onLogout, onNavigate, onBackToRoleSelect = nul
                 </div>
                 {extraEvalOpen && (
                   <div style={{ display: "flex", flexDirection: "column", gap: 1, paddingBottom: 8 }}>
+                    <div
+                      onClick={() => onNavigate({ type: "solicitar-evaluacion-extra" })}
+                      style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 13, color: "var(--accent)", cursor: "pointer", padding: "1px 0", paddingLeft: 16 }}
+                    >
+                      {t("dash.nav_request_extra_eval")}
+                      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ width: 12, height: 12, flexShrink: 0 }}><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6" /><polyline points="15 3 21 3 21 9" /><line x1="10" y1="14" x2="21" y2="3" /></svg>
+                    </div>
+                    {evaluacionesExtraPendientes.length > 0 && (
+                      <p style={{ margin: "8px 0 2px", paddingLeft: 16, fontSize: 12, fontWeight: 500, color: "rgba(0,0,0,.55)" }}>
+                        {t("dash.extra_evals_to_complete")}
+                      </p>
+                    )}
                     {evaluacionesExtraPendientes.map((p) => (
                       <div
                         key={p.page_id}
@@ -3270,13 +3405,6 @@ function Dashboard({ token, user, onLogout, onNavigate, onBackToRoleSelect = nul
                         </span>
                       </div>
                     ))}
-                    <div
-                      onClick={() => onNavigate({ type: "solicitar-evaluacion-extra" })}
-                      style={{ display: "flex", alignItems: "center", gap: 10, fontSize: 13, color: "var(--accent)", cursor: "pointer", padding: "1px 0", paddingLeft: 16 }}
-                    >
-                      <span style={{ display: "inline-block", width: 4, height: 4, borderRadius: "50%", background: "var(--accent)", flexShrink: 0 }} />
-                      {t("dash.nav_request_extra_eval")}
-                    </div>
                   </div>
                 )}
               </div>
@@ -3937,7 +4065,10 @@ function AdviseeDetail({ token, advisee, advisees, onBack, onNavigate }) {
       setFuenteOk(true);
       setTimeout(() => setFuenteOk(false), 2600);
     } catch (err) {
-      setFuenteError(err.message);
+      // El detalle técnico ("Failed to fetch", 500...) no le dice nada al CA: aquí
+      // el único desenlace accionable es que esa fuente no tiene nada que descargar.
+      console.error(`Descarga de fuente ${endpoint}:`, err);
+      setFuenteError(t("ad.err_no_source_info"));
     } finally {
       setGenerandoFuente("");
     }
@@ -4187,6 +4318,16 @@ function AdviseeDetail({ token, advisee, advisees, onBack, onNavigate }) {
                         {tieneEvaluacionesExtra && (
                           <DashNavItem label={generandoFuente === "/api/generar-pdf-evals-extra" ? t("ad.generating") : t("ad.dl_extra_evals")} onClick={() => descargarFuentePdf("/api/generar-pdf-evals-extra", "evals_extra")} disabled={!!generandoFuente} download />
                         )}
+                        {/* Mismo PDF que el de To-see, repetido aquí como "total" de la lista:
+                            la regla superior es lo que hace legible que agrupa las fuentes de arriba. */}
+                        <div style={{ borderTop: "1px solid var(--border)", marginTop: 6, paddingTop: 2 }}>
+                          <DashNavItem
+                            label={generandoFuente === "/api/generar-pdf-completo" ? t("ad.generating") : t("ad.dl_all_in_one")}
+                            onClick={() => descargarFuentePdf("/api/generar-pdf-completo", "info_completa")}
+                            disabled={!!generandoFuente}
+                            download
+                          />
+                        </div>
                         {fuenteError && <p className="form-error">{fuenteError}</p>}
                       </AdviseeNavGroup>
                     </AdviseeNavGroup>
@@ -4218,6 +4359,12 @@ function AdviseeDetail({ token, advisee, advisees, onBack, onNavigate }) {
                   onClick={() => onNavigate({ type: "registro-comentarios", advisee, advisees, from: "advisee-detail" })}
                   external
                 />
+
+                <DashNavItem
+                  label={t("adplan.nav_title")}
+                  onClick={() => onNavigate({ type: "plan-accion", advisee, advisees, from: "advisee-detail" })}
+                  external
+                />
               </nav>
             </section>
 
@@ -4232,12 +4379,6 @@ function AdviseeDetail({ token, advisee, advisees, onBack, onNavigate }) {
               </p>
               <hr style={{ ...DASH_DIVIDER, margin: 0 }} />
               <nav style={{ display: "flex", flexDirection: "column" }}>
-                <DashNavItem
-                  label={t("adplan.page_title")}
-                  onClick={() => onNavigate({ type: "plan-accion", advisee, advisees, from: "advisee-detail" })}
-                  external
-                />
-
                 <DashNavItem
                   label={generandoFuente === "/api/generar-pdf-completo" ? t("ad.generating") : t("ad.view_available_info")}
                   onClick={() => descargarFuentePdf("/api/generar-pdf-completo", "info_completa")}
@@ -4435,6 +4576,9 @@ function PlanAccionPage({ token, advisee, advisees, onBack, onNavigate }) {
                 </>
               ) : plan ? (
                 <>
+                  <p style={{ margin: "0 0 16px", fontSize: 20, fontWeight: 500, color: "var(--fg)" }}>
+                    {t("adplan.exists")}
+                  </p>
                   <div style={{ border: "1px solid var(--border)", borderRadius: "var(--radius-lg)", padding: "18px 20px", background: "var(--bg)", whiteSpace: "pre-wrap", fontSize: 15, lineHeight: 1.6, color: "#000" }}>
                     {plan}
                   </div>
@@ -4665,7 +4809,10 @@ function MisProyectosActivosPage({ token, user, onBack }) {
                                   className="mpa-remove"
                                   onClick={() => modificarMiembro("eliminar", nombre, m.nombre)}
                                   title={t("mpa.remove_member", { nombre: m.nombre })}
-                                >{t("mpa.remove_short")}</button>
+                                >
+                                  <span className="mpa-remove-x" aria-hidden="true">✕</span>
+                                  {t("mpa.remove_short")}
+                                </button>
                               </td>
                             </tr>
                           );
@@ -5088,7 +5235,9 @@ function EvaluacionesProyectoPage({ token, user, proyectos, onBack, onNavigate, 
         </p>
       </div>
       {showHistorial && (
-        <button className="btn-historial" onClick={() => abrirHistorial(it)} type="button">{t("ep.history")}</button>
+        <button className="btn-historial" onClick={() => abrirHistorial(it)} type="button">
+          {t("ep.history", { nombre: it.evaluado, proyecto: proyectoSeleccionado })}
+        </button>
       )}
     </div>
   );
@@ -5203,6 +5352,10 @@ function FormularioEvaluacionProyecto({ token, user, proyecto, tipo, manager, ev
   // empresa. Solo en este caso la evaluación se libera al evaluado y hay que
   // confirmar el envío.
   const esTopToBottom = relacion === "superior" && tipo !== "autoevaluacion";
+  // Bottom-to-top y same level: la evaluación NO se libera al evaluado, la recibe
+  // su CA. Se avisa igualmente antes de enviar por si quiere revisar respuestas.
+  const esConfidencial =
+    (relacion === "inferior" || relacion === "igual") && tipo !== "autoevaluacion";
 
   const LABELS_TIPOS = {
     autoevaluacion: t("fep.label_auto"),
@@ -5309,7 +5462,7 @@ function FormularioEvaluacionProyecto({ token, user, proyecto, tipo, manager, ev
     }
     // Top-to-bottom: el evaluado podrá VER esta evaluación, así que el envío nunca
     // es directo — primero el aviso con "Guardar borrador" / "Enviar".
-    if (esTopToBottom) {
+    if (esTopToBottom || esConfidencial) {
       setStatus("");
       setConfirmando(true);
       return;
@@ -5406,6 +5559,16 @@ function FormularioEvaluacionProyecto({ token, user, proyecto, tipo, manager, ev
           {!necesitaSelector && evaluadoFijo && (
             <p className="fine" style={{ marginBottom: "16px", color: "#000" }}>
               {tipo === "autoevaluacion" ? t("fep.evaluating_self", { nombre: evaluadoFijo }) : t("fep.evaluating", { nombre: evaluadoFijo })}
+            </p>
+          )}
+          {tipo === "autoevaluacion" && (
+            <p className="fine" style={{ marginBottom: "16px", color: "#000" }}>
+              {t("fep.self_only_ca")}
+            </p>
+          )}
+          {esConfidencial && evaluadoFinal && (
+            <p className="fine" style={{ marginBottom: "16px", color: "#000" }}>
+              {t("fep.confidential_note", { nombre: evaluadoFinal })}
             </p>
           )}
 
@@ -5551,11 +5714,13 @@ function FormularioEvaluacionProyecto({ token, user, proyecto, tipo, manager, ev
         <div
           role="dialog"
           aria-modal="true"
-          style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,.45)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 1000, padding: 16 }}
+          style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,.45)", display: "flex", alignItems: "flex-end", justifyContent: "center", zIndex: 1000, padding: "16px 16px 12vh", overflowY: "auto" }}
         >
-          <div style={{ background: "#FFFFFF", borderRadius: 12, padding: "28px 26px", maxWidth: 520, width: "100%", boxShadow: "0 12px 40px rgba(0,0,0,.25)" }}>
+          <div style={{ background: "#FFFFFF", borderRadius: 12, padding: "28px 26px", maxWidth: 520, width: "100%", maxHeight: "80vh", overflowY: "auto", boxShadow: "0 12px 40px rgba(0,0,0,.25)" }}>
             <p style={{ fontSize: 15, lineHeight: 1.6, color: "#000", margin: 0 }}>
-              {t("fep.confirm_send_text", { nombre: evaluadoFinal })}
+              {esConfidencial
+                ? t("fep.confirm_send_text_ca", { nombre: evaluadoFinal })
+                : t("fep.confirm_send_text", { nombre: evaluadoFinal })}
             </p>
             <div className="actions" style={{ marginTop: 22 }}>
               <button type="button" onClick={realizarEnvio} disabled={enviando}>
@@ -6674,7 +6839,17 @@ function App() {
   } else if (page?.type === "mis-objetivos") {
     content = <MisObjetivosPage token={token} persona={user?.persona || user?.username || ""} onBack={() => navigate(null)} />;
   } else if (page?.type === "objetivos") {
-    content = <ObjetivosPage token={token} advisee={page.advisee} caName={user?.persona || ""} onBack={backTo(page)} vista={page.vista || "form"} />;
+    content = (
+      <ObjetivosPage
+        token={token}
+        advisee={page.advisee}
+        caName={user?.persona || ""}
+        onBack={backTo(page)}
+        vista={page.vista || "form"}
+        // Mismo page (conserva from/advisees, y con ello el "volver"), solo cambia la vista.
+        onCambiarVista={(v) => navigate({ ...page, vista: v })}
+      />
+    );
   } else if (page?.type === "plan-accion") {
     content = <PlanAccionPage token={token} advisee={page.advisee} advisees={page.advisees} onBack={backTo(page)} onNavigate={navigate} />;
   } else if (page?.type === "subir-informe") {

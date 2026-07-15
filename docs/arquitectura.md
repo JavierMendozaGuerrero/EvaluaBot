@@ -149,7 +149,7 @@ Soporta la API nueva de **data sources** y la clásica de databases (`_usa_data_
 | Empleados / perfiles | `obtener_registros_empleados` (caché 5 min), `obtener_perfil_empleado`, `buscar_empleado_y_cargo`, `obtener_slack_id_por_nombre`, `sugerir_empleados_parecidos`, `obtener_paises_disponibles`, `invalidar_cache_empleados` |
 | Evaluaciones mensuales/proyecto | `obtener_o_crear_bbdd_evaluado`, `guardar_en_notion`, `actualizar_en_notion`, `obtener_evaluaciones_por_evaluado`, `obtener_historial_mis_evaluaciones`, `guardar_barbecho_en_notion` |
 | Career Advisor / advisees | `obtener_advisees` (lee A1…An de Lista CA), `obtener_ca_de_empleado`, `obtener_opiniones_ca_por_advisee`, `ca_tiene_acceso_activo`, `toggle_acceso_advisees`, `advisee_tiene_acceso_individual`, `toggle_acceso_advisee_individual` |
-| Objetivos | `guardar_objetivo_persona`, `obtener_objetivos_persona`, `eliminar_objetivo_persona` |
+| Objetivos | `guardar_objetivo_persona`, `obtener_objetivos_persona(nombre, antiguos=False)`, `mover_objetivo_a_antiguos` (copia a `Objetivos antiguos - {nombre}` y archiva el original), `eliminar_objetivo_persona` |
 | Feedback confidencial | `excluir_feedback_confidencial`, `obtener_feedback_confidencial_por_evaluado`, `obtener_todo_el_feedback_confidencial` (anonimizado) |
 | Evaluación personal | `guardar_evaluacion_personal`, `obtener_comentarios_personales`, `evaluacion_personal_guardada_desde` |
 | Informe final | `guardar_informe_final` (conserva solo los 2 más recientes), `obtener_informe_final_reciente` |
@@ -333,10 +333,19 @@ compatibilidad (`from .api.app import app, iniciar_api_backend`). uvicorn escuch
 ### 7.5 Tracking de cumplimiento (`eval_tracking.py`)
 
 Tabla plana **"Evaluaciones recibidas y completadas"**: una fila = "a la persona P se le asignó una evaluación de
-tipo T en el ciclo C". `registrar_envio` (idempotente por persona/tipo/ciclo), `marcar_completada` (auto-cura si no
-había envío), `resumen_ciclo_actual` / `detalle_por_persona` (panel admin), `pendientes_slack_de_persona` (deadlines
-en el dashboard). El ciclo de 4 semanas se ancla en `proyecto_ca` del calendario. Recordatorios web duraderos
-(proyecto/extra) usan `Fecha_recordatorio` para no repetir antes de 14 días.
+tipo T en el ciclo C". `registrar_envio` (idempotente por persona/tipo/ciclo), `marcar_completada` (cierra la
+pendiente más reciente aunque sea de otro ciclo; auto-cura si no había envío), `resumen_ciclo_actual` /
+`detalle_por_persona` (panel admin), `pendientes_slack_de_persona` (tareas del dashboard). El ciclo de 4 semanas se
+ancla en `proyecto_ca` del calendario. Recordatorios web duraderos (proyecto/extra) usan `Fecha_recordatorio` para no
+repetir antes de 14 días.
+
+**Caducidad**: el estado en Notion es binario (`Completada`), no hay columna de caducada. Una asignación caduca
+cuando pasa su `deadline_asignacion` = `Fecha_envio` + la frecuencia de su tipo ("Deadlines evaluaciones"), que es
+cuándo llega la siguiente y cuándo Slack edita el DM anterior a "caducado". `pendientes_slack_de_persona` las excluye
+**en lectura**: la fila se queda con `Completada=False` porque para el cumplimiento cuenta como asignada y no
+realizada. Ojo con usar el ciclo para esto: es una ventana de 28 días igual para todos, mientras que la frecuencia es
+por tipo y editable (mensual 30, personal 14). Sin frecuencia calculable no se caduca nada (mejor una tarea de más
+que ocultar una real).
 
 ---
 

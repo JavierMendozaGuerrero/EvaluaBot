@@ -3186,6 +3186,45 @@ _PROPS_OBJETIVO_PERSONA = {
     "Tipo":        {"rich_text": {}},
 }
 
+# Los objetivos cerrados viven en su propia base, con los mismos campos + quién los
+# cerró y cuándo. Así el advisee solo ve los vigentes y el CA conserva el histórico.
+_PROPS_OBJETIVO_ANTIGUO = {
+    **_PROPS_OBJETIVO_PERSONA,
+    "Fecha eliminacion": {"date": {}},
+    "Eliminado por":     {"rich_text": {}},
+}
+
+# Páginas contenedoras (distintas) para objetivos vigentes y cerrados.
+_PAGINA_OBJETIVOS = "Objetivos empleados"
+_PAGINA_OBJETIVOS_ANTIGUOS = "Objetivos antiguos"
+
+
+def _titulo_bbdd_objetivos(nombre: str, antiguos: bool = False) -> str:
+    prefijo = "Objetivos antiguos" if antiguos else "Objetivos"
+    return f"{prefijo} - {nombre.strip()}"
+
+
+def _parent_pagina_objetivos_antiguos() -> dict:
+    """Padre donde CREAR la página 'Objetivos antiguos': bajo TO-SEE, no en la raíz.
+
+    Si la página ya existe en cualquier punto de la jerarquía se reutiliza
+    (_buscar_pagina_en_jerarquia escanea raíz + TO-DO/TO-SEE y sus hijos), así que moverla
+    a mano en Notion no duplica nada. Si TO-SEE no existe, _parent_bbdd_en_pagina cae a la
+    raíz y esto se comporta como antes.
+    """
+    parent_raiz = _parent_bbdd_referencia()
+    page_id = _buscar_pagina_en_jerarquia(_PAGINA_OBJETIVOS_ANTIGUOS, parent_raiz["page_id"])
+    if page_id:
+        return {"type": "page_id", "page_id": page_id}
+    padre = _parent_bbdd_en_pagina(config.NOTION_TOSEE_PAGE_NAME, crear=False)
+    pagina = notion.pages.create(
+        parent={"type": "page_id", "page_id": padre["page_id"]},
+        properties={"title": {"title": [{"type": "text", "text": {"content": _PAGINA_OBJETIVOS_ANTIGUOS}}]}},
+    )
+    logging.info("Página '%s' creada bajo '%s'", _PAGINA_OBJETIVOS_ANTIGUOS, config.NOTION_TOSEE_PAGE_NAME)
+    return {"type": "page_id", "page_id": pagina["id"]}
+
+
 _cache_objetivos_persona: dict = {}  # cache_key -> db_id  (base destino para GUARDAR)
 _cache_objetivos_ids: dict = {}      # cache_key -> (ts, list[db_id])  (todas las bases, para LEER)
 # Las bases son estables → si encontramos alguna, cacheamos largo (el CONTENIDO se lee en
@@ -3203,16 +3242,18 @@ def _clave_objetivos(texto: str) -> str:
     return "".join(c for c in unicodedata.normalize("NFD", base) if unicodedata.category(c) != "Mn")
 
 
-def _buscar_todas_bbdd_objetivos_persona(nombre: str) -> list[str]:
-    """Todos los db_id de bases 'Objetivos - {nombre}' bajo 'Objetivos empleados',
+def _buscar_todas_bbdd_objetivos_persona(nombre: str, antiguos: bool = False) -> list[str]:
+    """Todos los db_id de bases 'Objetivos - {nombre}' bajo 'Objetivos empleados' (o
+    'Objetivos antiguos - {nombre}' bajo 'Objetivos antiguos' si antiguos=True),
     comparando sin tildes ni mayúsculas. Devuelve varias si hay duplicados, para poder
     agregar sus objetivos en la lectura.
 
     Cachea la lista de db_id por persona (recorrer las bases es caro: ~1 llamada de
     listado + 1 retrieve por base). El CONTENIDO se sigue leyendo en vivo en
     obtener_objetivos_persona, así que un objetivo nuevo en una base ya conocida se ve
-    al instante; solo si se crea una base nueva se actualiza este cache (en _obtener_o_crear)."""
-    objetivo = _clave_objetivos(f"Objetivos - {nombre.strip()}")
+    al instante; solo si se crea una base nueva se actualiza este cache (en _obtener_o_crear).
+    La clave de cache incluye el prefijo del título, así que vigentes y antiguos no colisionan."""
+    objetivo = _clave_objetivos(_titulo_bbdd_objetivos(nombre, antiguos))
     ahora = time.time()
     with lock:
         entry = _cache_objetivos_ids.get(objetivo)
@@ -3222,7 +3263,7 @@ def _buscar_todas_bbdd_objetivos_persona(nombre: str) -> list[str]:
         if ahora - ts < ttl:
             return ids_cache
 
-    parent = _parent_bbdd_en_pagina("Objetivos empleados", crear=False)
+    parent = _parent_bbdd_en_pagina(_PAGINA_OBJETIVOS_ANTIGUOS if antiguos else _PAGINA_OBJETIVOS, crear=False)
     ids: list[str] = []
     if parent.get("type") == "page_id":
         for bloque in _iter_blocks(parent["page_id"]):
@@ -3236,9 +3277,10 @@ def _buscar_todas_bbdd_objetivos_persona(nombre: str) -> list[str]:
     return ids
 
 
-def _obtener_o_crear_bbdd_objetivos_persona(nombre: str) -> str:
+def _obtener_o_crear_bbdd_objetivos_persona(nombre: str, antiguos: bool = False) -> str:
     nombre_strip = nombre.strip()
-    titulo = f"Objetivos - {nombre_strip}"
+    titulo = _titulo_bbdd_objetivos(nombre_strip, antiguos)
+    props = _PROPS_OBJETIVO_ANTIGUO if antiguos else _PROPS_OBJETIVO_PERSONA
     cache_key = _clave_objetivos(titulo)
     with lock:
         if cache_key in _cache_objetivos_persona:
@@ -3246,15 +3288,15 @@ def _obtener_o_crear_bbdd_objetivos_persona(nombre: str) -> str:
 
     # Busca cualquier base existente (insensible a tildes/mayúsculas). Si hay
     # duplicados, usa la primera; la lectura las agrega todas de todos modos.
-    existentes = _buscar_todas_bbdd_objetivos_persona(nombre_strip)
+    existentes = _buscar_todas_bbdd_objetivos_persona(nombre_strip, antiguos)
     if existentes:
         db_id = existentes[0]
         with lock:
             _cache_objetivos_persona[cache_key] = db_id
         return db_id
 
-    # No existe todavía: crea la página contenedora "Objetivos empleados" (si hace falta) y la base
-    parent = _parent_bbdd_en_pagina("Objetivos empleados", crear=True)
+    # No existe todavía: crea la página contenedora (si hace falta) y la base
+    parent = _parent_pagina_objetivos_antiguos() if antiguos else _parent_bbdd_en_pagina(_PAGINA_OBJETIVOS, crear=True)
 
     if _usa_data_sources():
         nueva = notion.databases.create(
@@ -3262,7 +3304,7 @@ def _obtener_o_crear_bbdd_objetivos_persona(nombre: str) -> str:
             title=[{"type": "text", "text": {"content": titulo}}],
             initial_data_source={
                 "title": [{"type": "text", "text": {"content": titulo}}],
-                "properties": _PROPS_OBJETIVO_PERSONA,
+                "properties": props,
             },
         )
         nueva = notion.databases.retrieve(database_id=nueva["id"])
@@ -3270,7 +3312,7 @@ def _obtener_o_crear_bbdd_objetivos_persona(nombre: str) -> str:
         nueva = notion.databases.create(
             parent=parent,
             title=[{"type": "text", "text": {"content": titulo}}],
-            properties=_PROPS_OBJETIVO_PERSONA,
+            properties=props,
         )
 
     db_id = _data_source_id(nueva)
@@ -3298,11 +3340,11 @@ def guardar_objetivo_persona(ca_nombre: str, advisee_nombre: str, titulo: str, k
     )
 
 
-def obtener_objetivos_persona(advisee_nombre: str) -> list[dict]:
+def obtener_objetivos_persona(advisee_nombre: str, antiguos: bool = False) -> list[dict]:
     try:
         # Lee de TODAS las bases 'Objetivos - {nombre}' que casen (insensible a tildes),
         # agregando duplicados. NO crea ninguna base (leer no debe generar duplicados vacíos).
-        db_ids = _buscar_todas_bbdd_objetivos_persona(advisee_nombre)
+        db_ids = _buscar_todas_bbdd_objetivos_persona(advisee_nombre, antiguos)
         resultados = []
         vistos: set = set()
         alguna_fallo = False
@@ -3335,7 +3377,7 @@ def obtener_objetivos_persona(advisee_nombre: str) -> list[dict]:
                         p.get("plain_text", "") for p in (props.get("Tipo", {}).get("rich_text") or [])
                     ).strip()
                     fecha_prop = props.get("Fecha", {}).get("date") or {}
-                    resultados.append({
+                    objetivo = {
                         "page_id": pagina["id"],
                         "titulo": titulo_val,
                         "ca": ca_val,
@@ -3343,7 +3385,14 @@ def obtener_objetivos_persona(advisee_nombre: str) -> list[dict]:
                         "descripcion": desc_val,
                         "tipo": tipo_val,
                         "fecha": fecha_prop.get("start", ""),
-                    })
+                    }
+                    if antiguos:
+                        elim_prop = props.get("Fecha eliminacion", {}).get("date") or {}
+                        objetivo["fecha_eliminacion"] = elim_prop.get("start", "")
+                        objetivo["eliminado_por"] = "".join(
+                            p.get("plain_text", "") for p in (props.get("Eliminado por", {}).get("rich_text") or [])
+                        ).strip()
+                    resultados.append(objetivo)
                 if not resp.get("has_more"):
                     break
                 cursor = resp.get("next_cursor")
@@ -3353,7 +3402,7 @@ def obtener_objetivos_persona(advisee_nombre: str) -> list[dict]:
         if alguna_fallo:
             # Alguna base cacheada ya no existe (borrada/restaurada): invalida para re-listar.
             with lock:
-                _cache_objetivos_ids.pop(_clave_objetivos(f"Objetivos - {advisee_nombre.strip()}"), None)
+                _cache_objetivos_ids.pop(_clave_objetivos(_titulo_bbdd_objetivos(advisee_nombre, antiguos)), None)
         resultados.sort(key=lambda x: x["fecha"] or "", reverse=True)
         return resultados
     except Exception:
@@ -3368,6 +3417,36 @@ def eliminar_objetivo_persona(page_id: str) -> bool:
     except Exception:
         logging.exception("Error eliminando objetivo %s", page_id)
         return False
+
+
+def mover_objetivo_a_antiguos(advisee_nombre: str, objetivo: dict, eliminado_por: str) -> bool:
+    """Cierra un objetivo: lo copia a 'Objetivos antiguos - {nombre}' y archiva el original.
+
+    No se reparenta la página (la API de Notion no lo garantiza entre bases): se recrea la
+    fila con los mismos campos, más quién la cerró y cuándo. Se copia ANTES de archivar, así
+    que si el archivado falla el objetivo queda duplicado —visible en ambas listas— en vez de
+    perdido. El original queda en la papelera de Notion como respaldo.
+    """
+    page_id = objetivo.get("page_id", "")
+    try:
+        db_id = _obtener_o_crear_bbdd_objetivos_persona(advisee_nombre, antiguos=True)
+        props = {
+            "Name":        {"title":     [{"text": {"content": objetivo.get("titulo", "")[:2000]}}]},
+            "CA":          {"rich_text": [{"text": {"content": objetivo.get("ca", "")[:2000]}}]},
+            "KPIs":        {"rich_text": [{"text": {"content": objetivo.get("kpis", "")[:2000]}}]},
+            "Descripcion": {"rich_text": [{"text": {"content": objetivo.get("descripcion", "")[:2000]}}]},
+            "Tipo":        {"rich_text": [{"text": {"content": objetivo.get("tipo", "")[:2000]}}]},
+            "Fecha eliminacion": {"date": {"start": datetime.now(timezone.utc).isoformat()}},
+            "Eliminado por":     {"rich_text": [{"text": {"content": eliminado_por[:2000]}}]},
+        }
+        # Conserva la fecha de creación original; Notion rechaza {"start": ""}.
+        fecha = objetivo.get("fecha") or ""
+        props["Fecha"] = {"date": {"start": fecha} if fecha else None}
+        _crear_pagina_en_bbdd(db_id, props)
+    except Exception:
+        logging.exception("Error copiando objetivo %s a antiguos de '%s'", page_id, advisee_nombre)
+        return False
+    return eliminar_objetivo_persona(page_id)
 
 
 # ---------------------------------------------------------------------------

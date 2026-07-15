@@ -8,9 +8,9 @@ from ...eval_tracking import detalle_por_persona, resumen_ciclo_actual
 from ...notion_service import (
     advisee_tiene_acceso_individual,
     ca_tiene_acceso_activo,
-    eliminar_objetivo_persona,
     guardar_objetivo_persona,
     idioma_por_sesion,
+    mover_objetivo_a_antiguos,
     obtener_advisees,
     obtener_criterios_evaluacion,
     obtener_feedback_confidencial_por_evaluado,
@@ -42,13 +42,14 @@ def opiniones_ca(advisee: str = "", session=Depends(require_session)):
 
 
 @router.get("/api/objetivos")
-def objetivos_get(nombre: str = "", session=Depends(require_session)):
-    # Una persona siempre puede ver sus propios objetivos (p.ej. sección "Mis
+def objetivos_get(nombre: str = "", antiguos: bool = False, session=Depends(require_session)):
+    # Una persona siempre puede ver sus propios objetivos VIGENTES (p.ej. sección "Mis
     # objetivos" de su perfil); si consulta los de otra persona, debe ser su CA (o admin).
+    # Los antiguos son solo para el CA: al advisee solo se le muestran los actuales.
     es_propio = normalizar_nombre(nombre) == normalizar_nombre(session.get("persona", ""))
-    if not es_propio:
+    if antiguos or not es_propio:
         exigir_acceso_advisee(session, nombre)
-    return {"objetivos": obtener_objetivos_persona(nombre)}
+    return {"objetivos": obtener_objetivos_persona(nombre, antiguos=antiguos)}
 
 
 @router.post("/api/objetivos")
@@ -72,13 +73,16 @@ def objetivos_delete(datos: dict = Body(default={}), session=Depends(require_ses
     nombre = datos.get("nombre", "")
     if not page_id or not nombre:
         return JSONResponse({"error": "Faltan page_id y nombre."}, status_code=400)
-    # Autorización: solo el CA (o admin) de esa persona puede borrar, y el objetivo
-    # a borrar debe pertenecer realmente a esa persona (evita borrar por page_id ajeno).
-    exigir_acceso_advisee(session, nombre)
-    page_ids_persona = {o.get("page_id") for o in obtener_objetivos_persona(nombre)}
-    if page_id not in page_ids_persona:
+    # Autorización: puede cerrar un objetivo el propio interesado o su CA (o admin), y el
+    # objetivo debe pertenecer realmente a esa persona (evita cerrar por page_id ajeno).
+    es_propio = normalizar_nombre(nombre) == normalizar_nombre(session.get("persona", ""))
+    if not es_propio:
+        exigir_acceso_advisee(session, nombre)
+    objetivo = next((o for o in obtener_objetivos_persona(nombre) if o.get("page_id") == page_id), None)
+    if objetivo is None:
         raise PermissionError("Ese objetivo no pertenece a la persona indicada.")
-    ok = eliminar_objetivo_persona(page_id)
+    # No se borra: pasa a la base de objetivos antiguos, con quién lo cerró y cuándo.
+    ok = mover_objetivo_a_antiguos(nombre, objetivo, session.get("persona", ""))
     return {"ok": ok}
 
 

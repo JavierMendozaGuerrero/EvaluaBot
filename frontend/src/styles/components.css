@@ -154,20 +154,24 @@
 .btn-back svg { width: 13px; height: 13px; }
 
 .btn-historial {
-  display: inline-flex;
-  align-items: center;
-  height: 28px;
-  padding: 0 12px;
+  display: inline-block;
+  width: 260px;
+  flex-shrink: 0;
+  padding: 7px 14px;
   background: transparent;
   border: 1px solid var(--accent);
-  border-radius: var(--radius-pill);
+  border-radius: 14px;
   font-family: var(--font-sans);
   font-size: 11px;
   font-weight: 400;
+  line-height: 1.35;
+  text-align: left;
   color: #000;
   cursor: pointer;
+  /* La regla global `button` fuerza nowrap: aquí el texto es largo y debe partirse. */
+  white-space: normal;
+  overflow-wrap: anywhere;
   transition: border-color 0.15s, color 0.15s;
-  white-space: nowrap;
 }
 .btn-historial:hover { border-color: var(--accent); color: #000; }
 

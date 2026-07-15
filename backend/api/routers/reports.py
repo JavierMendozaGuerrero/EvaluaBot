@@ -144,7 +144,10 @@ def _generar_pdf_generico(datos, session, generador, prefijo, forzar_no_anonimo)
 
 @router.post("/api/generar-pdf-evals-proyecto")
 def generar_pdf_evals_proyecto_route(datos: dict = Body(default={}), session=Depends(require_session)):
-    return _generar_pdf_generico(datos, session, generar_pdf_evals_proyecto, "evals_proyecto", True)
+    # forzar_no_anonimo=False: las evals de proyecto se sirven anónimas al CA como el
+    # resto. Antes iba en True y el nombre del evaluador salía siempre, saltándose la
+    # jerarquía de privacidad. Los admin siguen viendo nombres por la vía normal.
+    return _generar_pdf_generico(datos, session, generar_pdf_evals_proyecto, "evals_proyecto", False)
 
 
 @router.post("/api/generar-pdf-seguimiento")

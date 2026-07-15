@@ -26,6 +26,7 @@ from .notion_service import (
     _query_bbdd,
     _usa_data_sources,
     obtener_config_calendario,
+    obtener_frecuencias_evaluaciones,
     obtener_nombre_por_id_usuario,
     siguiente_envio_calendario,
 )
@@ -127,6 +128,48 @@ def clave_ciclo_actual() -> str:
 
 
 # ---------------------------------------------------------------------------
+# Caducidad de una asignación
+# ---------------------------------------------------------------------------
+#
+# Una asignación caduca cuando llegaría la siguiente evaluación de su tipo, que es lo que
+# en Slack edita el DM anterior a "caducado". Se calcula con la frecuencia del tipo, NO con
+# el ciclo de 4 semanas: cada tipo tiene la suya y es editable en Notion, así que una
+# asignación puede seguir viva en el ciclo siguiente (mensual = 30 días) o caducar dentro
+# del suyo (personal = 14). La caducidad no se persiste: la fila se queda con
+# Completada=False, que para el cumplimiento es la verdad (asignada y no realizada).
+
+def deadline_asignacion(fecha_envio: str, tipo: str, frecuencias: dict | None = None) -> str:
+    """Deadline (YYYY-MM-DD) = fecha de envío + frecuencia (días) del tipo.
+
+    Devuelve "" si no se puede calcular (sin fecha de envío o sin frecuencia del tipo).
+    """
+    if frecuencias is None:
+        frecuencias = _frecuencias()
+    dias = frecuencias.get(tipo)
+    if not fecha_envio or not dias:
+        return ""
+    try:
+        return (datetime.fromisoformat(fecha_envio[:10]) + timedelta(days=int(dias))).date().isoformat()
+    except Exception:
+        logging.exception("No se pudo calcular el deadline de la asignación (%s, %s)", fecha_envio, tipo)
+        return ""
+
+
+def _caducada(deadline: str) -> bool:
+    """True si el deadline ya pasó. Sin deadline calculable no caduca: ante la duda es
+    mejor mostrar una tarea de más que ocultar una real."""
+    return bool(deadline) and deadline < datetime.now(timezone.utc).date().isoformat()
+
+
+def _frecuencias() -> dict:
+    try:
+        return obtener_frecuencias_evaluaciones()
+    except Exception:
+        logging.exception("No se pudieron leer las frecuencias; ninguna asignación caducará")
+        return {}
+
+
+# ---------------------------------------------------------------------------
 # Utilidades de lectura de propiedades
 # ---------------------------------------------------------------------------
 
@@ -145,6 +188,11 @@ def _select(props: dict, prop: str) -> str:
 
 def _checkbox(props: dict, prop: str) -> bool:
     return bool((props.get(prop) or {}).get("checkbox"))
+
+
+def _dia(props: dict, prop: str) -> str:
+    """Devuelve el día 'YYYY-MM-DD' de una propiedad date, o ""."""
+    return (((props.get(prop) or {}).get("date") or {}).get("start") or "")[:10]
 
 
 def _fecha(props: dict, prop: str):
@@ -191,7 +239,7 @@ def registrar_envio(persona: str, tipo: str, detalle: str = "") -> None:
         return
     ciclo = clave_ciclo_actual()
     try:
-        if _buscar_fila(db_id, persona, tipo, ciclo, solo_pendientes=True):
+        if _buscar_fila(db_id, persona, tipo, ciclo, completada=False):
             return  # ya hay una asignación pendiente para este ciclo
         _crear_pagina_en_bbdd(db_id, {
             "Persona": {"title": [{"type": "text", "text": {"content": persona}}]},
@@ -216,10 +264,10 @@ def registrar_envio_por_slack_id(user_id: str, tipo: str, detalle: str = "") -> 
 
 
 def marcar_completada(persona: str, tipo: str) -> None:
-    """Marca como completada la asignación pendiente (persona, tipo) del ciclo actual.
+    """Marca como completada la asignación pendiente más reciente de (persona, tipo).
 
-    Si no existe (envío no registrado), crea una fila ya completada para no perder la
-    'realizada'.
+    Si no hay ninguna pendiente y tampoco consta ya una completada de este ciclo (envío no
+    registrado), crea una fila ya completada para no perder la 'realizada'.
     """
     if not persona or tipo not in TIPOS:
         return
@@ -229,7 +277,7 @@ def marcar_completada(persona: str, tipo: str) -> None:
     ciclo = clave_ciclo_actual()
     ahora = datetime.now(timezone.utc).isoformat()
     try:
-        fila = _buscar_fila(db_id, persona, tipo, ciclo, solo_pendientes=True)
+        fila = _buscar_pendiente_reciente(db_id, persona, tipo)
         if fila:
             notion.pages.update(page_id=fila["id"], properties={
                 "Completada": {"checkbox": True},
@@ -237,7 +285,7 @@ def marcar_completada(persona: str, tipo: str) -> None:
             })
             return
         # No hay pendiente: puede que ya se marcara antes en este ciclo. No duplicar.
-        if _buscar_fila(db_id, persona, tipo, ciclo, solo_pendientes=False):
+        if _buscar_fila(db_id, persona, tipo, ciclo, completada=True):
             return
         # No había envío registrado en absoluto: auto-cura creando una fila completada.
         _crear_pagina_en_bbdd(db_id, {
@@ -315,19 +363,47 @@ def marcar_recordatorio_enviado(page_id: str) -> None:
         logging.exception("Error marcando recordatorio enviado en fila '%s'", page_id)
 
 
-def _buscar_fila(db_id: str, persona: str, tipo: str, ciclo: str, solo_pendientes: bool):
-    """Devuelve la primera fila que coincide con (persona, tipo, ciclo). None si no hay."""
+def _buscar_fila(db_id: str, persona: str, tipo: str, ciclo: str, completada: bool | None = None):
+    """Devuelve la primera fila que coincide con (persona, tipo, ciclo). None si no hay.
+
+    `completada` acota por estado: False = solo pendientes, True = solo completadas,
+    None = cualquiera.
+    """
     objetivo = normalizar_nombre(persona)
     and_filters = [
         {"property": "Tipo", "select": {"equals": tipo}},
         {"property": "Ciclo", "rich_text": {"equals": ciclo}},
     ]
-    if solo_pendientes:
-        and_filters.append({"property": "Completada", "checkbox": {"equals": False}})
+    if completada is not None:
+        and_filters.append({"property": "Completada", "checkbox": {"equals": completada}})
     for fila in _iter_filas(db_id, filter={"and": and_filters}):
         if normalizar_nombre(_titulo(fila.get("properties", {}), "Persona")) == objetivo:
             return fila
     return None
+
+
+def _buscar_pendiente_reciente(db_id: str, persona: str, tipo: str):
+    """Fila pendiente de (persona, tipo) con el envío más reciente, sea del ciclo que sea.
+
+    El ciclo se sella al enviar, pero la frecuencia del tipo no tiene por qué coincidir con
+    la ventana de 4 semanas: una asignación de 30 días enviada en el ciclo C sigue viva en
+    C+1, y es la que la persona acaba de contestar. Buscar solo en el ciclo actual no la
+    encontraba, creaba una fila nueva ya completada y dejaba la vieja pendiente para
+    siempre (fantasma en las tareas de la web).
+    """
+    objetivo = normalizar_nombre(persona)
+    mejor, mejor_envio = None, ""
+    for fila in _iter_filas(db_id, filter={"and": [
+        {"property": "Tipo", "select": {"equals": tipo}},
+        {"property": "Completada", "checkbox": {"equals": False}},
+    ]}):
+        props = fila.get("properties", {})
+        if normalizar_nombre(_titulo(props, "Persona")) != objetivo:
+            continue
+        envio = _dia(props, "Fecha_envio")
+        if mejor is None or envio > mejor_envio:
+            mejor, mejor_envio = fila, envio
+    return mejor
 
 
 # ---------------------------------------------------------------------------
@@ -391,14 +467,18 @@ _SLACK_TIPOS = ("mensual", "personal", "ca")
 
 
 def pendientes_slack_de_persona(persona: str) -> list:
-    """Tipos de evaluacion de Slack (mensual/personal/ca) pendientes para `persona`
-    (filas con Completada=False). Devuelve [{tipo, fecha_envio}] en orden estable;
-    fecha_envio (YYYY-MM-DD) es la del último envío pendiente de ese tipo, base para el deadline."""
+    """Tareas de Slack (mensual/personal/ca) vivas de `persona`: filas con Completada=False
+    cuyo deadline no ha pasado. Devuelve [{tipo, deadline}] en orden estable.
+
+    Las caducadas se excluyen aquí, no en Notion: en Slack el DM ya se editó a "caducado" y
+    la persona no puede contestarlas, así que no son tareas; pero la fila sigue con
+    Completada=False porque para el cumplimiento cuenta como asignada y no realizada.
+    """
     db_id = _obtener_o_crear_bbdd()
     if not db_id or not persona:
         return []
     objetivo = normalizar_nombre(persona)
-    por_tipo: dict = {}  # tipo -> fecha_envio (la más reciente)
+    por_tipo: dict = {}  # tipo -> fecha del envío pendiente más reciente
     try:
         for fila in _iter_filas(db_id, filter={"property": "Completada", "checkbox": {"equals": False}}):
             props = fila.get("properties", {})
@@ -407,9 +487,18 @@ def pendientes_slack_de_persona(persona: str) -> list:
             tipo = _select(props, "Tipo")
             if tipo not in _SLACK_TIPOS:
                 continue
-            fenv = (((props.get("Fecha_envio") or {}).get("date") or {}).get("start", "") or "")[:10]
-            if tipo not in por_tipo or fenv > por_tipo[tipo]:
-                por_tipo[tipo] = fenv
+            envio = _dia(props, "Fecha_envio")
+            if tipo not in por_tipo or envio > por_tipo[tipo]:
+                por_tipo[tipo] = envio
     except Exception:
         logging.exception("Error leyendo pendientes de Slack de '%s'", persona)
-    return [{"tipo": tp, "fecha_envio": por_tipo[tp]} for tp in _SLACK_TIPOS if tp in por_tipo]
+    frecuencias = _frecuencias()
+    vivas = []
+    for tp in _SLACK_TIPOS:
+        if tp not in por_tipo:
+            continue
+        # Basta con mirar el envío más reciente: si ese caducó, los anteriores también.
+        deadline = deadline_asignacion(por_tipo[tp], tp, frecuencias)
+        if not _caducada(deadline):
+            vivas.append({"tipo": tp, "deadline": deadline})
+    return vivas

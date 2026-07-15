@@ -54,10 +54,21 @@ def _leer(slug: str) -> dict | None:
         return None
     try:
         with open(ruta, encoding="utf-8") as f:
-            return json.load(f)
+            sesion = json.load(f)
     except Exception:
         logging.exception("No se pudo leer la sesión anual %s", slug)
         return None
+    # Las sesiones creadas antes de la redacción guardaron los datos en bruto, con nombres.
+    # Redactar aquí (además de al crearlas) las limpia al abrirlas, y el primer _guardar
+    # deja el fichero ya redactado. Es idempotente: redactar lo redactado no hace nada.
+    if sesion.get("emp_data") and not _esta_redactado(sesion["emp_data"]):
+        sesion["emp_data"] = _redactar_emp_data(sesion["emp_data"])
+        # Lo que Claude redactó salió de los datos en bruto, así que puede citar a alguien
+        # por su nombre. Se tira y se regenera desde los datos ya limpios.
+        sesion["comentarios"] = None
+        _guardar(slug, sesion)
+        logging.info("Sesión anual %s: datos redactados y comentarios invalidados.", slug)
+    return sesion
 
 
 def _guardar(slug: str, data: dict) -> None:
@@ -284,6 +295,42 @@ def _cargo_de(advisee: str) -> str:
         return ""
 
 
+def _esta_redactado(emp_data: dict) -> bool:
+    """True si estos datos ya pasaron por _redactar_emp_data (marca 'anonimizado')."""
+    filas = list(emp_data.get("evaluaciones", [])) + list(emp_data.get("evals_proyecto", []))
+    return all(f.get("anonimizado") for f in filas) if filas else True
+
+
+def _redactar_emp_data(emp_data: dict) -> dict:
+    """Quita de los datos del advisee todo lo que el CA no puede ver, con las mismas reglas
+    que los PDFs de fuentes (ver skill_pdfs_fuentes._solo_top_down):
+
+      - Evals mensuales: solo las de un superior. Las de iguales, las bottom-to-top y las
+        de dirección desconocida no llegan aquí.
+      - Nombres de evaluador y el 'tipo' de las evals de proyecto (delata el nivel): fuera.
+
+    Se aplica AQUÍ, al entrar el dato en la sesión, y no al pintarlo: la sesión se guarda en
+    disco y Claude redacta desde ella, así que un filtro en la vista dejaría los nombres en
+    el contexto del modelo —que además tiene instrucciones de citar la fuente literal— y
+    bastaría con pedírselos por el chat. Lo que no entra aquí no puede escaparse después.
+
+    Opiniones del CA, seguimiento personal y evals extra se dejan intactos: en esos tres el
+    autor no es información protegida (el CA leyéndose a sí mismo, o el advisee hablando de
+    sí mismo). El informe anual que genera el admin no pasa por aquí.
+    """
+    datos = dict(emp_data)
+    datos["evaluaciones"] = [
+        {**ev, "persona_que_evalua": "", "nombre": "", "anonimizado": True}
+        for ev in emp_data.get("evaluaciones", [])
+        if ev.get("relacion") == "superior"
+    ]
+    datos["evals_proyecto"] = [
+        {**pe, "evaluador": "", "tipo": "", "anonimizado": True}
+        for pe in emp_data.get("evals_proyecto", [])
+    ]
+    return datos
+
+
 def iniciar_sesion(advisee: str, cargo: str = "") -> dict:
     """Crea o recupera la sesión. Devuelve identidad + progreso. NO genera Claude todavía."""
     slug = slug_archivo(advisee)
@@ -291,7 +338,7 @@ def iniciar_sesion(advisee: str, cargo: str = "") -> dict:
     if not cargo:
         cargo = _cargo_de(advisee)  # cargo real desde Notion (Lista de empleados)
     if sesion is None:
-        emp_data = sk.obtener_datos_empleado_anual(advisee)
+        emp_data = _redactar_emp_data(sk.obtener_datos_empleado_anual(advisee))
         if not emp_data.get("opiniones_ca") and not emp_data.get("evaluaciones") \
            and not emp_data.get("evals_proyecto") and not emp_data.get("seguimiento") \
            and not emp_data.get("barbecho"):
@@ -434,7 +481,10 @@ def _claude_conversa_area(etiqueta: str, evidencia: list, claude_bullets: str, c
         "Juzga contra el criterio del cargo de la persona, no contra tu opinión; y cuando ayude, recuérdale "
         "al CA a qué nivel está y qué le falta para subir.\n"
         "- REFERENCIAS: si el CA pregunta por una referencia (p. ej. 'referencia de E3', '¿qué dice [O1]?'), "
-        "responde con el TEXTO LITERAL de esa fuente (tipo, proyecto/evaluador, fecha y contenido).\n"
+        "responde con el TEXTO LITERAL de esa fuente (tipo, proyecto, fecha y contenido).\n"
+        "- ANONIMATO: las evaluaciones te llegan sin el nombre de quien las escribió, a propósito. Si el CA "
+        "pregunta quién dijo algo, dile que esa información es anónima por diseño. NUNCA deduzcas ni "
+        "aventures una identidad a partir del proyecto, la fecha o el contenido.\n"
         "- NO inventes: cada afirmación de la propuesta debe llevar su cita [X#] de la evidencia.\n\n"
         'Devuelve SOLO un JSON válido: {"mensaje": "tu respuesta conversacional", '
         '"propuesta": "los bullets finales del área, uno por línea, cada uno con su cita"}.'

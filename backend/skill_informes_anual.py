@@ -536,6 +536,16 @@ def _mes_tag(fecha: str) -> str:
         return "s/f"
 
 
+def _label(partes: list) -> str:
+    """Une las partes no vacías de una etiqueta de fuente con ' · '.
+
+    Las partes son opcionales porque en el flujo asistido llegan redactadas (sin nivel ni
+    tipo, ver eval_anual_sesion._redactar_emp_data): un join fijo dejaba separadores
+    huérfanos ('Proyecto Alfa ·  · 2026-07-08').
+    """
+    return " · ".join(str(p) for p in partes if p)
+
+
 def _formatear_contexto(emp_data: dict) -> tuple[str, dict]:
     """Construye el texto que se pasa a Claude y el mapa de fuentes citables.
 
@@ -595,18 +605,20 @@ def _formatear_contexto(emp_data: dict) -> tuple[str, dict]:
                 n += 1
                 cid = f"E{n}"
                 proyecto  = ev.get("proyecto") or "Sin proyecto"
-                evaluador = ev.get("persona_que_evalua") or ev.get("nombre") or "Desconocido"
+                anonimo   = bool(ev.get("anonimizado"))
+                evaluador = "" if anonimo else (ev.get("persona_que_evalua") or ev.get("nombre") or "Desconocido")
                 fecha     = (ev.get("fecha") or "")[:10]
                 q1, q2 = ev.get("q1", ""), ev.get("q2", "")
                 fuentes[cid] = {
                     "url": ev.get("url", ""), "tipo": "evaluacion", "fecha": fecha,
-                    "label": f"{proyecto} · {_ETIQUETA_REL[rel_key]} · {fecha}".strip(" ·"),
+                    "label": _label([proyecto, None if anonimo else _ETIQUETA_REL[rel_key], fecha]),
                     "evaluador": evaluador,
                     "texto": f"Valoración: {q1}/5 | Ejemplo: {q2}",
                 }
                 bloques.append(
-                    f"[{cid}] [{_mes_tag(fecha)}] Proyecto: {proyecto} | Evaluador: {evaluador} | "
-                    f"Valoración: {q1}/5 | Ejemplo: {q2}"
+                    f"[{cid}] [{_mes_tag(fecha)}] Proyecto: {proyecto} | "
+                    + (f"Evaluador: {evaluador} | " if evaluador else "")
+                    + f"Valoración: {q1}/5 | Ejemplo: {q2}"
                 )
 
     # ── Evaluaciones de proyecto (por proyecto y cronológicas) ── [P#] ───────
@@ -616,19 +628,22 @@ def _formatear_contexto(emp_data: dict) -> tuple[str, dict]:
         for i, pe in enumerate(evals_proy, 1):
             cid = f"P{i}"
             proyecto  = pe.get("proyecto") or "Sin proyecto"
-            evaluador = pe.get("evaluador") or "Desconocido"
-            tipo      = pe.get("tipo") or ""
+            anonimo   = bool(pe.get("anonimizado"))
+            evaluador = "" if anonimo else (pe.get("evaluador") or "Desconocido")
+            tipo      = "" if anonimo else (pe.get("tipo") or "")
             fecha     = (pe.get("fecha") or "")[:10]
             respuestas = pe.get("respuestas") or ""
             fuentes[cid] = {
                 "url": pe.get("url", ""), "tipo": "proyecto", "fecha": fecha,
-                "label": f"{proyecto} · {tipo} · {fecha}".strip(" ·"),
+                "label": _label([proyecto, tipo, fecha]),
                 "evaluador": evaluador,
                 "texto": respuestas,
             }
             bloques.append(
-                f"[{cid}] [{_mes_tag(fecha)}] Proyecto: {proyecto} | Evaluador: {evaluador} | "
-                f"Tipo: {tipo} | Respuestas: {respuestas}"
+                f"[{cid}] [{_mes_tag(fecha)}] Proyecto: {proyecto} | "
+                + (f"Evaluador: {evaluador} | " if evaluador else "")
+                + (f"Tipo: {tipo} | " if tipo else "")
+                + f"Respuestas: {respuestas}"
             )
 
     # ── Seguimiento personal ── [S#] ─────────────────────────────────────────

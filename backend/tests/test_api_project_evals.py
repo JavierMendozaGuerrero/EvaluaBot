@@ -9,6 +9,7 @@ al evaluado (Visible_evaluado) y los borradores server-side.
 import backend.eval_tracking as eval_tracking_mod
 import backend.project_evals as pe
 from backend.api.routers import project_evals as project_evals_router
+from backend.hierarchy import nivel_cargo
 
 
 def test_proyectos_progreso_sin_sesion_da_403(client):
@@ -69,6 +70,35 @@ def test_cargo_desconocido_se_trata_como_mismo_nivel(monkeypatch):
     _mock_cargos(monkeypatch)
     assert pe.tipo_evaluacion_por_jerarquia("Nuria Sincargo", "Luis Analyst") == ("manager_a_miembros", "igual")
     assert pe.tipo_evaluacion_por_jerarquia("Luis Analyst", "Nuria Sincargo") == ("manager_a_miembros", "igual")
+
+
+# ---------------------------------------------------------------------------
+# Track Palantir: equivalencias con la escala general y variantes de nombre
+# ---------------------------------------------------------------------------
+
+
+def test_palantir_equivale_a_la_escala_general():
+    assert nivel_cargo("Jr. Palantir Engineer") == nivel_cargo("Analyst")
+    assert nivel_cargo("Palantir Engineer") == nivel_cargo("Associate")
+    assert nivel_cargo("Palantir Sr. Engineer") == nivel_cargo("Sr. Associate")
+    assert nivel_cargo("Palantir Lead") == nivel_cargo("Manager")
+    assert nivel_cargo("Director Palantir") == nivel_cargo("Director")
+
+
+def test_variantes_de_nombre_palantir_mapean_al_mismo_nivel():
+    # La Lista de empleados de Notion tiene las dos formas conviviendo.
+    assert nivel_cargo("Sr. Palantir Engineer") == nivel_cargo("Palantir Sr. Engineer")
+    assert nivel_cargo("Lead Palantir Engineer") == nivel_cargo("Palantir Lead")
+    assert nivel_cargo("Mid Palantir Engineer") == nivel_cargo("Palantir Engineer")
+    assert nivel_cargo("Palantir Director") == nivel_cargo("Director Palantir")
+
+
+def test_middleoffice_no_esta_en_la_escala_a_proposito():
+    # No participa en evaluaciones de proyecto; si alguna vez entra, nivel_cargo
+    # devuelve None y hierarchy.py deja un warning en el log.
+    for cargo in ("Office Manager", "Communication and PR", "Head de Finance",
+                  "Head of HR, Ops and Comms", "Head of Brand and Experience Design"):
+        assert nivel_cargo(cargo) is None
 
 
 def test_manager_de_proyecto_por_debajo_en_jerarquia_no_recibe_plantilla_de_manager(monkeypatch):

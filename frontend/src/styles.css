@@ -282,6 +282,15 @@ button:disabled, .button:disabled { opacity: .45; cursor: not-allowed; }
   font-size: 12px;
   font-weight: 400;
   white-space: nowrap;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.mpa-remove-x {
+  color: var(--danger, #e53e3e);
+  font-size: 13px;
+  line-height: 1;
 }
 
 .link-button {
@@ -536,25 +545,34 @@ button:disabled, .button:disabled { opacity: .45; cursor: not-allowed; }
 
 .objetivos-historial { margin-top: 32px; }
 
-/* Historial agrupado por año (bloque rodeado, año centrado sobre el borde) y por meses */
-.objetivos-anios { display: flex; flex-direction: column; gap: 32px; margin-top: 28px; }
-.objetivos-anio {
-  border: 1px solid var(--border);
-  border-radius: var(--radius-lg);
-  padding: 0 24px 16px;
+/* Separador de las dos secciones: objetivos actuales / antiguos.
+   Mismo idioma visual que .kicker, en Outfit (explícito: h3 no tiene regla propia). */
+.objetivos-seccion {
+  font-family: var(--font-sans);
+  font-size: 0.78rem;
+  font-weight: 400;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--text-55);
+  margin: 40px 0 4px;
+  padding-bottom: 8px;
+  border-bottom: 1px solid var(--border);
 }
+.objetivos-seccion:first-of-type { margin-top: 28px; }
+
+/* Historial agrupado por año y por meses. Sin recuadro: los antiguos van en el mismo
+   plano que los actuales, y solo las cabeceras de sección marcan la separación. */
+.objetivos-anios { display: flex; flex-direction: column; gap: 32px; margin-top: 28px; }
 /* summary: quitar el marcador nativo del <details> */
 .objetivos-anio-head, .objetivos-mes-head { cursor: pointer; list-style: none; }
 .objetivos-anio-head::-webkit-details-marker,
 .objetivos-mes-head::-webkit-details-marker { display: none; }
 
-.objetivos-anio-head { text-align: center; margin-top: -16px; margin-bottom: 4px; }
+.objetivos-anio-head { margin-bottom: 4px; }
 .objetivos-anio-head span {
   display: inline-flex;
   align-items: center;
   gap: 8px;
-  background: var(--bg);
-  padding: 0 16px;
   font-family: var(--font-display);
   font-size: 24px;
   font-weight: 500;
@@ -590,6 +608,17 @@ button:disabled, .button:disabled { opacity: .45; cursor: not-allowed; }
 .objetivos-mes[open] > .objetivos-mes-head::before { transform: rotate(90deg); }
 .objetivos-list { display: grid; gap: 0; margin-top: 8px; }
 .objetivo-item { border-top: 1px solid var(--border); padding: 18px 0; }
+/* El border-top separa tarjetas entre sí; pegado a la cabecera de sección se sumaría a su
+   border-bottom y saldría doble línea (los antiguos no lo sufren: ahí va antes el año). */
+.objetivos-seccion + .objetivos-list > .objetivo-item:first-child { border-top: none; }
+/* Enlace entre las dos vistas de objetivos (introducir ↔ ver) */
+.objetivos-ir-a { color: var(--text-55); font-size: 13px; margin: -6px 0 18px; }
+.objetivos-ir-a:hover { color: var(--accent); }
+
+/* Eliminar un objetivo: cruz en rojo de marca, mismo glifo que quitar un chip pendiente */
+.objetivo-eliminar { display: inline-flex; align-items: center; gap: 6px; color: var(--muted); font-size: 12px; }
+.objetivo-eliminar > span { color: var(--accent); font-size: 15px; line-height: 1; }
+
 .objetivo-titulo { color: var(--fg); }
 .objetivo-texto { color: var(--text-60); white-space: pre-wrap; margin-top: 6px; line-height: 1.6; }
 
@@ -768,6 +797,7 @@ button.role-card.secondary:hover { color: #fff; }
 .historial-tabla td { padding: 14px 12px; border-bottom: 1px solid var(--border); vertical-align: top; font-weight: 400; color: var(--fg); }
 .historial-tabla tbody tr:last-child td { border-bottom: none; }
 .hist-fecha { white-space: nowrap; color: var(--text-55); font-size: 12px; font-weight: 200; min-width: 100px; }
+.hist-proyecto { color: var(--text-55); font-size: 12px; font-weight: 200; max-width: 220px; word-break: break-word; }
 .hist-valo { text-align: center; width: 60px; }
 .hist-valo-badge { display: inline-flex; align-items: center; justify-content: center; width: 32px; height: 32px; border-radius: 50%; font-weight: 500; font-size: 14px; color: #fff; }
 .valo-1 { background: #d73a3a; }

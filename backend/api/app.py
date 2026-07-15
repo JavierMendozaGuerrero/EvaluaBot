@@ -1,6 +1,9 @@
+import os
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.gzip import GZipMiddleware
+from starlette.staticfiles import StaticFiles
 
 from .. import config
 from .errors import register_exception_handlers
@@ -51,6 +54,24 @@ app.include_router(eval_anual_router)
 app.include_router(reports_router)
 app.include_router(admin_router)
 app.include_router(files_router)
+
+
+class _SPAStaticFiles(StaticFiles):
+    """Sirve el build de React y, para rutas que no son un archivo real (navegación
+    interna de la SPA), devuelve index.html en lugar de un 404."""
+
+    async def get_response(self, path, scope):
+        response = await super().get_response(path, scope)
+        if response.status_code == 404:
+            return await super().get_response("index.html", scope)
+        return response
+
+
+# Se monta en "/" el ÚLTIMO: las rutas /api ya registradas arriba tienen prioridad, y este
+# catch-all solo atiende lo que no sea API (la web React). Si no hay build (dev local sin
+# `npm run build`), no se monta y el backend queda como solo-API.
+if os.path.isdir(config.FRONTEND_DIST):
+    app.mount("/", _SPAStaticFiles(directory=config.FRONTEND_DIST, html=True), name="spa")
 
 
 def iniciar_api_backend():

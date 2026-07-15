@@ -17,7 +17,12 @@ function getLegalDoc() {
   return LEGAL_DOCS[hash] ? hash : null;
 }
 
-const API_BASE = import.meta.env.VITE_API_BASE_URL || `${window.location.protocol}//${window.location.hostname}:8000`;
+// Prioridad: variable de entorno explícita > (en dev) backend local en :8000 > mismo origen.
+// En el build de producción (Docker/NAS) la web y la API se sirven juntas, así que las
+// llamadas van relativas al mismo host y puerto (cadena vacía = mismo origen).
+const API_BASE =
+  import.meta.env.VITE_API_BASE_URL ??
+  (import.meta.env.DEV ? `${window.location.protocol}//${window.location.hostname}:8000` : "");
 
 function apiUrl(path) {
   return `${API_BASE}${path}`;

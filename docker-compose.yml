@@ -1,0 +1,10 @@
+services:
+  api:
+    build: .
+    container_name: evaluabot
+    env_file: .env          # secretos (Slack/Notion/Claude/SMTP). NO se sube a git ni por deploy.sh
+    environment:
+      - PORT=8000           # puerto DENTRO del contenedor
+    ports:
+      - "8001:8000"         # 8001 (host NAS) -> 8000 (contenedor)
+    restart: unless-stopped

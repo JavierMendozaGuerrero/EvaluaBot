@@ -22,8 +22,10 @@ __pycache__/
 .git/
 .gitignore
 
-# Frontend: se despliega aparte (Firebase/Vercel), el backend no lo necesita.
-frontend/
+# Frontend: se compila DENTRO de la imagen (etapa Node del Dockerfile), así que sí
+# entra el código fuente, pero nunca sus dependencias ni el build ya generado.
+frontend/node_modules/
+frontend/dist/
 
 # Archivos generados en local (en producción viven en el bucket de Cloud Storage).
 backend/dashboard_web/*

@@ -45,6 +45,9 @@ RECHECK_CALENDARIO_SEGUNDOS = int(os.environ.get("RECHECK_CALENDARIO_SEGUNDOS", 
 # En local seguimos usando PUERTO_WEB. Prioridad: PORT > PUERTO_WEB > 8000.
 PUERTO_WEB = int(os.environ.get("PORT") or os.environ.get("PUERTO_WEB") or "8000")
 CARPETA_WEB = os.path.join(BASE_DIR, "dashboard_web")
+# Build del frontend React (generado por `npm run build`). En el contenedor se copia a
+# /app/frontend/dist; si la carpeta existe, el backend la sirve como web en el mismo puerto.
+FRONTEND_DIST = os.environ.get("FRONTEND_DIST") or os.path.join(os.path.dirname(BASE_DIR), "frontend", "dist")
 PREFIJO_BBDD_EVALUADO = "Evaluaciones - "
 FRONTEND_ORIGIN = os.environ.get("FRONTEND_ORIGIN", "http://localhost:5173").strip()
 APP_PUBLIC_URL = os.environ.get("APP_PUBLIC_URL", FRONTEND_ORIGIN).strip().rstrip("/")

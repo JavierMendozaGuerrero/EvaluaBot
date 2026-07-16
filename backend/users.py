@@ -39,10 +39,6 @@ REGISTRO_CODE_TTL = timedelta(minutes=10)
 REGISTRO_MAX_INTENTOS = 5
 
 
-def _ruta_usuarios():
-    return os.path.join(config.CARPETA_WEB, "users.json")
-
-
 def _ruta_sesiones():
     return os.path.join(config.CARPETA_WEB, "sesiones.json")
 
@@ -187,55 +183,42 @@ def _obtener_o_crear_bbdd_usuarios():
     return database_id
 
 
-def _cargar_usuarios_local():
-    ruta = _ruta_usuarios()
-    if not os.path.exists(ruta):
-        return {}
-    with open(ruta, "r", encoding="utf-8") as f:
-        return json.load(f)
-
-
-def _guardar_usuarios_local(usuarios):
-    os.makedirs(config.CARPETA_WEB, exist_ok=True)
-    ruta = _ruta_usuarios()
-    with tempfile.NamedTemporaryFile("w", dir=config.CARPETA_WEB, delete=False, suffix=".tmp", encoding="utf-8") as f:
-        json.dump(usuarios, f, ensure_ascii=False, indent=2)
-        tmp = f.name
-    os.replace(tmp, ruta)
-
-
 def cargar_usuarios():
-    try:
-        database_id = _obtener_o_crear_bbdd_usuarios()
-        usuarios = {}
-        cursor = None
-        while True:
-            kwargs = {"page_size": 100}
-            if cursor:
-                kwargs["start_cursor"] = cursor
-            resp = _query_bbdd(database_id, **kwargs)
-            for pagina in resp.get("results", []):
-                props = pagina.get("properties", {})
-                username = _texto_rich_text(props, "Username") or _texto_title(props, "Name")
-                if not username:
-                    continue
-                clave = normalizar_nombre(username)
-                usuarios[clave] = {
-                    "username": username,
-                    "persona": _texto_rich_text(props, "Persona") or username,
-                    "email": _texto_email(props, "Email"),
-                    "is_admin": bool(props.get("Is admin", {}).get("checkbox")),
-                    "salt": _texto_rich_text(props, "Salt"),
-                    "password_hash": _texto_rich_text(props, "Password hash"),
-                    "_page_id": pagina.get("id"),
-                }
-            if not resp.get("has_more"):
-                break
-            cursor = resp.get("next_cursor")
-        return usuarios
-    except Exception:
-        logging.exception("No se pudieron cargar usuarios desde Notion; usando users.json local como fallback")
-        return _cargar_usuarios_local()
+    """Los usuarios viven en Notion. Punto: no hay copia local.
+
+    Antes, si Notion fallaba, se caía a un users.json local. Eso hacía más daño que
+    bien: ese fichero se quedaba congelado en quien estuviera dado de alta el día que
+    se creó, así que un tropiezo de Notion dejaba fuera a todo el mundo menos a esos, y
+    a ellos les dejaba entrar. Un fallo de red se convertía en un cambio silencioso de
+    quién tiene cuenta. Ahora, si Notion no responde, la petición falla y se ve.
+    """
+    database_id = _obtener_o_crear_bbdd_usuarios()
+    usuarios = {}
+    cursor = None
+    while True:
+        kwargs = {"page_size": 100}
+        if cursor:
+            kwargs["start_cursor"] = cursor
+        resp = _query_bbdd(database_id, **kwargs)
+        for pagina in resp.get("results", []):
+            props = pagina.get("properties", {})
+            username = _texto_rich_text(props, "Username") or _texto_title(props, "Name")
+            if not username:
+                continue
+            clave = normalizar_nombre(username)
+            usuarios[clave] = {
+                "username": username,
+                "persona": _texto_rich_text(props, "Persona") or username,
+                "email": _texto_email(props, "Email"),
+                "is_admin": bool(props.get("Is admin", {}).get("checkbox")),
+                "salt": _texto_rich_text(props, "Salt"),
+                "password_hash": _texto_rich_text(props, "Password hash"),
+                "_page_id": pagina.get("id"),
+            }
+        if not resp.get("has_more"):
+            break
+        cursor = resp.get("next_cursor")
+    return usuarios
 
 
 def _pagina_usuario_existente(database_id, clave):
@@ -246,9 +229,32 @@ def _pagina_usuario_existente(database_id, clave):
 
 
 def guardar_usuario(usuario):
-    try:
-        database_id = _obtener_o_crear_bbdd_usuarios()
-        clave = normalizar_nombre(usuario.get("username"))
+    """Si Notion falla, la excepción sube: quien cambia una contraseña tiene que saber
+    que no se ha guardado, en vez de creérselo porque fue a parar a un fichero local
+    que nadie vuelve a leer."""
+    database_id = _obtener_o_crear_bbdd_usuarios()
+    clave = normalizar_nombre(usuario.get("username"))
+    page_id = usuario.get("_page_id") or _pagina_usuario_existente(database_id, clave)
+    properties = {
+        "Name": {"title": [{"text": {"content": usuario["username"]}}]},
+        "Username": {"rich_text": [{"text": {"content": usuario["username"]}}]},
+        "Persona": {"rich_text": [{"text": {"content": usuario.get("persona", usuario["username"])}}]},
+        "Email": {"email": usuario.get("email") or None},
+        "Is admin": {"checkbox": bool(usuario.get("is_admin"))},
+        "Salt": {"rich_text": [{"text": {"content": usuario["salt"]}}]},
+        "Password hash": {"rich_text": [{"text": {"content": usuario["password_hash"]}}]},
+    }
+    if page_id:
+        notion.pages.update(page_id=page_id, properties=properties)
+    else:
+        properties["Fecha alta"] = {"date": {"start": datetime.now(timezone.utc).isoformat()}}
+        _crear_pagina_en_bbdd(database_id, properties)
+
+
+def guardar_usuarios(usuarios):
+    """Ídem que guardar_usuario: si Notion falla, que se entere quien llama."""
+    database_id = _obtener_o_crear_bbdd_usuarios()
+    for clave, usuario in usuarios.items():
         page_id = usuario.get("_page_id") or _pagina_usuario_existente(database_id, clave)
         properties = {
             "Name": {"title": [{"text": {"content": usuario["username"]}}]},
@@ -264,39 +270,6 @@ def guardar_usuario(usuario):
         else:
             properties["Fecha alta"] = {"date": {"start": datetime.now(timezone.utc).isoformat()}}
             _crear_pagina_en_bbdd(database_id, properties)
-        return
-    except Exception:
-        logging.exception("No se pudo guardar usuario en Notion; actualizando fallback local")
-        usuarios = _cargar_usuarios_local()
-        usuarios[normalizar_nombre(usuario.get("username"))] = {
-            k: v for k, v in usuario.items() if not k.startswith("_")
-        }
-        _guardar_usuarios_local(usuarios)
-
-
-def guardar_usuarios(usuarios):
-    try:
-        database_id = _obtener_o_crear_bbdd_usuarios()
-        for clave, usuario in usuarios.items():
-            page_id = usuario.get("_page_id") or _pagina_usuario_existente(database_id, clave)
-            properties = {
-                "Name": {"title": [{"text": {"content": usuario["username"]}}]},
-                "Username": {"rich_text": [{"text": {"content": usuario["username"]}}]},
-                "Persona": {"rich_text": [{"text": {"content": usuario.get("persona", usuario["username"])}}]},
-                "Email": {"email": usuario.get("email") or None},
-                "Is admin": {"checkbox": bool(usuario.get("is_admin"))},
-                "Salt": {"rich_text": [{"text": {"content": usuario["salt"]}}]},
-                "Password hash": {"rich_text": [{"text": {"content": usuario["password_hash"]}}]},
-            }
-            if page_id:
-                notion.pages.update(page_id=page_id, properties=properties)
-            else:
-                properties["Fecha alta"] = {"date": {"start": datetime.now(timezone.utc).isoformat()}}
-                _crear_pagina_en_bbdd(database_id, properties)
-        return
-    except Exception:
-        logging.exception("No se pudieron guardar usuarios en Notion; usando users.json local como fallback")
-        _guardar_usuarios_local(usuarios)
 
 
 def hash_password(password, salt=None):

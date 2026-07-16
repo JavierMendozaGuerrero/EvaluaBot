@@ -294,9 +294,12 @@ def _fuentes_no_citadas(fuentes: dict, evidencia: list[dict]) -> list[dict]:
 
 # ── Aportaciones del CA ───────────────────────────────────────────────────────
 # El CA sabe cosas que no están en Notion (una conversación, un marrón que nadie evaluó).
-# Antes se descartaban: sin cita, fuera del informe. Ahora la IA se las admite, pero solo
-# cuando concreta cuándo, en qué proyecto y qué pasó; entonces quedan registradas como
-# fuente [C#] firmada por él y son citables como cualquier otra.
+# Antes se descartaban: sin cita, fuera del informe. Ahora la IA se las admite cuando lo que
+# cuenta es un hecho observable y situado (no una etiqueta); entonces queda registrado como
+# fuente [C#] firmada por él y es citable como cualquier otra.
+# `fecha` y `proyecto` son opcionales a propósito: solo etiquetan la fuente. Exigirlos
+# convertía la conversación en un formulario ("dame cuándo, dónde y qué pasó"), y lo que
+# hace falta es que el CA cuente el hecho, no que rellene campos.
 
 _CID_APORTACION_RE = re.compile(r"\[(C\d+)\]")
 
@@ -729,26 +732,37 @@ def _claude_conversa_area(etiqueta: str, evidencia: list, claude_bullets: str, c
         "aventures una identidad a partir del proyecto, la fecha o el contenido.\n"
         "- APORTACIONES DEL CA: el CA trabaja con la persona y sabe cosas que nadie registró. Si te cuenta "
         "algo que no está en la EVIDENCIA, NO lo descartes por no estar registrado: es información válida "
-        "que hay que concretar. Antes de admitirla, exígele las tres cosas que la hacen verificable:\n"
-        "    (1) CUÁNDO — mes o periodo concreto;\n"
-        "    (2) DÓNDE — en qué proyecto o en qué contexto;\n"
-        "    (3) QUÉ pasó — el hecho observable, no la etiqueta ('no avisó de que el modelo iba tarde hasta "
-        "la víspera de la entrega', no 'le falta proactividad').\n"
-        "  Si le falta alguna, pídesela explícitamente en tu mensaje y NO la incluyas todavía en la "
-        "propuesta. Cuando las tenga, ADMÍTELA: devuélvela en 'aportaciones' con un id nuevo (el siguiente "
-        f"libre es [{siguiente_cid}]; si admites varias en el mismo turno, numera hacia arriba) y cítala en "
-        "la propuesta con ese id, igual que cualquier otra fuente. Queda registrada como aportación firmada "
-        "por el CA y sale en el informe con su texto. Admitirla no es darle la razón: sigue debatiendo el "
-        "fondo — que un hecho sea concreto no lo hace representativo de todo el año.\n"
+        "que hay que concretar. El listón para admitirla es que sea un HECHO OBSERVABLE y situado, no una "
+        "etiqueta: 'no avisó de que el modelo iba tarde hasta la víspera de la entrega' sirve; 'le falta "
+        "proactividad' no. Situado quiere decir que se entienda dónde y cuándo pasó, lo bastante como para "
+        "que quien estuviera allí lo reconozca.\n"
+        "  CÓMO pedirle que concrete: NO le pases un cuestionario ni le enumeres campos que rellenar; eso "
+        "es un interrogatorio y le corta. Reacciona a lo que te ha contado como alguien a quien le interesa: "
+        "dile primero qué parte de lo que ha dicho YA te sirve y por qué (nombrando lo concreto que haya "
+        "dicho), y luego, en una o dos frases, dile qué le falta a eso para poder sostenerse en un informe. "
+        "Explícale el porqué, no el formato, y deja que él elija cómo contarlo. Si de lo que ya ha dicho se "
+        "deduce el cuándo o el dónde, NO se lo vuelvas a preguntar.\n"
+        "  Cuando el hecho esté lo bastante situado, ADMÍTELA: devuélvela en 'aportaciones' con un id nuevo "
+        f"(el siguiente libre es [{siguiente_cid}]; si admites varias en el mismo turno, numera hacia "
+        "arriba) y cítala en la propuesta con ese id, igual que cualquier otra fuente. Queda registrada como "
+        "aportación firmada por el CA y sale en el informe con su texto. Admitirla no es darle la razón: "
+        "sigue debatiendo el fondo — que un hecho sea concreto no lo hace representativo de todo el año.\n"
         "  Las aportaciones ya admitidas te llegan en la EVIDENCIA como [C#]: cítalas, pero NO las repitas "
         "en 'aportaciones' (ya tienen id).\n"
         "- NO inventes: cada afirmación de la propuesta debe llevar su cita [X#], sea de la evidencia o de "
         "una aportación admitida del CA. Lo que no tenga cita, fuera.\n\n"
         'Devuelve SOLO un JSON válido: {"mensaje": "tu respuesta conversacional", '
         '"propuesta": "los bullets finales del área, uno por línea, cada uno con su cita", '
-        '"aportaciones": [{"cid": "C#", "fecha": "mes o periodo que te ha dado el CA", '
-        '"proyecto": "proyecto o contexto", "texto": "el hecho, en una frase, tal y como lo cuenta el CA"}]}. '
-        'Si en este turno no admites ninguna aportación nueva, "aportaciones" es [].'
+        '"aportaciones": [{"cid": "C#", "fecha": "mes o periodo, si se sabe", '
+        '"proyecto": "proyecto o contexto, si se sabe", '
+        '"texto": "el hecho, en una frase, tal y como lo cuenta el CA"}]}. '
+        '"fecha" y "proyecto" son para etiquetar la fuente: rellénalos con lo que el CA haya dicho y '
+        'déjalos vacíos si no lo ha dicho. No los pidas solo para rellenarlos. '
+        'Si en este turno no admites ninguna aportación nueva, "aportaciones" es [].\n\n'
+        # Se le pide hablar como una persona, y sin esto se pone a hablar directamente: suelta
+        # el mensaje en prosa y se deja el JSON. Entonces el CA no ve la respuesta, ve un error.
+        "FORMATO (obligatorio): responde SOLO con el JSON. Tu primer carácter debe ser '{' y el último "
+        "'}'. Lo que le dices al CA va DENTRO del campo \"mensaje\", nunca suelto fuera del JSON."
         + config.INSTRUCCION_ANTIINYECCION
     )
     # La evidencia, criterios, diagnóstico y tu valoración son ESTÁTICOS durante todo el debate del área

@@ -2,8 +2,10 @@
 
 El CA sabe cosas que nadie registró en Notion. Antes se perdían: la propuesta solo admitía
 afirmaciones con cita, así que lo que el CA contaba de su cosecha no llegaba al informe.
-Ahora la IA se lo admite —cuando concreta cuándo, dónde y qué pasó— y queda registrado como
-fuente [C#] firmada por él, citable como cualquier evaluación.
+Ahora la IA se lo admite —cuando lo que cuenta es un hecho observable y situado, no una
+etiqueta— y queda registrado como fuente [C#] firmada por él, citable como cualquier
+evaluación. `fecha` y `proyecto` solo etiquetan la fuente y son opcionales: exigirlos
+convertía la conversación en un formulario.
 
 Lo que se fija aquí:
   - una aportación admitida se convierte en fuente citable y en evidencia de SU área;

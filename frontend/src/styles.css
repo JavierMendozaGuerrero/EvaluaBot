@@ -1050,3 +1050,39 @@ button, .button { min-height: 42px; padding: 0 22px; font-size: 15px; }
 
 /* Segmentos de escala/opciones: anular el margen global de <label> (creaba una 'frente'). */
 .eval-seg { margin: 0; }
+
+/* ── Espera larga (evaluación anual: ~65s la primera área) ── */
+.espera { display: flex; flex-direction: column; gap: 12px; }
+.espera-titulo { margin: 0; font-size: 16px; }
+.espera-barra {
+  height: 6px;
+  border-radius: 999px;
+  background: var(--border);
+  overflow: hidden;
+}
+.espera-barra-fill {
+  height: 100%;
+  background: var(--accent);
+  border-radius: inherit;
+  /* La anchura se recalcula 4 veces por segundo: la transición la vuelve continua en
+     vez de a saltos. Y el brillo que la recorre es lo que distingue "trabajando" de
+     "colgada" cuando la barra ya casi no avanza. */
+  transition: width .25s linear;
+  position: relative;
+  overflow: hidden;
+}
+.espera-barra-fill::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(90deg, transparent, rgba(255, 255, 255, .45), transparent);
+  animation: espera-brillo 1.4s ease-in-out infinite;
+}
+@keyframes espera-brillo { from { transform: translateX(-100%); } to { transform: translateX(100%); } }
+.espera-pie { margin: 0; }
+.espera-reloj { font-variant-numeric: tabular-nums; opacity: .7; }
+
+@media (prefers-reduced-motion: reduce) {
+  .espera-barra-fill::after { animation: none; }
+  .espera-barra-fill { transition: none; }
+}

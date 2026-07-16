@@ -6086,6 +6086,50 @@ function TopLoadingBar() {
   return null;
 }
 
+// Espera larga con la que el CA se queda mirando: leer todo Notion y que la IA analice
+// el año entero tarda ~65s. Sin nada delante, la pantalla parecía colgada.
+//
+// La barra va contra el RELOJ, no contra el progreso real: el backend hace la petición
+// entera de una vez y no informa de por dónde va, así que aquí solo se sabe el tiempo
+// transcurrido. `segundosTipicos` sale de medirlo (~65s la primera área; las siguientes
+// reutilizan el análisis y son casi instantáneas). Por eso se frena al 92% en vez de
+// llegar al 100%: fingir que ha acabado cuando no sabemos si ha acabado es peor que no
+// poner nada. Si se pasa del tiempo típico, se dice, en vez de dejar la barra clavada.
+function BarraEspera({ segundosTipicos = 60, titulo, detalle }) {
+  const [transcurrido, setTranscurrido] = useState(0);
+
+  useEffect(() => {
+    const inicio = Date.now();
+    const id = setInterval(() => setTranscurrido((Date.now() - inicio) / 1000), 250);
+    return () => clearInterval(id);
+  }, []);
+
+  // Se acerca al 92% de forma asintótica: avanza rápido al principio y se va frenando,
+  // así nunca lo alcanza ni se queda parada del todo por mucho que tarde.
+  const pct = Math.min(92, 92 * (1 - Math.exp(-transcurrido / (segundosTipicos / 2))));
+  const tarde = transcurrido > segundosTipicos * 1.5;
+  const mm = String(Math.floor(transcurrido / 60)).padStart(1, "0");
+  const ss = String(Math.floor(transcurrido % 60)).padStart(2, "0");
+
+  return (
+    <section className="panel espera" aria-busy="true">
+      <p className="espera-titulo">{titulo || t("common.loading")}</p>
+      <div
+        className="espera-barra"
+        role="progressbar"
+        aria-valuetext={t("eaw.wait_elapsed", { mm, ss })}
+      >
+        <div className="espera-barra-fill" style={{ width: `${pct}%` }} />
+      </div>
+      <p className="fine espera-pie">
+        {tarde ? t("eaw.wait_slow") : detalle}
+        {detalle || tarde ? " · " : ""}
+        <span className="espera-reloj">{mm}:{ss}</span>
+      </p>
+    </section>
+  );
+}
+
 function EvaluacionAnualWizard({ token, advisee, onBack }) {
   const nombre = (advisee && advisee.nombre) || advisee || "";
   const [est, setEst] = useState(null);
@@ -6340,7 +6384,7 @@ function EvaluacionAnualWizard({ token, advisee, onBack }) {
     </main>
   );
 
-  if (step === "loading") return shell(<p className="fine">{t("common.loading")}</p>);
+  if (step === "loading") return shell(<BarraEspera segundosTipicos={20} titulo={t("eaw.wait_starting")} detalle={t("eaw.wait_starting_detail")} />);
   if (step === "error") return shell(<p className="fine">{t("eaw.err_start")}</p>);
 
   if (step === "identidad") {
@@ -6358,7 +6402,19 @@ function EvaluacionAnualWizard({ token, advisee, onBack }) {
   }
 
   if (step === "loop") {
-    if (!area) return shell(<p className="fine">{t("eaw.loading_area")}</p>);
+    // La primera área es la cara: hay que leer todo Notion y que la IA analice el año
+    // entero (~65s medidos). Las siguientes reutilizan ese análisis y son instantáneas,
+    // así que solo se enseña la espera larga cuando toca.
+    if (!area) {
+      const primera = !est?.secciones?.some((s) => s.confirmada);
+      return shell(
+        <BarraEspera
+          segundosTipicos={primera ? 65 : 8}
+          titulo={t("eaw.wait_area", { nombre })}
+          detalle={primera ? t("eaw.wait_area_detail") : null}
+        />
+      );
+    }
     const tieneConv = area.conversacion && area.conversacion.length > 0;
     const evidMap = {};
     (area.evidencia || []).forEach((e) => { evidMap[e.cid] = e; });

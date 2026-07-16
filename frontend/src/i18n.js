@@ -630,6 +630,14 @@ export const STRINGS = {
   "eaw.yes_correct_start": { es: "Sí, es correcto · empezar", en: "Yes, correct · start" },
   "eaw.no_back": { es: "No, volver", en: "No, go back" },
   "eaw.loading_area": { es: "Cargando área…", en: "Loading area…" },
+  "eaw.wait_starting": { es: "Preparando la evaluación…", en: "Getting the evaluation ready…" },
+  "eaw.wait_starting_detail": { es: "Estamos reuniendo todo lo que se ha dicho durante el año.", en: "We're gathering everything said over the year." },
+  "eaw.wait_area": { es: "Preparando la evaluación de {nombre}…", en: "Getting {nombre}'s evaluation ready…" },
+  // El minuto no es un adorno: es lo que tarda de verdad (medido). Decirlo por delante
+  // evita que el CA piense que se ha quedado colgado y recargue, que solo lo alarga.
+  "eaw.wait_area_detail": { es: "La IA está leyendo todas sus evaluaciones del año. Suele tardar alrededor de un minuto y solo pasa la primera vez.", en: "The AI is reading all of their evaluations for the year. This usually takes about a minute, and only happens the first time." },
+  "eaw.wait_slow": { es: "Está tardando más de lo normal, pero sigue en marcha. No cierres la página.", en: "It's taking longer than usual, but it's still running. Don't close the page." },
+  "eaw.wait_elapsed": { es: "Llevas esperando {mm}:{ss}", en: "Waiting for {mm}:{ss}" },
   "eaw.area_n": { es: "Área {i}/{total}", en: "Area {i}/{total}" },
   "eaw.info_considered": { es: "Información que la IA consideró de esta área ({n})", en: "Information the AI considered for this area ({n})" },
   "eaw.no_evidence": { es: "Sin evidencia específica para esta área.", en: "No specific evidence for this area." },

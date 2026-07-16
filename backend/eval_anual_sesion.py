@@ -24,6 +24,7 @@ from .clients import anthropic_client
 from .notion_service import (
     guardar_log_evaluacion_anual,
     buscar_empleado_y_cargo,
+    obtener_borrador_estructurado,
     obtener_criterios_evaluacion,
 )
 from .utils import slug_archivo
@@ -361,6 +362,43 @@ def iniciar_sesion(advisee: str, cargo: str = "") -> dict:
         _guardar(slug, sesion)
 
     return _resumen_estado(sesion)
+
+
+def iniciar_manual(advisee: str, cargo: str = "") -> dict:
+    """Prepara el informe para rellenarlo MANUALMENTE en la web (sin Claude).
+
+    Construye un borrador en blanco (comentarios vacíos, huecos del CA vacíos) listo para
+    editar como un Word y guardar en Notion. Si ya hay una sesión (p. ej. asistida a medias),
+    reutiliza su borrador para no perder lo escrito. Devuelve {borrador}."""
+    slug = slug_archivo(advisee)
+    sesion = _leer(slug)
+    if not cargo:
+        cargo = _cargo_de(advisee)
+    if sesion is None:
+        try:
+            emp_data = _redactar_emp_data(sk.obtener_datos_empleado_anual(advisee))
+        except Exception:
+            logging.exception("Sin datos de evaluación para '%s'; borrador manual en blanco", advisee)
+            emp_data = {"empleado": advisee, "ca": "", "objetivos": []}
+        sesion = {
+            "advisee": advisee,
+            "ca": emp_data.get("ca", ""),
+            "cargo": cargo,
+            "anio": datetime.now(timezone.utc).year - 1,
+            "estado": "completada",         # habilita obtener_borrador/guardar sin pasar por áreas
+            "identidad_confirmada": True,
+            "emp_data": emp_data,
+            "areas": {},
+            "comentarios": None,
+            "modo": "manual",
+            "creada_en": _ahora(),
+        }
+    elif cargo and cargo != sesion.get("cargo"):
+        sesion["cargo"] = cargo
+    if not sesion.get("borrador"):
+        sesion["borrador"] = _restaurar_borrador_notion(advisee) or _construir_borrador(sesion)
+    _guardar(slug, sesion)
+    return {"borrador": sesion["borrador"]}
 
 
 def _resumen_estado(sesion: dict) -> dict:
@@ -878,7 +916,7 @@ def obtener_borrador(advisee: str) -> dict:
     if sesion.get("estado") != "completada":
         raise ValueError("Genera primero el borrador (todas las áreas deben estar confirmadas).")
     if not sesion.get("borrador"):
-        sesion["borrador"] = _construir_borrador(sesion)
+        sesion["borrador"] = _restaurar_borrador_notion(advisee) or _construir_borrador(sesion)
         _guardar(slug, sesion)
     return {"borrador": sesion["borrador"]}
 
@@ -919,6 +957,37 @@ def generar_docx_borrador(advisee: str, nombre_archivo: str) -> str:
         "objetivos": borrador.get("objetivos", []),
     }
     sk.guardar_informe_anual_word(sesion["emp_data"], comentarios, cargo=sesion.get("cargo", ""),
+                                  valores_ca=valores_ca, nombre_archivo=nombre_archivo)
+    return os.path.join(config.CARPETA_WEB, nombre_archivo)
+
+
+def _restaurar_borrador_notion(advisee: str) -> dict | None:
+    """Recupera de Notion el borrador en curso (si se perdió la caché local). None si no hay."""
+    try:
+        return obtener_borrador_estructurado(advisee)
+    except Exception:
+        logging.exception("No se pudo restaurar el borrador de '%s' desde Notion", advisee)
+        return None
+
+
+def word_desde_borrador(borrador: dict, nombre_archivo: str) -> str:
+    """Genera el .docx oficial a partir de un borrador (dict), SIN depender de la sesión local.
+
+    Se usa para regenerar el Word del advisee desde lo guardado en Notion (fuente de verdad).
+    Devuelve la ruta del archivo escrito en CARPETA_WEB."""
+    comentarios = {"_fuentes": {}}
+    for dim in borrador.get("dimensiones", []):
+        comentarios[dim.get("clave", "")] = dim.get("comentarios", "")
+    valores_ca = {
+        "caSiguiente": borrador.get("caSiguiente", ""),
+        "salarioActual": borrador.get("salarioActual", ""),
+        "notas": {d.get("clave", ""): d.get("nota", "") for d in borrador.get("dimensiones", [])},
+        "retribucion": borrador.get("retribucion", {}),
+        "resultadoEval": borrador.get("resultadoEval", {}),
+        "objetivos": borrador.get("objetivos", []),
+    }
+    emp_data = {"empleado": borrador.get("empleado", ""), "ca": borrador.get("caActual", "")}
+    sk.guardar_informe_anual_word(emp_data, comentarios, cargo=borrador.get("cargo", ""),
                                   valores_ca=valores_ca, nombre_archivo=nombre_archivo)
     return os.path.join(config.CARPETA_WEB, nombre_archivo)
 

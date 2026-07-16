@@ -133,6 +133,13 @@ _MESES_ES = [
     "Julio", "Agosto", "Septiembre", "Octubre", "Noviembre", "Diciembre",
 ]
 
+
+def _fmt_deadline(valor) -> str:
+    """Formatea una fecha ISO 'YYYY-MM-DD' como 'DD/MM/YYYY'; deja el resto del texto igual."""
+    valor = str(valor or "").strip()
+    m = re.fullmatch(r"(\d{4})-(\d{2})-(\d{2})", valor)
+    return f"{m.group(3)}/{m.group(2)}/{m.group(1)}" if m else valor
+
 # Dimensiones de Proyectos con la etiqueta tal y como aparece en la plantilla PDF
 _DIMS_PDF = [
     ("gestion_proyecto",  "Gestión proyecto"),
@@ -1017,7 +1024,7 @@ def _dxr(para, texto, bold=False, size=9, underline=False, center=False):
     run = para.add_run(texto)
     run.bold = bold
     run.underline = underline
-    run.font.name = "Arial"
+    run.font.name = "Outfit"
     run.font.size = Pt(size)
     return run
 
@@ -1045,7 +1052,7 @@ def _dx_hyperlink(para, url, texto, size=9):
     run = OxmlElement("w:r")
     rPr = OxmlElement("w:rPr")
     rFonts = OxmlElement("w:rFonts")
-    rFonts.set(qn("w:ascii"), "Arial"); rFonts.set(qn("w:hAnsi"), "Arial")
+    rFonts.set(qn("w:ascii"), "Outfit"); rFonts.set(qn("w:hAnsi"), "Outfit")
     rPr.append(rFonts)
     sz = OxmlElement("w:sz"); sz.set(qn("w:val"), str(int(size * 2))); rPr.append(sz)
     color = OxmlElement("w:color"); color.set(qn("w:val"), "0563C1"); rPr.append(color)
@@ -1069,7 +1076,7 @@ def _dx_internal_link(para, anchor, texto, size=9):
     run = OxmlElement("w:r")
     rPr = OxmlElement("w:rPr")
     rFonts = OxmlElement("w:rFonts")
-    rFonts.set(qn("w:ascii"), "Arial"); rFonts.set(qn("w:hAnsi"), "Arial")
+    rFonts.set(qn("w:ascii"), "Outfit"); rFonts.set(qn("w:hAnsi"), "Outfit")
     rPr.append(rFonts)
     sz = OxmlElement("w:sz"); sz.set(qn("w:val"), str(int(size * 2))); rPr.append(sz)
     color = OxmlElement("w:color"); color.set(qn("w:val"), "0563C1"); rPr.append(color)
@@ -1376,7 +1383,7 @@ def guardar_informe_anual_html(emp_data: dict, comentarios: dict, cargo: str = "
   <tr><td><strong>Career Advisor</strong></td><td>{esc(emp_data.get('ca') or '—')}</td></tr>
 </table>
 
-<h2 class="sec">{t("anual.rating_year", idioma, anio=año)}</h2>
+<h2 class="sec">{t("anual.rating_year", idioma, anio=f"{año}/{año + 1}")}</h2>
 <table class="et">
   <thead><tr><th>{t("anual.col_dimension", idioma)}</th><th class="nc">{t("anual.col_score", idioma)}</th><th>{t("anual.col_eval_comments", idioma)}</th></tr></thead>
   <tbody>{filas_dims(_DIMS_PROYECTOS)}</tbody>
@@ -1490,8 +1497,8 @@ def guardar_informe_anual_word(emp_data: dict, comentarios: dict, cargo: str = "
         _celda_emp(c3, None, v2, w4)
     doc.add_paragraph()
 
-    # ── CALIFICACIÓN {año} ────────────────────────────────────────────────────
-    _dxt(doc, t("anual.rating_year", idioma, anio=anio_eval))
+    # ── CALIFICACIÓN {año_eval}/{año_sig} ─────────────────────────────────────
+    _dxt(doc, t("anual.rating_year", idioma, anio=f"{anio_eval}/{anio_sig}"))
 
     cargo_lower = cargo.strip().lower()
     requiere_liderazgo = any(c in cargo_lower for c in _REQUIERE_LIDERAZGO)
@@ -1564,7 +1571,7 @@ def guardar_informe_anual_word(emp_data: dict, comentarios: dict, cargo: str = "
     objetivos = emp_data.get("objetivos", [])
     objetivos_ca = vca.get("objetivos")  # [{texto, deadline}] editados en el borrador web
     n_filas = max(3, len(objetivos_ca) if objetivos_ca is not None else len(objetivos))
-    w_obj, w_dl = _CONTENT_W_IN - 0.9, 0.9
+    w_obj, w_dl = _CONTENT_W_IN - 1.2, 1.2
     t_obj = doc.add_table(rows=n_filas + 1, cols=2)
     t_obj.style = "Table Grid"
     ch0, ch1 = t_obj.rows[0].cells
@@ -1580,7 +1587,7 @@ def guardar_informe_anual_word(emp_data: dict, comentarios: dict, cargo: str = "
         if objetivos_ca is not None:
             if i < len(objetivos_ca):
                 texto_obj = str(objetivos_ca[i].get("texto") or "").strip()
-                deadline_obj = str(objetivos_ca[i].get("deadline") or "").strip()
+                deadline_obj = _fmt_deadline(objetivos_ca[i].get("deadline"))
         elif i < len(objetivos):
             o = objetivos[i]
             texto_obj = o.get("titulo") or o.get("descripcion") or ""

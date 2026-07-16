@@ -24,7 +24,6 @@ from ...notion_service import (
     siguiente_envio_calendario,
     sugerir_empleados_parecidos,
 )
-from ...personal_eval import notificar_urgencia_personal_web
 from ...utils import normalizar_nombre
 
 router = APIRouter()
@@ -129,16 +128,6 @@ def buscar_empleado_slack(nombre: str = "", area: str = "negocio", session=Depen
             {"clave": "q2", "texto": pn.get("q2") or "Indica un ejemplo concreto que justifique tu valoración"},
         ]
     return {"empleado": empleado, "relacion": relacion, "preguntas": preguntas}
-
-
-@router.post("/api/urgencia-personal")
-def urgencia_personal(datos: dict = Body(default={}), session=Depends(require_session)):
-    nombre = session.get("persona", "")
-    descripcion = datos.get("descripcion", "").strip()
-    if not nombre or not descripcion:
-        return JSONResponse({"error": "Faltan datos."}, status_code=400)
-    ok = notificar_urgencia_personal_web(nombre, descripcion)
-    return {"ok": ok}
 
 
 @router.post("/api/guardar-evaluacion-personal")

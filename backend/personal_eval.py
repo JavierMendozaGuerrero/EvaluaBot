@@ -18,14 +18,12 @@ from .notion_service import (
     guardar_idioma_por_slack_id,
     invalidar_cache_empleados,
     esperar_hasta_proximo_envio,
-    obtener_ca_de_empleado,
     obtener_criterios_evaluacion,
     obtener_ejemplos_guia,
     obtener_nombre_por_id_usuario,
     obtener_objetivos_persona,
     obtener_preguntas_personales,
     PREGUNTAS_PERSONALES_DEFAULT,
-    obtener_slack_id_por_nombre,
     obtener_slack_ids_empleados,
 )
 from .slack_carga import AnimacionCargando
@@ -318,41 +316,6 @@ def _reenviar_pregunta_actual_personal(estado, dm_channel, thread_ts):
     elif modo == "confirmacion":
         texto = t("bp.comment_summary_opts", idi, texto=estado["respuestas"].get("comentario", ""))
         _enviar_resumen_personal(dm_channel, thread_ts, texto, estado, idi)
-
-
-def notificar_urgencia_personal_web(nombre: str, descripcion: str) -> bool:
-    """Notifica la urgencia al CA del empleado. Para uso desde la web."""
-    return _notificar_urgencia_al_ca(nombre, descripcion, logging.getLogger(__name__))
-
-
-def _notificar_urgencia_al_ca(nombre, descripcion, logger):
-    nombre_ca = obtener_ca_de_empleado(nombre)
-    if not nombre_ca:
-        logger.warning("No se encontró CA para '%s', no se puede notificar urgencia", nombre)
-        return False
-    slack_id_ca = obtener_slack_id_por_nombre(nombre_ca)
-    if not slack_id_ca:
-        logger.warning("No se encontró Slack ID para el CA '%s'", nombre_ca)
-        return False
-    try:
-        resp_dm = slack_app.client.conversations_open(users=[slack_id_ca])
-        dm_ca = resp_dm["channel"]["id"]
-        slack_app.client.chat_postMessage(
-            channel=dm_ca,
-            text=t("bp.urgency_to_ca", idioma_por_slack_id(slack_id_ca), nombre=nombre, desc=descripcion),
-        )
-        logger.info("Urgencia de '%s' notificada al CA '%s'", nombre, nombre_ca)
-        return True
-    except Exception as e:
-        if "user_not_found" in str(e):
-            logger.warning(
-                "Slack ID '%s' del CA '%s' no encontrado en el workspace. "
-                "Comprueba el campo ID_usuario en Notion.",
-                slack_id_ca, nombre_ca,
-            )
-        else:
-            logger.exception("Error notificando urgencia al CA '%s'", nombre_ca)
-        return False
 
 
 def manejar_mensaje_personal(event, logger) -> None:

@@ -2472,7 +2472,7 @@ def handle_proyecto_modificar_eval(ack, body, logger):
         es_activo = user_id in evaluaciones_dm_activas
         estado = conversaciones.get(user_id)
         if not es_activo or not estado:
-            reply(t("bm.no_active_eval", estado.get("idioma", "es")))
+            reply(t("bm.no_active_eval", estado.get("idioma", "es") if estado else "es"))
             return
         _ahora = time.time()
         _evs_validas = [e for e in (estado.get("evaluaciones_guardadas") or []) if _ahora - e["ts"] <= 2 * 24 * 3600]
@@ -2504,7 +2504,7 @@ def handle_proyecto_seleccionar_modificar(ack, body, logger):
         es_activo = user_id in evaluaciones_dm_activas
         estado = conversaciones.get(user_id)
         if not es_activo or not estado:
-            reply(t("bm.no_active_eval_short", estado.get("idioma", "es")))
+            reply(t("bm.no_active_eval_short", estado.get("idioma", "es") if estado else "es"))
             return
         ev = next((e for e in (estado.get("evaluaciones_guardadas") or []) if e["page_id"] == page_id_sel), None)
         if not ev or time.time() - ev["ts"] > 2 * 24 * 3600:

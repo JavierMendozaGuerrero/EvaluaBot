@@ -5,7 +5,8 @@ import pytest
 from fastapi import Body, FastAPI
 from fastapi.testclient import TestClient
 
-from backend.api.errors import register_exception_handlers
+from backend.api.errors import MSG_ERROR_INESPERADO, register_exception_handlers
+from backend.excepciones import ErrorIA
 
 
 @pytest.fixture
@@ -24,6 +25,14 @@ def test_app():
     @app.get("/boom/runtime")
     def _runtime():
         raise RuntimeError("Algo raro pasó.")
+
+    @app.get("/boom/ia")
+    def _ia():
+        raise ErrorIA("La IA está saturada.", codigo="ia_saturada")
+
+    @app.get("/boom/ia-definitivo")
+    def _ia_definitivo():
+        raise ErrorIA("Sin saldo.", codigo="ia_sin_saldo", definitivo=True)
 
     @app.post("/boom/body")
     def _body(nombre: str = Body(...)):
@@ -55,8 +64,23 @@ def test_excepcion_generica_da_500_con_mensaje_generico(test_client):
     mensaje interno queda solo en el log y el cliente ve un texto genérico."""
     r = test_client.get("/boom/runtime")
     assert r.status_code == 500
-    assert r.json() == {"error": "Error interno del servidor."}
+    assert r.json() == {"error": MSG_ERROR_INESPERADO, "code": "error_inesperado"}
     assert "Algo raro" not in r.text
+
+
+def test_error_ia_llega_al_usuario_con_su_mensaje_y_codigo(test_client):
+    """Lo contrario que el handler genérico: el mensaje de ErrorIA está escrito para el
+    usuario, así que debe llegarle tal cual en vez de quedar tapado por un texto genérico."""
+    r = test_client.get("/boom/ia")
+    assert r.status_code == 503  # temporal: invita a reintentar
+    assert r.json() == {"error": "La IA está saturada.", "code": "ia_saturada"}
+
+
+def test_error_ia_definitivo_da_500_no_503(test_client):
+    """Reintentar no arregla un 'sin saldo', así que no debe pedirse con un 503."""
+    r = test_client.get("/boom/ia-definitivo")
+    assert r.status_code == 500
+    assert r.json() == {"error": "Sin saldo.", "code": "ia_sin_saldo"}
 
 
 def test_404_no_encontrado_tiene_forma_original(test_client):

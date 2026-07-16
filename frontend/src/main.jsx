@@ -3,7 +3,7 @@ import { createRoot } from "react-dom/client";
 import "./styles/globals.css";
 import "./styles/components.css";
 import "./styles.css";
-import { t, setLang, setLangManual, getLang, subscribeLang, nombreMes } from "./i18n";
+import { t, tieneClave, setLang, setLangManual, getLang, subscribeLang, nombreMes } from "./i18n";
 
 // El texto de cada documento legal se carga bajo demanda (import dinámico) al abrir
 // la página, para no arrastrar el markdown en el bundle inicial.
@@ -149,6 +149,16 @@ function stopLoading() {
   _emitLoading();
 }
 
+// Traduce el error que devuelve el backend. El backend manda `error` (texto en español,
+// ya escrito para el usuario) y, cuando sabe qué ha pasado, un `code` estable: si ese
+// código está traducido lo pintamos en el idioma del usuario, y si no cae al texto del
+// backend, que sigue siendo útil. Nunca dejamos que se vea un error de código.
+function mensajeDeError(data) {
+  const clave = data && data.code ? `err.${data.code}` : "";
+  if (clave && tieneClave(clave)) return t(clave);
+  return (data && data.error) || t("common.err_generic");
+}
+
 async function apiRequest(path, { token, method = "GET", body } = {}) {
   startLoading();
   try {
@@ -162,7 +172,7 @@ async function apiRequest(path, { token, method = "GET", body } = {}) {
     });
     const data = await response.json().catch(() => ({}));
     if (!response.ok) {
-      throw new Error(data.error || t("common.err_generic"));
+      throw new Error(mensajeDeError(data));
     }
     return data;
   } finally {
@@ -667,11 +677,11 @@ function AdminPanel({ token, onBack }) {
     try {
       const data = await apiRequest(endpoint, { token, method: "POST", body: { evaluado: selected.nombre } });
       const path = data.pdfUrl;
-      if (!path) throw new Error("No se generó el documento.");
+      if (!path) throw new Error(t("ad.err_no_doc"));
       const response = await fetch(apiUrl(path), { headers: { Authorization: `Bearer ${token}` } });
       if (!response.ok) {
         const d = await response.json().catch(() => ({}));
-        throw new Error(d.error || "No se pudo descargar el archivo.");
+        throw new Error(d.error || t("admin.err_download"));
       }
       const blob = await response.blob();
       const url = URL.createObjectURL(blob);
@@ -729,18 +739,18 @@ function AdminPanel({ token, onBack }) {
                 <p className="fine">{informeFinal?.mensaje || t("admin.no_final_report")}</p>
               )}
               <div style={{ marginTop: 20 }}>
-                <p className="kicker">Información disponible</p>
+                <p className="kicker">{t("admin.available_info")}</p>
                 <button className="secondary" disabled={!!generandoFuente}
                   onClick={() => descargarFuentePdf("/api/generar-pdf-evals-mensuales", "evals_mensuales")}>
-                  {generandoFuente === "/api/generar-pdf-evals-mensuales" ? "Generando..." : "Evaluaciones mensuales"}
+                  {generandoFuente === "/api/generar-pdf-evals-mensuales" ? t("ad.generating") : t("admin.dl_monthly_evals")}
                 </button>
                 <button className="secondary" disabled={!!generandoFuente} style={{ marginTop: 8 }}
                   onClick={() => descargarFuentePdf("/api/generar-pdf-evals-proyecto", "evals_proyecto")}>
-                  {generandoFuente === "/api/generar-pdf-evals-proyecto" ? "Generando..." : "Evaluaciones de proyecto"}
+                  {generandoFuente === "/api/generar-pdf-evals-proyecto" ? t("ad.generating") : t("admin.dl_proj_evals")}
                 </button>
                 <button className="secondary" disabled={!!generandoFuente} style={{ marginTop: 8 }}
                   onClick={() => descargarFuentePdf("/api/generar-pdf-seguimiento", "seguimiento_personal")}>
-                  {generandoFuente === "/api/generar-pdf-seguimiento" ? "Generando..." : "Seguimiento personal"}
+                  {generandoFuente === "/api/generar-pdf-seguimiento" ? t("ad.generating") : t("admin.dl_personal_tracking")}
                 </button>
                 {fuenteError && <p className="fine error" style={{ marginTop: 8 }}>{fuenteError}</p>}
               </div>
@@ -2323,7 +2333,11 @@ function ChatEvalCA({ token, user, adviseesProp, onComplete }) {
         botSay("¿Qué opinas de las evaluaciones? Escribe tu comentario sobre el progreso de tu advisee.");
         setStep("esperando_opinion");
       }
-    } catch { botSay("⚠️ Error cargando evaluaciones. Inténtalo de nuevo."); }
+    } catch (err) {
+      // Antes se descartaba el error y se decía siempre "inténtalo de nuevo": si la API
+      // se había quedado sin saldo, reintentar no servía de nada y nadie se enteraba.
+      botSay(`⚠️ ${err.message || t("err.load_evaluations")}`);
+    }
     finally { setLoading(false); }
   }
 
@@ -6423,6 +6437,22 @@ function EvaluacionAnualWizard({ token, advisee, onBack }) {
               <p className="fine" style={{ margin: "4px 0 0", whiteSpace: "pre-line" }}>{e.texto || "—"}</p>
             </div>
           ))}
+          {/* Lo que Claude NO citó en este área. Antes no se mostraba, así que una evaluación
+              que el modelo ignorase desaparecía sin que el CA supiera siquiera que existía. */}
+          {(area.evidencia_no_citada || []).length > 0 && (
+            <details style={{ marginTop: 12 }}>
+              <summary className="fine" style={{ cursor: "pointer", color: "var(--text-55)" }}>
+                {t("eaw.info_not_used", { n: area.evidencia_no_citada.length })}
+              </summary>
+              <p className="fine" style={{ margin: "8px 0 0" }}>{t("eaw.info_not_used_note")}</p>
+              {area.evidencia_no_citada.map((e) => (
+                <div key={e.cid} className="card" style={{ marginTop: 8, opacity: 0.75 }}>
+                  <p style={{ margin: 0 }}><strong>[{e.cid}]</strong> {e.label}{e.evaluador ? ` · ${e.evaluador}` : ""}</p>
+                  <p className="fine" style={{ margin: "4px 0 0", whiteSpace: "pre-line" }}>{e.texto || "—"}</p>
+                </div>
+              ))}
+            </details>
+          )}
         </details>
 
         {tieneConv && (

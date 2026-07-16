@@ -8,6 +8,8 @@ from datetime import datetime, timezone
 
 from . import config
 from .clients import Document, anthropic_client
+from .excepciones import ErrorIA
+from .ia import MSG_NO_DISPONIBLE
 from .i18n import t
 from .notion_service import excluir_feedback_confidencial, obtener_comentarios_personales, obtener_evaluaciones_por_evaluado, idioma_de_persona
 from .utils import slug_archivo
@@ -42,9 +44,11 @@ def _comentarios_para_prompt(comentarios, nombre):
 
 def generar_informe_claude(evaluaciones, comentarios_personales=None, idioma="es"):
     if not anthropic_client:
-        raise RuntimeError("Falta ANTHROPIC_API_KEY o no está instalado el paquete anthropic.")
+        # RuntimeError acababa en el handler genérico ("Error interno del servidor."):
+        # el usuario no sabía ni que era la IA ni a quién avisar.
+        raise ErrorIA(MSG_NO_DISPONIBLE, "ia_no_configurada", definitivo=True)
     if not evaluaciones:
-        raise RuntimeError("No hay evaluaciones en Notion para generar el informe.")
+        raise ValueError("No hay evaluaciones en Notion para generar el informe.")
 
     seccion_personal = ""
     if comentarios_personales:

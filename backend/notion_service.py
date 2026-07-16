@@ -1326,6 +1326,12 @@ def obtener_o_crear_bbdd_evaluado(nombre_evaluado):
         return database_id
 
 
+# Cada relación jerárquica tiene su par de columnas en Notion. La columna rellena ES el
+# registro de la dirección de la evaluación: se congela al guardar y no se recalcula al leer
+# (un ascenso posterior no debe reescribir la historia).
+_SUFIJO_COL_RELACION = {"superior": "de superiores", "inferior": "de inferiores", "igual": "de iguales"}
+
+
 def guardar_en_notion(nombre, respuestas, relacion="igual", area="Negocio"):
     nombre_evaluado = respuestas.get("evaluado", "").strip()
     proyecto = respuestas.get("proyecto", "").strip()
@@ -1337,7 +1343,7 @@ def guardar_en_notion(nombre, respuestas, relacion="igual", area="Negocio"):
         _extras = [v for k, v in respuestas.items() if k not in _skip and v]
         valoracion = _extras[0] if len(_extras) > 0 else ""
         justificacion = _extras[1] if len(_extras) > 1 else ""
-        suf_col = {"superior": "de superiores", "inferior": "de inferiores"}.get(relacion, "de iguales")
+        suf_col = _SUFIJO_COL_RELACION.get(relacion, "de iguales")
         pagina = _crear_pagina_en_bbdd(
             database_id,
             {
@@ -1362,14 +1368,22 @@ def actualizar_en_notion(page_id: str, nombre: str, respuestas: dict, relacion: 
         _extras = [v for k, v in respuestas.items() if k not in _skip and v]
         valoracion = _extras[0] if len(_extras) > 0 else ""
         justificacion = _extras[1] if len(_extras) > 1 else ""
-        suf_col = {"superior": "de superiores", "inferior": "de inferiores"}.get(relacion, "de iguales")
-        notion.pages.update(
-            page_id=page_id,
-            properties={
-                f"Valoración {suf_col}": {"rich_text": [{"text": {"content": valoracion}}]},
-                f"Justificación {suf_col}": {"rich_text": [{"text": {"content": justificacion}}]},
-            },
-        )
+        suf_col = _SUFIJO_COL_RELACION.get(relacion, "de iguales")
+        props = {
+            f"Valoración {suf_col}": {"rich_text": [{"text": {"content": valoracion}}]},
+            f"Justificación {suf_col}": {"rich_text": [{"text": {"content": justificacion}}]},
+        }
+        # Si al editar cambia la relación (p. ej. el cargo del evaluador se movió entre el
+        # alta y la edición), el texto se va a otra columna y la anterior se quedaba puesta:
+        # la fila acababa con dos jerarquías a la vez y la lectura resuelve el empate a favor
+        # de 'superiores' -> una bottom-to-top se leía como top-down y se publicaba al CA.
+        # Vaciar las demás garantiza que cada fila declare UNA sola relación.
+        for otro_suf in set(_SUFIJO_COL_RELACION.values()) | {"de iguales"}:
+            if otro_suf == suf_col:
+                continue
+            props[f"Valoración {otro_suf}"] = {"rich_text": []}
+            props[f"Justificación {otro_suf}"] = {"rich_text": []}
+        notion.pages.update(page_id=page_id, properties=props)
         return True
     except Exception:
         logging.exception("Error actualizando en Notion")
@@ -2587,6 +2601,24 @@ def obtener_evaluaciones_de_bbdd(database_id, evaluado):
                 jus_sup  = _texto_rich_text(props, "Justificación de superiores") or _texto_rich_text(props, "Peor aspecto de superiores")
                 jus_igu  = _texto_rich_text(props, "Justificación de iguales") or _texto_rich_text(props, "Peor aspecto de iguales")
                 jus_inf  = _texto_rich_text(props, "Justificación de inferiores") or _texto_rich_text(props, "Peor aspecto de inferiores")
+                # Una fila solo puede declarar UNA relación. Si trae varias rellenas está
+                # corrupta (edición antigua que no vaciaba la columna previa, o edición a mano
+                # en Notion) y no hay forma de saber cuál es la buena. Antes ganaba 'superiores'
+                # por ser el primer if, que es justo la opción que PUBLICA el texto al CA: una
+                # bottom-to-top corrupta se filtraba. Marcarla ambigua la deja fuera, porque
+                # ante la duda no se publica (misma norma que las filas sin jerarquía).
+                declaradas = sum(1 for v, j in ((val_sup, jus_sup), (val_inf, jus_inf), (val_igu, jus_igu)) if v or j)
+                if declaradas > 1:
+                    # Se descarta entera en vez de marcarla: cualquier etiqueta que le pusiéramos
+                    # sería una invención, y un valor nuevo se colaría por los filtros que solo
+                    # miran 'inferior' (excluir_feedback_confidencial). El aviso lleva la URL de
+                    # la página para poder arreglarla a mano en Notion.
+                    logging.warning(
+                        "Evaluación de '%s' con %d jerarquías rellenas a la vez: fila corrupta, "
+                        "se descarta por completo. Deja una sola en Notion: %s",
+                        evaluado, declaradas, pagina.get("url", ""),
+                    )
+                    continue
                 if val_sup or jus_sup:
                     relacion = "superior"
                     q1_act, q2_act = val_sup, jus_sup

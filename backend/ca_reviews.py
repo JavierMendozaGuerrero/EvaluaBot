@@ -19,7 +19,8 @@ from .clients import notion, slack_app
 from .conversation_back import boton_atras, fila_atras, limpiar_historial, pop_historial, push_historial, tiene_historial
 from .slack_lists import añadir_pendiente, enlace_lista_pendientes, quitar_pendiente
 from .eval_tracking import registrar_envio_por_slack_id, marcar_completada_por_slack_id
-from .i18n import t, botones_idioma_slack
+from .excepciones import ErrorIA
+from .i18n import t, botones_idioma_slack, texto_error_ia
 from .notion_service import (
     _buscar_bbdd_en_pagina_id,
     _coincide_parent_bbdd,
@@ -1352,10 +1353,15 @@ def manejar_mensaje_ca(event, logger) -> None:
             return
         _, cargo = buscar_empleado_y_cargo(advisee)
         resumen_claude = None
+        motivo_fallo = ""
         # Mientras Claude "piensa", mostramos una barra de carga animada en el hilo.
         with AnimacionCargando(channel, thread_ts, _idi):
             try:
                 resumen_claude = generar_resumen_evaluacion(advisee, cargo or "", resumen_bruto, _idi)
+            except ErrorIA as err:
+                # Sin saldo, IA saturada…: el CA no puede hacer nada con un "no se pudo",
+                # pero sí con el motivo y a quién avisar.
+                motivo_fallo = texto_error_ia(err.codigo, str(err), _idi)
             except Exception:
                 logging.exception("Error generando resumen Claude para '%s'", advisee)
         with _lock:
@@ -1367,7 +1373,9 @@ def manejar_mensaje_ca(event, logger) -> None:
             _enviar_pregunta_opinion(channel, thread_ts, _idi, estado)
         else:
             _preg = obtener_preguntas_seguimiento_ca(_idi).get("opinion_con_claude", "")
-            texto_fallo = f"⚠️ No se pudo generar el resumen con Claude.\n\n{_preg}"
+            # El texto estaba fijo en español aunque el CA fuese de en/pt.
+            aviso = motivo_fallo or t("bc.claude_summary_fail", _idi)
+            texto_fallo = f"⚠️ {aviso}\n\n{_preg}"
             bloques = [{"type": "section", "text": {"type": "mrkdwn", "text": texto_fallo}}] + fila_atras("atras_ca", "bc.back_btn", estado, _idi)
             _resp = slack_app.client.chat_postMessage(channel=channel, thread_ts=thread_ts, text=texto_fallo, blocks=bloques)
             _recordar_botones_ca(channel, _resp, texto_fallo)

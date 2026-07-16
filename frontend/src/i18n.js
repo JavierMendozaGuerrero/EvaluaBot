@@ -83,6 +83,10 @@ export function t(clave, vars) {
   return s;
 }
 
+// ¿Está esta clave en el catálogo? t() devuelve la propia clave cuando no lo está, y hay
+// sitios (los `code` de error del backend) donde eso se le pintaría al usuario.
+export function tieneClave(clave) { return Object.prototype.hasOwnProperty.call(STRINGS, clave); }
+
 export const STRINGS = {
   // --- Comunes / reutilizados ---
   "common.back": { es: "← Volver", en: "← Back" },
@@ -98,6 +102,19 @@ export const STRINGS = {
   "common.no_date": { es: "Sin fecha", en: "No date" },
   "common.err_generic": { es: "No se pudo completar la acción.", en: "The action could not be completed." },
 
+  // --- Errores del backend, por el `code` que devuelve la API (ver backend/ia.py).
+  // Los busca mensajeDeError() en main.jsx. Si un código no está aquí, se pinta el
+  // texto en español que manda el backend: sigue siendo comprensible, no es un fallo.
+  "err.ia_sin_saldo": { es: "La API de Claude asociada a esta herramienta se ha quedado sin saldo. Contacta con el organizador de la cuenta de Claude (tech@igeneris.com) o con el responsable de la herramienta.", en: "The Claude API used by this tool has run out of credit. Please contact the Claude account owner (tech@igeneris.com) or the tool's owner." },
+  "err.ia_config": { es: "La API de Claude asociada a esta herramienta no está bien configurada y ha rechazado la petición. Contacta con el responsable de la herramienta (tech@igeneris.com).", en: "The Claude API used by this tool is misconfigured and rejected the request. Please contact the tool's owner (tech@igeneris.com)." },
+  "err.ia_no_configurada": { es: "La IA no está disponible: a esta herramienta le falta la clave de la API de Claude. Contacta con el responsable de la herramienta (tech@igeneris.com).", en: "The AI is unavailable: this tool is missing the Claude API key. Please contact the tool's owner (tech@igeneris.com)." },
+  "err.ia_saturada": { es: "La IA está saturada en este momento. Espera un par de minutos y vuelve a intentarlo; si sigue fallando, avisa al responsable de la herramienta (tech@igeneris.com).", en: "The AI is overloaded right now. Wait a couple of minutes and try again; if it keeps failing, let the tool's owner know (tech@igeneris.com)." },
+  "err.ia_conexion": { es: "No se ha podido conectar con la IA. Comprueba tu conexión y vuelve a intentarlo; si sigue fallando, avisa al responsable de la herramienta (tech@igeneris.com).", en: "Could not connect to the AI. Check your connection and try again; if it keeps failing, let the tool's owner know (tech@igeneris.com)." },
+  "err.ia_entrada_larga": { es: "Hay demasiada información para que la IA la procese de una vez. Acorta el texto y vuelve a intentarlo; si no puedes, avisa al responsable de la herramienta (tech@igeneris.com).", en: "There is too much information for the AI to process at once. Shorten the text and try again; if you can't, let the tool's owner know (tech@igeneris.com)." },
+  "err.ia_error": { es: "La IA no ha podido responder ahora mismo. Vuelve a intentarlo; si sigue fallando, avisa al responsable de la herramienta (tech@igeneris.com).", en: "The AI could not answer right now. Try again; if it keeps failing, let the tool's owner know (tech@igeneris.com)." },
+  "err.error_inesperado": { es: "Ha ocurrido un error inesperado y la acción no se ha completado. Vuelve a intentarlo; si sigue fallando, avisa al responsable de la herramienta (tech@igeneris.com).", en: "Something unexpected went wrong and the action was not completed. Try again; if it keeps failing, let the tool's owner know (tech@igeneris.com)." },
+  "err.load_evaluations": { es: "No se pudieron cargar las evaluaciones. Inténtalo de nuevo.", en: "Could not load the evaluations. Please try again." },
+
   // --- Panel admin ---
   "admin.reports": { es: "Informes", en: "Reports" },
   "admin.view_final_report": { es: "Ver informe final", en: "View final report" },
@@ -108,6 +125,12 @@ export const STRINGS = {
   "admin.no_results": { es: "No hay resultados para “{q}”.", en: "No results for “{q}”." },
   "admin.err_load_report": { es: "No se pudo cargar el informe.", en: "Could not load the report." },
   "admin.err_download": { es: "No se pudo descargar el archivo.", en: "Could not download the file." },
+  // Descarga de PDFs de fuentes en el panel de admin. No reutilizan las claves admin.eval_type_*
+  // (esas son "Mensual"/"Proyecto", etiquetas de tipo, no rótulos de botón).
+  "admin.available_info": { es: "Información disponible", en: "Available information" },
+  "admin.dl_monthly_evals": { es: "Evaluaciones mensuales", en: "Monthly evaluations" },
+  "admin.dl_proj_evals": { es: "Evaluaciones de proyecto", en: "Project evaluations" },
+  "admin.dl_personal_tracking": { es: "Seguimiento personal", en: "Personal tracking" },
   "admin.confidential_feedback_title": { es: "Feedback confidencial (solo Head of People)", en: "Confidential feedback (Head of People only)" },
   "admin.confidential_feedback_note": { es: "Evaluaciones de personas de su equipo hacia esta persona. Totalmente privado y anónimo: no se comparte con su CA ni con nadie más de la empresa.", en: "Feedback from this person's team members about them. Totally private and anonymous: never shared with their CA or anyone else in the company." },
   "admin.confidential_feedback_empty": { es: "No hay feedback confidencial registrado.", en: "No confidential feedback recorded." },
@@ -610,6 +633,8 @@ export const STRINGS = {
   "eaw.area_n": { es: "Área {i}/{total}", en: "Area {i}/{total}" },
   "eaw.info_considered": { es: "Información que la IA consideró de esta área ({n})", en: "Information the AI considered for this area ({n})" },
   "eaw.no_evidence": { es: "Sin evidencia específica para esta área.", en: "No specific evidence for this area." },
+  "eaw.info_not_used": { es: "Otras fuentes que la IA no usó aquí ({n})", en: "Other sources the AI did not use here ({n})" },
+  "eaw.info_not_used_note": { es: "La IA no las citó en esta área. Están aquí para que las veas y decidas tú si son relevantes.", en: "The AI did not cite these for this area. They are listed so you can see them and decide for yourself whether they are relevant." },
   "eaw.ref_unavailable": { es: "Referencia no disponible en esta área.", en: "Reference not available in this area." },
   "eaw.ref_hint": { es: "Pulsa una cita [E#] en la respuesta de la IA para ver la fuente al momento.", en: "Click a citation [E#] in the AI reply to see the source instantly." },
   "eaw.criteria_panel": { es: "Criterios y nivel", en: "Criteria & level" },

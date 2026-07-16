@@ -14,13 +14,19 @@ Flujo:
 Persistencia: JSON local junto al informe (`sesion_anual_{slug}.json`).
 """
 
+import functools
 import json
 import logging
 import os
+import re
+import threading
+import time
 from datetime import datetime, timezone
 
 from . import config
 from .clients import anthropic_client
+from .excepciones import ErrorIA
+from .ia import MSG_NO_DISPONIBLE, turno_analisis_anual
 from .notion_service import (
     guardar_log_evaluacion_anual,
     buscar_empleado_y_cargo,
@@ -44,19 +50,99 @@ def _secciones(cargo: str) -> list[tuple[str, str]]:
 
 # ── Persistencia (JSON local) ─────────────────────────────────────────────────
 
+# Un lock por evaluado. Toda la sesión vive en un JSON que se lee entero, se modifica y
+# se reescribe entero: sin esto, dos peticiones a la vez sobre la misma persona (un F5
+# del CA basta) leen la misma copia y la última en guardar borra lo que hizo la otra.
+# También evita pagar dos análisis idénticos de ~60s (ver _asegurar_comentarios).
+# Es un lock en memoria: vale para varios hilos, no para varios procesos. Hoy la API
+# corre en un único uvicorn, así que llega; con más de un worker haría falta un lock
+# de fichero (portalocker) o mover la sesión a una base de datos.
+_locks_sesion: dict[str, threading.RLock] = {}
+_locks_io: dict[str, threading.Lock] = {}
+_lock_registro = threading.Lock()
+
+
+def _lock_de(slug: str) -> threading.RLock:
+    """Lock de OPERACIÓN: se retiene durante toda la operación (hasta ~60s si hay IA)."""
+    with _lock_registro:
+        lock = _locks_sesion.get(slug)
+        if lock is None:
+            # RLock y no Lock: hay funciones bloqueadas que llaman a otras que también
+            # lo cogen (p. ej. _leer -> _guardar al redactar), y un Lock se autobloquearía.
+            lock = _locks_sesion[slug] = threading.RLock()
+        return lock
+
+
+def _lock_io_de(slug: str) -> threading.Lock:
+    """Lock de FICHERO: se retiene solo lo que dura el open/replace (milisegundos).
+
+    Es distinto del de operación a propósito. Los endpoints de solo lectura no cogen el
+    de operación (si no, consultar el estado esperaría a un análisis de ~60s), así que un
+    lector puede cruzarse con el os.replace de un escritor. En Windows eso da
+    PermissionError: no se puede sustituir un fichero que otro tiene abierto. Este lock
+    serializa únicamente el acceso al fichero, sin que nadie espere por la IA.
+
+    Orden para no bloquearse: primero el de operación, luego el de IO. Nunca al revés.
+    """
+    with _lock_registro:
+        lock = _locks_io.get(slug)
+        if lock is None:
+            lock = _locks_io[slug] = threading.Lock()
+        return lock
+
+
+def _con_lock_sesion(fn):
+    """Serializa por evaluado toda la función, de la lectura al guardado.
+
+    Se aplica a las que MODIFICAN la sesión. Las de solo lectura se quedan fuera a
+    propósito: `_guardar` ya es atómico (nunca se lee un JSON a medias), y meterlas aquí
+    haría que consultar el estado se quedara esperando los ~60s de un análisis en curso.
+    """
+    @functools.wraps(fn)
+    def envoltorio(advisee, *args, **kwargs):
+        with _lock_de(slug_archivo(advisee)):
+            return fn(advisee, *args, **kwargs)
+    return envoltorio
+
+
 def _ruta_sesion(slug: str) -> str:
     return os.path.join(config.CARPETA_WEB, f"sesion_anual_{slug}.json")
+
+
+def _cargar_json(ruta: str, slug: str) -> dict | None:
+    """Lee el JSON reintentando los fallos pasajeros.
+
+    Devolver None equivale a decirle al CA "no hay sesión iniciada", así que solo debe
+    pasar cuando de verdad no la hay. Un lector puede cruzarse con el os.replace de un
+    escritor: en Windows eso da PermissionError (no se puede sustituir un fichero que
+    está abierto). Es cuestión de milisegundos, así que se reintenta antes de rendirse.
+    """
+    for intento in range(4):
+        try:
+            # El lock de IO cubre el cruce entre hilos; los reintentos quedan como red
+            # por si el fichero lo toca algo de fuera de este proceso (un backup, otro
+            # arranque del bot compartiendo la carpeta).
+            with _lock_io_de(slug):
+                with open(ruta, encoding="utf-8") as f:
+                    return json.load(f)
+        except FileNotFoundError:
+            # El replace de un escritor puede pillarnos justo en medio.
+            if intento == 3:
+                return None
+        except (OSError, json.JSONDecodeError):
+            if intento == 3:
+                logging.exception("No se pudo leer la sesión anual %s", slug)
+                return None
+        time.sleep(0.05 * (intento + 1))
+    return None
 
 
 def _leer(slug: str) -> dict | None:
     ruta = _ruta_sesion(slug)
     if not os.path.exists(ruta):
         return None
-    try:
-        with open(ruta, encoding="utf-8") as f:
-            sesion = json.load(f)
-    except Exception:
-        logging.exception("No se pudo leer la sesión anual %s", slug)
+    sesion = _cargar_json(ruta, slug)
+    if sesion is None:
         return None
     # Las sesiones creadas antes de la redacción guardaron los datos en bruto, con nombres.
     # Redactar aquí (además de al crearlas) las limpia al abrirlas, y el primer _guardar
@@ -72,10 +158,43 @@ def _leer(slug: str) -> dict | None:
 
 
 def _guardar(slug: str, data: dict) -> None:
+    """Escribe la sesión de forma atómica: o queda la versión nueva, o la vieja.
+
+    Antes se abría el fichero en modo "w", que lo trunca a cero y luego escribe. Si el
+    proceso moría o se reiniciaba en ese hueco, el JSON quedaba a medias; `_leer` no
+    puede parsearlo, devuelve None, y el CA pierde la sesión entera ("No hay sesión
+    iniciada") sin forma de recuperarla. Escribir a un temporal y renombrar evita ese
+    hueco: os.replace es atómico, así que el fichero final nunca se ve a medio escribir.
+    """
     data["actualizada_en"] = _ahora()
     os.makedirs(config.CARPETA_WEB, exist_ok=True)
-    with open(_ruta_sesion(slug), "w", encoding="utf-8") as f:
-        json.dump(data, f, ensure_ascii=False)
+    ruta = _ruta_sesion(slug)
+    # El temporal va en la misma carpeta: os.replace solo es atómico dentro del mismo
+    # sistema de ficheros, y /tmp puede estar en otro.
+    tmp = f"{ruta}.{os.getpid()}.{threading.get_ident()}.tmp"
+    try:
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(data, f, ensure_ascii=False)
+            f.flush()
+            os.fsync(f.fileno())  # sin esto, un corte de luz deja el rename hecho y el contenido no
+        # El lock de IO evita el cruce con un lector (en Windows, os.replace falla con
+        # PermissionError si otro tiene el destino abierto). Los reintentos quedan como
+        # red por si el fichero lo toca algo ajeno a este proceso.
+        for intento in range(4):
+            try:
+                with _lock_io_de(slug):
+                    os.replace(tmp, ruta)
+                break
+            except PermissionError:
+                if intento == 3:
+                    raise
+                time.sleep(0.05 * (intento + 1))
+    except Exception:
+        try:
+            os.remove(tmp)
+        except OSError:
+            pass
+        raise
 
 
 def _ahora() -> str:
@@ -113,13 +232,32 @@ def _emp_y_fuentes(sesion: dict) -> tuple[dict, dict]:
 
 
 def _asegurar_comentarios(slug: str, sesion: dict) -> dict:
-    """Genera (una vez) y cachea en la sesión lo que redactó Claude."""
+    """Genera (una vez) y cachea en la sesión lo que redactó Claude.
+
+    Quien llama ya viene con el lock del evaluado (`_con_lock_sesion`), así que dos
+    peticiones a la vez sobre la misma persona no lanzan dos análisis: la segunda espera
+    y se encuentra los comentarios ya hechos en la relectura de abajo.
+    """
     if sesion.get("comentarios"):
         return sesion["comentarios"]
-    comentarios = sk.interpretar_evaluaciones_anual(sesion["emp_data"], cargo=sesion.get("cargo", ""))
+    # Releer: mientras esperábamos el lock, otra petición ha podido dejarlos hechos.
+    # Sin esto, un F5 del CA cuesta otro análisis de ~60s y otra llamada de pago.
+    fresca = _leer(slug)
+    if fresca and fresca.get("comentarios"):
+        sesion["comentarios"] = fresca["comentarios"]
+        return sesion["comentarios"]
+    with turno_analisis_anual():
+        comentarios = sk.interpretar_evaluaciones_anual(sesion["emp_data"], cargo=sesion.get("cargo", ""))
     sesion["comentarios"] = comentarios
     _guardar(slug, sesion)
     return comentarios
+
+
+def _fuente_a_item(cid: str, s: dict) -> dict:
+    return {
+        "cid": cid, "tipo": s.get("tipo", ""), "label": s.get("label", ""),
+        "evaluador": s.get("evaluador", ""), "texto": s.get("texto", ""), "fecha": s.get("fecha", ""),
+    }
 
 
 def _evidencia_de_area(comentarios: dict, fuentes: dict, clave: str) -> list[dict]:
@@ -134,13 +272,100 @@ def _evidencia_de_area(comentarios: dict, fuentes: dict, clave: str) -> list[dic
         if cid in vistos or cid not in fuentes:
             continue
         vistos.add(cid)
-        s = fuentes[cid]
-        items.append({
-            "cid": cid, "tipo": s.get("tipo", ""), "label": s.get("label", ""),
-            "evaluador": s.get("evaluador", ""), "texto": s.get("texto", ""), "fecha": s.get("fecha", ""),
-        })
+        items.append(_fuente_a_item(cid, fuentes[cid]))
     items.sort(key=lambda x: x["fecha"] or "")
     return items
+
+
+
+def _fuentes_no_citadas(fuentes: dict, evidencia: list[dict]) -> list[dict]:
+    """Las fuentes que no están en la evidencia del área.
+
+    El panel enseñaba solo lo citado, así que una evaluación que Claude decidiera ignorar
+    desaparecía de la vista del CA sin dejar rastro: el CA no podía ni saber que existía,
+    ni discrepar. Aquí van el resto para que las tenga delante y juzgue él.
+    """
+    citadas = {e["cid"] for e in evidencia}
+    return sorted(
+        (_fuente_a_item(cid, s) for cid, s in fuentes.items() if cid not in citadas),
+        key=lambda x: x["fecha"] or "",
+    )
+
+
+# ── Aportaciones del CA ───────────────────────────────────────────────────────
+# El CA sabe cosas que no están en Notion (una conversación, un marrón que nadie evaluó).
+# Antes se descartaban: sin cita, fuera del informe. Ahora la IA se las admite, pero solo
+# cuando concreta cuándo, en qué proyecto y qué pasó; entonces quedan registradas como
+# fuente [C#] firmada por él y son citables como cualquier otra.
+
+_CID_APORTACION_RE = re.compile(r"\[(C\d+)\]")
+
+
+def _aportaciones(sesion: dict) -> list[dict]:
+    return sesion.setdefault("emp_data", {}).setdefault("aportaciones_ca", [])
+
+
+def _evidencia_area(sesion: dict, comentarios: dict, fuentes: dict, clave: str) -> list[dict]:
+    """Evidencia del área: lo que Claude citó + las aportaciones que el CA registró en ella.
+
+    Las aportaciones no salen de _evidencia_de_area porque esa lee las citas de la
+    valoración inicial de Claude, escrita antes de que el CA abriera la boca."""
+    items = _evidencia_de_area(comentarios, fuentes, clave)
+    vistos = {e["cid"] for e in items}
+    for ap in _aportaciones(sesion):
+        cid = ap.get("cid")
+        if ap.get("area") == clave and cid in fuentes and cid not in vistos:
+            vistos.add(cid)
+            items.append(_fuente_a_item(cid, fuentes[cid]))
+    items.sort(key=lambda x: x["fecha"] or "")
+    return items
+
+
+def _registrar_aportaciones(sesion: dict, clave: str, propuestas: list) -> dict:
+    """Da de alta las aportaciones que la IA aceptó en este turno y devuelve el remapeo
+    de ids {cid_de_claude: cid_asignado}.
+
+    Los ids los asigna el backend, no el modelo: Claude propone uno (necesita citarlo en su
+    misma respuesta) pero puede equivocarse o colisionar con uno ya usado, así que aquí se
+    reasignan en orden y se reescriben los tokens de sus textos."""
+    if not isinstance(propuestas, list):
+        return {}
+    registro = _aportaciones(sesion)
+    usados = {ap.get("cid") for ap in registro}
+    siguiente = 1 + max((int(c[1:]) for c in usados if c and c[1:].isdigit()), default=0)
+    remapeo: dict[str, str] = {}
+    for p in propuestas:
+        if not isinstance(p, dict):
+            continue
+        texto = (p.get("texto") or "").strip()
+        if not texto:
+            continue
+        cid_ia = (p.get("cid") or "").strip()
+        cid = f"C{siguiente}"
+        siguiente += 1
+        if cid_ia and cid_ia != cid:
+            remapeo[cid_ia] = cid
+        registro.append({
+            "cid": cid,
+            "area": clave,
+            "texto": texto,
+            "proyecto": (p.get("proyecto") or "").strip(),
+            "fecha": (p.get("fecha") or "").strip(),
+            "autor": sesion.get("ca", ""),
+            "registrada_en": _ahora(),
+        })
+    if remapeo:
+        logging.info("Sesión anual %s: aportaciones del CA remapeadas %s",
+                     sesion.get("advisee", ""), remapeo)
+    return remapeo
+
+
+def _aplicar_remapeo(texto: str, remapeo: dict) -> str:
+    """Sustituye los [C#] que usó Claude por los ids realmente asignados. En una sola
+    pasada: encadenar reemplazos podría pisar un id recién escrito (C4→C3 y luego C3→C2)."""
+    if not remapeo or not texto:
+        return texto
+    return _CID_APORTACION_RE.sub(lambda m: f"[{remapeo.get(m.group(1), m.group(1))}]", texto)
 
 
 def _pregunta_area(etiqueta: str) -> str:
@@ -223,7 +448,7 @@ def _generar_resumen_area(cargo: str, etiqueta: str, bullets: list[str], evidenc
     fallback): Claude solo aporta la valoración. Si un criterio no se puede valorar,
     se dice explícitamente (no se omite ni se agrupa)."""
     if not anthropic_client:
-        raise RuntimeError("La IA no está disponible ahora mismo; inténtalo más tarde.")
+        raise ErrorIA(MSG_NO_DISPONIBLE, "ia_no_configurada", definitivo=True)
     lista = "\n".join(f"{i}. {b}" for i, b in enumerate(bullets, 1))
     ev_txt = "\n".join(f"[{e['cid']}] {e['label']} — {e['texto']}" for e in evidencia) or "(sin evidencia)"
     conv_txt = "\n".join(f"{'CA' if m['rol'] == 'ca' else 'IA'}: {m['texto']}" for m in conversacion) \
@@ -235,7 +460,9 @@ def _generar_resumen_area(cargo: str, etiqueta: str, bullets: list[str], evidenc
         "Para CADA criterio, valora cómo lo ha hecho la persona EN ESE CRITERIO CONCRETO: 1-3 frases "
         "directas y honestas, citando la evidencia [X#] que lo respalde e incorporando lo acordado en la "
         "conversación. NO inventes: si para un criterio no hay información suficiente (ni en la evidencia "
-        "ni en la conversación), márcalo como no evaluable en lugar de rellenarlo.\n\n"
+        "ni en la conversación), márcalo como no evaluable en lugar de rellenarlo. Las fuentes [C#] son "
+        "aportaciones que el CA hizo en la conversación y que ya quedaron registradas: son evidencia "
+        "citable como el resto.\n\n"
         'Devuelve SOLO un JSON válido: {"valoraciones": [{"i": <número del criterio>, '
         '"evaluable": true|false, "valoracion": "texto"}]} con EXACTAMENTE una entrada por criterio y en '
         'el mismo orden. Si "evaluable" es false, deja "valoracion" vacía o indica brevemente qué '
@@ -250,12 +477,14 @@ def _generar_resumen_area(cargo: str, etiqueta: str, bullets: list[str], evidenc
             messages=[{"role": "user", "content": user}],
         )
         txt = "".join(b.text for b in resp.content if b.type == "text").strip()
-        if txt.startswith("```"):
-            txt = txt.split("```", 2)[1]
-            if txt.startswith("json"):
-                txt = txt[4:]
-            txt = txt.rsplit("```", 1)[0]
-        data = json.loads(txt.strip())
+        # El modelo envuelve el JSON en prosa o en un fence según le da: recortar a mano
+        # solo el fence dejaba fuera el caso del preámbulo (ver sk._extraer_json_objeto).
+        data = sk._extraer_json_objeto(txt)
+        if data is None:
+            raise ValueError(f"respuesta sin JSON: {txt[:300]!r}")
+    except ErrorIA:
+        # Ya trae el motivo (sin saldo, IA saturada…) escrito para el CA: que lo vea.
+        raise
     except Exception:
         logging.exception("Fallo generando el resumen final del área")
         raise RuntimeError("No se pudo generar la sugerencia final; reinténtalo.")
@@ -331,6 +560,7 @@ def _redactar_emp_data(emp_data: dict) -> dict:
     return datos
 
 
+@_con_lock_sesion
 def iniciar_sesion(advisee: str, cargo: str = "") -> dict:
     """Crea o recupera la sesión. Devuelve identidad + progreso. NO genera Claude todavía."""
     slug = slug_archivo(advisee)
@@ -382,6 +612,7 @@ def _resumen_estado(sesion: dict) -> dict:
     }
 
 
+@_con_lock_sesion
 def confirmar_identidad(advisee: str) -> dict:
     slug = slug_archivo(advisee)
     sesion = _leer(slug)
@@ -392,6 +623,7 @@ def confirmar_identidad(advisee: str) -> dict:
     return {"ok": True}
 
 
+@_con_lock_sesion
 def eliminar_sesion(advisee: str) -> dict:
     """Borra por completo la sesión anual (conversaciones, áreas confirmadas y
     borradores generados) para poder empezar de cero. La siguiente llamada a
@@ -415,6 +647,7 @@ def eliminar_sesion(advisee: str) -> dict:
     return {"ok": True}
 
 
+@_con_lock_sesion
 def obtener_area(advisee: str, clave: str) -> dict:
     """Datos de un área: evidencia que Claude consideró + pregunta abierta + conversación."""
     slug = slug_archivo(advisee)
@@ -426,7 +659,8 @@ def obtener_area(advisee: str, clave: str) -> dict:
         raise ValueError(f"Sección desconocida: {clave}")
     comentarios = _asegurar_comentarios(slug, sesion)
     _, fuentes = _emp_y_fuentes(sesion)
-    evidencia = _evidencia_de_area(comentarios, fuentes, clave)
+    evidencia = _evidencia_area(sesion, comentarios, fuentes, clave)
+    no_citadas = _fuentes_no_citadas(fuentes, evidencia)
     area = sesion.setdefault("areas", {}).setdefault(
         clave, {"conversacion": [], "propuesta": "", "confirmada": False})
 
@@ -441,6 +675,9 @@ def obtener_area(advisee: str, clave: str) -> dict:
         "etiqueta": secciones[clave],
         "cargo": sesion.get("cargo", ""),
         "evidencia": evidencia,
+        # El resto de fuentes disponibles, que Claude no citó en esta área. Van aparte para
+        # que el CA vea que existen y pueda usarlas aunque el modelo las descartara.
+        "evidencia_no_citada": no_citadas,
         # En el panel solo se muestran los criterios del cargo actual; el rango completo
         # (area["criterios"]) se conserva para la comparación posterior.
         "criterios": _criterios_nivel_panel(sesion, area),
@@ -454,14 +691,19 @@ def obtener_area(advisee: str, clave: str) -> dict:
 
 
 def _claude_conversa_area(etiqueta: str, evidencia: list, claude_bullets: str, conversacion: list,
-                          criterios: list | None = None, diagnostico: str = "", cargo: str = "") -> dict:
-    """Llama a Claude para reaccionar a los puntos del CA y proponer los bullets del área."""
+                          criterios: list | None = None, diagnostico: str = "", cargo: str = "",
+                          siguiente_cid: str = "C1") -> dict:
+    """Llama a Claude para reaccionar a los puntos del CA y proponer los bullets del área.
+
+    Devuelve además `aportaciones`: lo que el CA ha aportado de su cosecha y la IA ha dado
+    por suficientemente concreto para admitirlo como fuente nueva (ver _registrar_aportaciones)."""
     ev_txt = "\n".join(f"[{e['cid']}] {e['label']} — {e['texto']}" for e in evidencia) or "(sin evidencia)"
     conv_txt = "\n".join(f"{'CA' if m['rol'] == 'ca' else 'IA'}: {m['texto']}" for m in conversacion)
     crit_txt = "\n".join(f"[{c['nivel']}]: " + " / ".join(c['criterios']) for c in (criterios or [])) \
         or "(sin criterios en Notion)"
     if not anthropic_client:
-        return {"mensaje": "(IA no disponible) Tomo nota de tus puntos.", "propuesta": claude_bullets}
+        return {"mensaje": "(IA no disponible) Tomo nota de tus puntos.", "propuesta": claude_bullets,
+                "aportaciones": []}
 
     instrucciones = (
         "Eres el director de RRHH de IGENERIS: riguroso, exigente y directo. Co-rediges con el CA el área "
@@ -485,9 +727,28 @@ def _claude_conversa_area(etiqueta: str, evidencia: list, claude_bullets: str, c
         "- ANONIMATO: las evaluaciones te llegan sin el nombre de quien las escribió, a propósito. Si el CA "
         "pregunta quién dijo algo, dile que esa información es anónima por diseño. NUNCA deduzcas ni "
         "aventures una identidad a partir del proyecto, la fecha o el contenido.\n"
-        "- NO inventes: cada afirmación de la propuesta debe llevar su cita [X#] de la evidencia.\n\n"
+        "- APORTACIONES DEL CA: el CA trabaja con la persona y sabe cosas que nadie registró. Si te cuenta "
+        "algo que no está en la EVIDENCIA, NO lo descartes por no estar registrado: es información válida "
+        "que hay que concretar. Antes de admitirla, exígele las tres cosas que la hacen verificable:\n"
+        "    (1) CUÁNDO — mes o periodo concreto;\n"
+        "    (2) DÓNDE — en qué proyecto o en qué contexto;\n"
+        "    (3) QUÉ pasó — el hecho observable, no la etiqueta ('no avisó de que el modelo iba tarde hasta "
+        "la víspera de la entrega', no 'le falta proactividad').\n"
+        "  Si le falta alguna, pídesela explícitamente en tu mensaje y NO la incluyas todavía en la "
+        "propuesta. Cuando las tenga, ADMÍTELA: devuélvela en 'aportaciones' con un id nuevo (el siguiente "
+        f"libre es [{siguiente_cid}]; si admites varias en el mismo turno, numera hacia arriba) y cítala en "
+        "la propuesta con ese id, igual que cualquier otra fuente. Queda registrada como aportación firmada "
+        "por el CA y sale en el informe con su texto. Admitirla no es darle la razón: sigue debatiendo el "
+        "fondo — que un hecho sea concreto no lo hace representativo de todo el año.\n"
+        "  Las aportaciones ya admitidas te llegan en la EVIDENCIA como [C#]: cítalas, pero NO las repitas "
+        "en 'aportaciones' (ya tienen id).\n"
+        "- NO inventes: cada afirmación de la propuesta debe llevar su cita [X#], sea de la evidencia o de "
+        "una aportación admitida del CA. Lo que no tenga cita, fuera.\n\n"
         'Devuelve SOLO un JSON válido: {"mensaje": "tu respuesta conversacional", '
-        '"propuesta": "los bullets finales del área, uno por línea, cada uno con su cita"}.'
+        '"propuesta": "los bullets finales del área, uno por línea, cada uno con su cita", '
+        '"aportaciones": [{"cid": "C#", "fecha": "mes o periodo que te ha dado el CA", '
+        '"proyecto": "proyecto o contexto", "texto": "el hecho, en una frase, tal y como lo cuenta el CA"}]}. '
+        'Si en este turno no admites ninguna aportación nueva, "aportaciones" es [].'
         + config.INSTRUCCION_ANTIINYECCION
     )
     # La evidencia, criterios, diagnóstico y tu valoración son ESTÁTICOS durante todo el debate del área
@@ -513,25 +774,31 @@ def _claude_conversa_area(etiqueta: str, evidencia: list, claude_bullets: str, c
     try:
         try:
             resp = _crear(system_cacheado)
-        except Exception:
+        except ErrorIA as err:
+            if err.definitivo:
+                # Sin saldo o API mal configurada: reintentar sin caché falla igual y gasta otra llamada.
+                raise
             # Si el prompt caching no está soportado, reintenta sin caché (misma calidad, sin ahorro)
             logging.warning("Prompt caching no disponible; reintento sin caché")
             resp = _crear(instrucciones + "\n\n" + contexto_estatico)
         t = "".join(b.text for b in resp.content if b.type == "text").strip()
-        if t.startswith("```"):
-            t = t.split("```", 2)[1]
-            if t.startswith("json"):
-                t = t[4:]
-            t = t.rsplit("```", 1)[0]
-        data = json.loads(t.strip())
+        # Ídem: el JSON puede venir envuelto en prosa además de en un fence.
+        data = sk._extraer_json_objeto(t)
+        if data is None:
+            raise ValueError(f"respuesta sin JSON: {t[:300]!r}")
         return {"mensaje": (data.get("mensaje") or "").strip(),
-                "propuesta": (data.get("propuesta") or "").strip()}
+                "propuesta": (data.get("propuesta") or "").strip(),
+                "aportaciones": data.get("aportaciones") or []}
+    except ErrorIA:
+        # No es "reformula y reinténtalo": el CA necesita saber que es la API (y a quién avisar).
+        raise
     except Exception:
         logging.exception("Fallo en la conversación del área")
         return {"mensaje": "He tenido un problema al responder; reformula o reinténtalo.",
-                "propuesta": claude_bullets}
+                "propuesta": claude_bullets, "aportaciones": []}
 
 
+@_con_lock_sesion
 def responder_area(advisee: str, clave: str, texto: str) -> dict:
     """El CA aporta sus puntos; Claude compara con su versión y responde conversacionalmente."""
     slug = slug_archivo(advisee)
@@ -547,7 +814,7 @@ def responder_area(advisee: str, clave: str, texto: str) -> dict:
     comentarios = _asegurar_comentarios(slug, sesion)
     _, fuentes = _emp_y_fuentes(sesion)
     claude_bullets = _claude_texto(comentarios, clave)
-    evidencia = _evidencia_de_area(comentarios, fuentes, clave)
+    evidencia = _evidencia_area(sesion, comentarios, fuentes, clave)
 
     area = sesion.setdefault("areas", {}).setdefault(
         clave, {"conversacion": [], "propuesta": "", "confirmada": False})
@@ -558,10 +825,17 @@ def responder_area(advisee: str, clave: str, texto: str) -> dict:
     # El CA la vuelve a pedir con el botón cuando dé el área por hablada.
     area.pop("resumen_final", None)
 
+    n_libre = 1 + max((int(ap["cid"][1:]) for ap in _aportaciones(sesion)
+                       if ap.get("cid", "C")[1:].isdigit()), default=0)
     res = _claude_conversa_area(
         secciones[clave], evidencia, claude_bullets, area["conversacion"],
         criterios=area.get("criterios"), diagnostico=area.get("diagnostico", ""),
-        cargo=sesion.get("cargo", ""))
+        cargo=sesion.get("cargo", ""), siguiente_cid=f"C{n_libre}")
+    # Lo que el CA ha aportado y la IA ha admitido pasa a ser fuente [C#] de la sesión: a
+    # partir del turno siguiente entra en la evidencia y llega al informe con su cita.
+    remapeo = _registrar_aportaciones(sesion, clave, res.get("aportaciones"))
+    res["mensaje"] = _aplicar_remapeo(res["mensaje"], remapeo)
+    res["propuesta"] = _aplicar_remapeo(res["propuesta"], remapeo)
     area["conversacion"].append({"rol": "ia", "texto": res["mensaje"]})
     area["propuesta"] = res["propuesta"] or area.get("propuesta", "")
     # Si el CA reabre un área ya confirmada y sigue hablando, la propuesta se
@@ -575,6 +849,7 @@ def responder_area(advisee: str, clave: str, texto: str) -> dict:
             "conversacion": area["conversacion"]}
 
 
+@_con_lock_sesion
 def generar_resumen_area(advisee: str, clave: str) -> dict:
     """Genera BAJO DEMANDA (botón del CA) la sugerencia final del área, desglosada
     criterio a criterio con los MISMOS bullets que muestra el panel «Criterios y nivel»."""
@@ -597,7 +872,7 @@ def generar_resumen_area(advisee: str, clave: str) -> dict:
 
     comentarios = _asegurar_comentarios(slug, sesion)
     _, fuentes = _emp_y_fuentes(sesion)
-    evidencia = _evidencia_de_area(comentarios, fuentes, clave)
+    evidencia = _evidencia_area(sesion, comentarios, fuentes, clave)
     resumen = _generar_resumen_area(sesion.get("cargo", ""), secciones[clave], bullets,
                                     evidencia, area.get("conversacion", []), area.get("propuesta", ""))
     area["resumen_final"] = resumen
@@ -605,6 +880,7 @@ def generar_resumen_area(advisee: str, clave: str) -> dict:
     return {"resumen": resumen}
 
 
+@_con_lock_sesion
 def confirmar_area(advisee: str, clave: str) -> dict:
     """Cierra un área: fija el texto final = la propuesta acordada."""
     slug = slug_archivo(advisee)
@@ -664,7 +940,7 @@ def chatear_plan(advisee: str, mensajes: list) -> dict:
     al final. Reutiliza la misma evidencia que el plan y la cachea (prompt caching) para
     abaratar los mensajes siguientes."""
     if not anthropic_client:
-        raise ValueError("El chat no está disponible (falta la API de Claude).")
+        raise ErrorIA(MSG_NO_DISPONIBLE, "ia_no_configurada", definitivo=True)
     slug = slug_archivo(advisee)
     sesion = _leer(slug)
     if not sesion:
@@ -693,6 +969,9 @@ def chatear_plan(advisee: str, mensajes: list) -> dict:
             messages=msgs,
         )
         return {"respuesta": "".join(b.text for b in resp.content if b.type == "text").strip()}
+    except ErrorIA:
+        # El chat muestra este mensaje como respuesta del asistente: que diga el motivo real.
+        raise
     except Exception:
         logging.exception("Fallo en el chat del plan de acción")
         raise ValueError("No se pudo responder ahora mismo. Inténtalo de nuevo.")
@@ -728,11 +1007,16 @@ def _generar_plan_accion(sesion: dict, instruccion: str = "", plan_previo: str =
             messages=[{"role": "user", "content": user}],
         )
         return "".join(b.text for b in resp.content if b.type == "text").strip()
+    except ErrorIA:
+        # Devolver el plan anterior (o vacío) aquí haría creer que ese es el plan sugerido:
+        # mejor que el CA vea por qué no se ha podido generar.
+        raise
     except Exception:
         logging.exception("Fallo generando el plan de acción")
         return plan_previo or ""
 
 
+@_con_lock_sesion
 def obtener_plan_accion(advisee: str, forzar: bool = False) -> dict:
     """Genera (lazy) y devuelve el plan de acción sugerido por Claude.
 
@@ -762,6 +1046,7 @@ def obtener_plan_guardado(advisee: str) -> dict:
     return {"plan": sesion.get("plan_accion", ""), "tieneSesion": True}
 
 
+@_con_lock_sesion
 def pedir_cambios_plan(advisee: str, instruccion: str) -> dict:
     """El CA pide a la IA que ajuste el plan de acción."""
     slug = slug_archivo(advisee)
@@ -777,6 +1062,7 @@ def pedir_cambios_plan(advisee: str, instruccion: str) -> dict:
     return {"plan": nuevo}
 
 
+@_con_lock_sesion
 def guardar_plan_accion(advisee: str, texto: str) -> dict:
     """Guarda el plan editado a mano por el CA. Si aún no existe sesión de evaluación
     anual (el CA crea un plan nuevo sin haber hecho el informe final), la inicia primero
@@ -868,6 +1154,7 @@ def _merge_borrador(base: dict, data: dict) -> dict:
     return out
 
 
+@_con_lock_sesion
 def obtener_borrador(advisee: str) -> dict:
     """Borrador editable del informe final. Se construye al finalizar la sesión;
     aquí solo se recupera (o se reconstruye si falta en sesiones antiguas)."""
@@ -883,6 +1170,7 @@ def obtener_borrador(advisee: str) -> dict:
     return {"borrador": sesion["borrador"]}
 
 
+@_con_lock_sesion
 def guardar_borrador(advisee: str, data: dict) -> dict:
     """Guarda las ediciones del CA sobre el borrador web."""
     slug = slug_archivo(advisee)
@@ -923,6 +1211,7 @@ def generar_docx_borrador(advisee: str, nombre_archivo: str) -> str:
     return os.path.join(config.CARPETA_WEB, nombre_archivo)
 
 
+@_con_lock_sesion
 def finalizar_sesion(advisee: str) -> dict:
     """Exige todas las áreas confirmadas. Genera el borrador con lo acordado (huecos en blanco)."""
     slug = slug_archivo(advisee)

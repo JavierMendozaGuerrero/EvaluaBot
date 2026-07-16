@@ -1559,12 +1559,10 @@ def _notificar_proyecto_completado(manager_nombre: str, proyecto: str) -> None:
             return
         dm = slack_app.client.conversations_open(users=[slack_id])
         channel = dm["channel"]["id"]
+        # El idioma es el del manager que recibe el DM.
         slack_app.client.chat_postMessage(
             channel=channel,
-            text=(
-                f"✅ Todos los miembros de tu equipo han terminado las evaluaciones del proyecto *{proyecto}*. "
-                "Se cerrará el apartado en la web relacionado con este proyecto."
-            ),
+            text=t("web.eval_proyecto_completada", idioma_por_slack_id(slack_id), proyecto=proyecto),
         )
         logging.info("Notificación de cierre enviada al manager '%s' para proyecto '%s'", manager_nombre, proyecto)
     except Exception:
@@ -1604,12 +1602,10 @@ def _notificar_evaluacion_activada(nombre_empleado: str, proyecto: str, slack_id
     try:
         dm = slack_app.client.conversations_open(users=[slack_id])
         channel = dm["channel"]["id"]
+        # El idioma es el de QUIEN RECIBE el DM, no el de quien activó el proyecto.
         slack_app.client.chat_postMessage(
             channel=channel,
-            text=(
-                f"📋 *Evaluaciones de proyecto activas* para el proyecto *{proyecto}*.\n"
-                "Recuerda completarlas en la web de evaluaciones."
-            ),
+            text=t("web.eval_proyecto_activada", idioma_por_slack_id(slack_id), proyecto=proyecto),
         )
         logging.info("Notificación enviada a '%s' (Slack: %s)", nombre_empleado, slack_id)
     except Exception:

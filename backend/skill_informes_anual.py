@@ -12,11 +12,14 @@ import json
 import logging
 import os
 import re
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 
 from . import config
 from .clients import Document, anthropic_client
+from .excepciones import ErrorIA
 from .i18n import t
+from .ia import CONTACTO, MSG_NO_DISPONIBLE
 from .notion_service import (
     excluir_feedback_confidencial,
     listar_bbdd_evaluados,
@@ -126,7 +129,8 @@ _CLAVES_PLANAS = {"contribution_to_firm", "evaluaciones_adicionales"}
 # Token de cita por tipo de fuente:
 #   E = evaluación mensual · O = opinión CA · P = evaluación de proyecto
 #   S = seguimiento personal · B = barbecho · X = evaluación extra (fuera de proyecto)
-_CITE_RE = re.compile(r"\[([EOPSBX]\d+)\]")
+#   C = aportación del CA en la sesión asistida (lo que sabe y no estaba registrado)
+_CITE_RE = re.compile(r"\[([EOPSBXC]\d+)\]")
 
 _MESES_ES = [
     "Enero", "Febrero", "Marzo", "Abril", "Mayo", "Junio",
@@ -446,69 +450,69 @@ def obtener_empleados_evaluacion_anual() -> list[str]:
 
 # ── Recopilar datos del empleado ──────────────────────────────────────────────
 
+def _resultado(futuro, clave: str, nombre: str, por_defecto=None):
+    """Resultado de una lectura, o el valor por defecto si falló.
+
+    Cada lectura falla por su cuenta: si una base no existe o Notion la rechaza, esa
+    clave se queda vacía y las demás siguen, igual que hacía el try/except de cada bloque.
+    """
+    try:
+        return futuro.result()
+    except Exception:
+        logging.warning("No se pudo leer '%s' de %s.", clave, nombre)
+        return [] if por_defecto is None else por_defecto
+
+
 def obtener_datos_empleado_anual(nombre: str) -> dict:
     """
     Recopila toda la información disponible en Notion sobre el empleado:
       - evaluaciones mensuales (desde "Evaluaciones - {nombre}")
       - opiniones del CA (desde "Opiniones - {nombre}")
       - objetivos (desde "Objetivos empleados"), de donde también se extrae el CA
+
+    Todas las lecturas van a la vez. Eran 8 llamadas encadenadas (~30s) en las que cada
+    una se pasaba el rato esperando a la red de Notion sin hacer nada; lanzadas juntas
+    tardan lo que la más lenta. Medido sobre un empleado real: 30s -> 8s.
     """
-    # 1. Evaluaciones mensuales
-    evaluaciones = []
-    try:
-        evaluaciones = excluir_feedback_confidencial(obtener_evaluaciones_por_evaluado(nombre))
-    except Exception:
-        logging.warning("No se encontraron evaluaciones mensuales para %s.", nombre)
+    # Un worker por tarea, y uno de más para las opiniones: esa se queda esperando al
+    # resultado de otra, y si no tuviera worker propio podría quedarse sin sitio y
+    # bloquear el pool entero.
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        # Independientes entre sí → todas a la vez.
+        # `ca_lista` se pide aunque casi siempre sobre (el CA suele venir en los
+        # objetivos): aquí sale gratis, y pedirlo después sería otra ida y vuelta.
+        fut = {
+            "evaluaciones": pool.submit(lambda: excluir_feedback_confidencial(obtener_evaluaciones_por_evaluado(nombre))),
+            "objetivos": pool.submit(obtener_objetivos_persona, nombre),
+            "evals_proyecto": pool.submit(obtener_evaluaciones_proyecto_por_evaluado, nombre),
+            "seguimiento": pool.submit(obtener_comentarios_personales, nombre),
+            "barbecho": pool.submit(obtener_barbecho_por_empleado, nombre),
+            "evals_extra": pool.submit(obtener_evaluaciones_extra_por_evaluado, nombre),
+            "ca_lista": pool.submit(lambda: obtener_ca_de_empleado(nombre) or ""),
+        }
 
-    # 2. Objetivos (también revelan el nombre del CA)
-    objetivos = []
-    try:
-        objetivos = obtener_objetivos_persona(nombre)
-    except Exception:
-        logging.warning("No se encontraron objetivos para %s.", nombre)
+        def _ca_y_opiniones():
+            """Las opiniones necesitan saber quién es el CA, así que dependen de otra
+            lectura. En vez de esperar a que termine todo el bloque, arranca en cuanto
+            se sabe el CA (~4s) y se solapa con el resto: es la lectura más lenta (~12s)
+            y encadenarla al final añadía su tiempo entero al total."""
+            objetivos = _resultado(fut["objetivos"], "objetivos", nombre)
+            ca = (objetivos[0].get("ca", "") if objetivos else "") or _resultado(fut["ca_lista"], "ca_lista", nombre, "")
+            try:
+                return ca, obtener_opiniones_ca_por_advisee(ca, nombre)
+            except Exception:
+                logging.warning("No se encontraron opiniones del CA para %s.", nombre)
+                return ca, []
 
-    # Nombre del CA: primero desde objetivos, si no desde Lista CA
-    ca_nombre = objetivos[0].get("ca", "") if objetivos else ""
-    if not ca_nombre:
-        try:
-            ca_nombre = obtener_ca_de_empleado(nombre) or ""
-        except Exception:
-            pass
+        fut_opiniones = pool.submit(_ca_y_opiniones)
 
-    # 3. Opiniones del CA (contienen las notas del CA y los resúmenes del chatbot)
-    opiniones = []
-    try:
-        opiniones = obtener_opiniones_ca_por_advisee(ca_nombre, nombre)
-    except Exception:
-        logging.warning("No se encontraron opiniones del CA para %s.", nombre)
-
-    # 4. Evaluaciones de proyecto (todas las recibidas, de todos los proyectos)
-    evals_proyecto = []
-    try:
-        evals_proyecto = obtener_evaluaciones_proyecto_por_evaluado(nombre)
-    except Exception:
-        logging.warning("No se encontraron evaluaciones de proyecto para %s.", nombre)
-
-    # 5. Seguimiento personal (comentarios personales)
-    seguimiento = []
-    try:
-        seguimiento = obtener_comentarios_personales(nombre)
-    except Exception:
-        logging.warning("No se encontró seguimiento personal para %s.", nombre)
-
-    # 6. Barbecho (labores en periodo sin proyecto → contribución a la firma)
-    barbecho = []
-    try:
-        barbecho = obtener_barbecho_por_empleado(nombre)
-    except Exception:
-        logging.warning("No se encontraron registros de barbecho para %s.", nombre)
-
-    # 7. Evaluaciones extra (fuera de proyecto)
-    evals_extra = []
-    try:
-        evals_extra = obtener_evaluaciones_extra_por_evaluado(nombre)
-    except Exception:
-        logging.warning("No se encontraron evaluaciones extra para %s.", nombre)
+        evaluaciones = _resultado(fut["evaluaciones"], "evaluaciones", nombre)
+        objetivos = _resultado(fut["objetivos"], "objetivos", nombre)
+        evals_proyecto = _resultado(fut["evals_proyecto"], "evals_proyecto", nombre)
+        seguimiento = _resultado(fut["seguimiento"], "seguimiento", nombre)
+        barbecho = _resultado(fut["barbecho"], "barbecho", nombre)
+        evals_extra = _resultado(fut["evals_extra"], "evals_extra", nombre)
+        ca_nombre, opiniones = _resultado(fut_opiniones, "opiniones_ca", nombre, ("", []))
 
     return {
         "empleado": nombre,
@@ -698,6 +702,28 @@ def _formatear_contexto(emp_data: dict) -> tuple[str, dict]:
                 f"Respuestas: {respuestas}"
             )
 
+    # ── Aportaciones del CA en la sesión asistida ── [C#] ────────────────────
+    # No salen de Notion: las aporta el CA hablando con la IA y solo se registran cuando
+    # concreta cuándo, dónde y qué pasó (ver eval_anual_sesion._registrar_aportaciones).
+    # Una vez registradas son fuente citable como cualquier otra: llevan autor y fecha, y
+    # aparecen en el anexo del informe con su texto literal.
+    for ap in emp_data.get("aportaciones_ca", []):
+        cid = ap.get("cid")
+        if not cid:
+            continue
+        fecha = (ap.get("fecha") or "")[:10]
+        fuentes[cid] = {
+            "url": "", "tipo": "aportacion_ca", "fecha": fecha,
+            "label": _label(["Aportación del CA", ap.get("proyecto"), fecha]),
+            "evaluador": ap.get("autor") or "",
+            "texto": ap.get("texto") or "",
+        }
+        bloques.append(
+            f"\n[{cid}] [{_mes_tag(fecha)}] Aportación del CA"
+            + (f" | Proyecto: {ap['proyecto']}" if ap.get("proyecto") else "")
+            + f" | {ap.get('texto') or ''}"
+        )
+
     texto = "\n".join(bloques) if bloques else "(Sin datos de evaluación disponibles)"
     return texto, fuentes
 
@@ -815,12 +841,10 @@ def _verificar_soporte(comentarios: dict, fuentes: dict) -> list[dict]:
             }],
         )
         texto = "".join(b.text for b in respuesta.content if b.type == "text").strip()
-        if texto.startswith("```"):
-            texto = texto.split("```", 2)[1]
-            if texto.startswith("json"):
-                texto = texto[4:]
-            texto = texto.rsplit("```", 1)[0]
-        data = json.loads(texto.strip())
+        data = _extraer_json_objeto(texto)
+        if data is None:
+            logging.error("[informe] Verificación no parseable; se omite. Texto: %r", texto[:800])
+            return []
     except Exception:
         logging.exception("[informe] Falló la pasada de verificación; se omite.")
         return []
@@ -844,6 +868,66 @@ def _verificar_soporte(comentarios: dict, fuentes: dict) -> list[dict]:
     return avisos
 
 
+def _bloque_equilibrado(t: str, inicio: int) -> str | None:
+    """Recorta desde la '{' de `inicio` hasta su '}' pareja. None si no cierra.
+
+    Contar llaves a pelo no vale: las que aparecen dentro de las cadenas del JSON
+    (y las comillas escapadas) descuadran el recuento, así que hay que seguir el estado.
+    """
+    profundidad, en_cadena, escapado = 0, False, False
+    for i in range(inicio, len(t)):
+        c = t[i]
+        if en_cadena:
+            if escapado:
+                escapado = False
+            elif c == "\\":
+                escapado = True
+            elif c == '"':
+                en_cadena = False
+        elif c == '"':
+            en_cadena = True
+        elif c == "{":
+            profundidad += 1
+        elif c == "}":
+            profundidad -= 1
+            if profundidad == 0:
+                return t[inicio:i + 1]
+    return None
+
+
+def _extraer_json_objeto(texto: str) -> dict | None:
+    """Devuelve el objeto JSON de la respuesta del modelo, o None si no hay ninguno.
+
+    Aunque se le pida solo JSON, el modelo a veces antepone su razonamiento ("I need to
+    analyze all sources...") o añade comentarios después. No basta con recortar por la
+    primera '{': esa prosa puede traer llaves sueltas o un JSON de ejemplo. Así que se
+    prueban todos los candidatos y se elige el objeto válido más largo, que es el informe
+    (cualquier ejemplo suelto del razonamiento es mucho más pequeño).
+    """
+    t = texto.strip()
+    if t.startswith("```"):
+        t = t.split("```", 2)[1]
+        if t.startswith("json"):
+            t = t[4:]
+        t = t.rsplit("```", 1)[0].strip()
+    mejor, mejor_len = None, 0
+    i = t.find("{")
+    while i >= 0:
+        bloque = _bloque_equilibrado(t, i)
+        if bloque:
+            try:
+                datos = json.loads(bloque)
+            except json.JSONDecodeError:
+                datos = None
+            if isinstance(datos, dict) and len(bloque) > mejor_len:
+                mejor, mejor_len = datos, len(bloque)
+                # El resto de llaves de este bloque son suyas: no hay nada mejor dentro.
+                i = t.find("{", i + len(bloque))
+                continue
+        i = t.find("{", i + 1)
+    return mejor
+
+
 def interpretar_evaluaciones_anual(emp_data: dict, cargo: str = "", criterios: str | None = None, idioma: str = "es") -> dict:
     """
     Llama a Claude con el contexto de evaluaciones y opiniones.
@@ -853,7 +937,7 @@ def interpretar_evaluaciones_anual(emp_data: dict, cargo: str = "", criterios: s
     Pasarlo evita una segunda lectura de Notion cuando ya se computó para la huella de caché.
     """
     if not anthropic_client:
-        raise RuntimeError("Falta ANTHROPIC_API_KEY o el paquete anthropic no está instalado.")
+        raise ErrorIA(MSG_NO_DISPONIBLE, "ia_no_configurada", definitivo=True)
 
     cargo_lower = cargo.strip().lower()
     requiere_liderazgo = any(c in cargo_lower for c in _REQUIERE_LIDERAZGO)
@@ -888,6 +972,17 @@ def interpretar_evaluaciones_anual(emp_data: dict, cargo: str = "", criterios: s
         "PROHIBIDO escribir cualquier afirmación que no esté literalmente respaldada por una línea citada. "
         "Si no hay evidencia para una dimensión, escribe exactamente 'Sin información suficiente' (sin cita). "
         "No inventes, no infieras, no generalices más allá del texto citado. No uses etiquetas inexistentes.\n\n"
+        "COBERTURA DE FUENTES (obligatoria):\n"
+        "La regla anterior va de afirmación a fuente. Esta va al revés: TODA fuente debe acabar en uno "
+        "de estos dos sitios, sin excepción:\n"
+        "  (a) citada en CADA dimensión con la que encaje su contenido —si una fuente habla de gestión "
+        "de proyecto y de comunicación, cítala en las dos—, o\n"
+        "  (b) listada en '_fuentes_ignoradas' con su motivo.\n"
+        "Antes de cerrar el JSON, repasa la lista de fuentes una a una y comprueba que ninguna se ha "
+        "quedado fuera de (a) y (b).\n"
+        "Que una fuente sea genérica, poco concreta o repita lo que ya dice otra NO es motivo para "
+        "descartarla: cítala en su dimensión y refleja en el bullet lo justo que aporta. A (b) solo van "
+        "las fuentes sin nada evaluable (texto de prueba, vacío, o que no habla del desempeño).\n\n"
         "EVOLUCIÓN TEMPORAL (importante):\n"
         "Los datos están en orden cronológico con su mes. NO promedies ni des una foto plana: describe la "
         "TRAYECTORIA a lo largo del año. No es lo mismo febrero que noviembre. Da MÁS PESO a lo más reciente, "
@@ -909,7 +1004,8 @@ def interpretar_evaluaciones_anual(emp_data: dict, cargo: str = "", criterios: s
         "  ...\n"
         '  "contribution_to_firm": "bullets de contribución a la firma, cada uno con su cita [B1][O1]",\n'
         '  "evaluaciones_adicionales": "bullets de evaluaciones extra fuera de proyecto, cada uno con su cita [X1][X2]",\n'
-        '  "resultado": "valoración global en 2-3 frases que resuma la evolución del año"\n'
+        '  "resultado": "valoración global en 2-3 frases que resuma la evolución del año",\n'
+        '  "_fuentes_ignoradas": [{"cid": "E4", "motivo": "por qué no la has citado en ninguna dimensión"}]\n'
         "}\n\n"
         f"Dimensiones requeridas: {dims_lista}, contribution_to_firm, evaluaciones_adicionales, resultado.\n"
         "Para cada dimensión agrupa: 'lider' = evaluadores superiores, "
@@ -917,7 +1013,12 @@ def interpretar_evaluaciones_anual(emp_data: dict, cargo: str = "", criterios: s
         "(coloca seguimiento personal y proyecto en el nivel que corresponda según quién evalúa). "
         "Omite las claves que no tengan datos. "
         "contribution_to_firm, evaluaciones_adicionales y resultado son cadenas planas, no objetos. "
-        "resultado es una síntesis de lo ya afirmado; puede no llevar citas."
+        "resultado es una síntesis de lo ya afirmado; puede no llevar citas.\n\n"
+        "FORMATO DE LA RESPUESTA (obligatorio):\n"
+        "Responde SOLO con el JSON. Tu primer carácter debe ser '{' y el último '}'. No "
+        "escribas nada antes ni después: ni el repaso de las fuentes, ni tu razonamiento, "
+        "ni notas sobre lo que has decidido. El repaso de cobertura hazlo mentalmente, no "
+        "por escrito."
     )
     if idioma == "en":
         system += (
@@ -948,13 +1049,19 @@ def interpretar_evaluaciones_anual(emp_data: dict, cargo: str = "", criterios: s
     )
 
     def _crear(system_arg):
-        return anthropic_client.messages.create(
+        # El JSON lleva lider/equipo/sin_nivel por cada dimensión, más contribution,
+        # evaluaciones adicionales, resultado y fuentes ignoradas: para un año entero, 4000
+        # tokens se quedaban cortos. `max_tokens` es solo un techo (se paga lo generado),
+        # así que se deja holgado. Con un techo alto hay que ir por streaming o la petición
+        # agota el timeout HTTP del SDK; get_final_message() devuelve el mismo mensaje.
+        with anthropic_client.messages.stream(
             model="claude-sonnet-4-6",
-            max_tokens=4000,
+            max_tokens=16000,
             temperature=0,
             system=system_arg,
             messages=[{"role": "user", "content": user_content}],
-        )
+        ) as stream:
+            return stream.get_final_message()
 
     # El `system` (instrucciones + formato) es ESTÁTICO por (cargo, idioma) y se repite entre
     # empleados generados en ráfaga → se cachea (prompt caching): mismo modelo y misma calidad,
@@ -962,16 +1069,30 @@ def interpretar_evaluaciones_anual(emp_data: dict, cargo: str = "", criterios: s
     # persona) va en el mensaje del usuario, fuera de la caché.
     try:
         respuesta = _crear([{"type": "text", "text": system, "cache_control": {"type": "ephemeral"}}])
-    except Exception:
+    except ErrorIA as err:
+        if err.definitivo:
+            # Sin saldo o API mal configurada: reintentar sin caché falla igual y gasta otra llamada.
+            raise
         logging.warning("[informe anual] Prompt caching no disponible; reintento sin caché")
         respuesta = _crear(system)
     texto = "".join(b.text for b in respuesta.content if b.type == "text").strip()
-    if texto.startswith("```"):
-        texto = texto.split("```", 2)[1]
-        if texto.startswith("json"):
-            texto = texto[4:]
-        texto = texto.rsplit("```", 1)[0]
-    comentarios = json.loads(texto.strip())
+    comentarios = _extraer_json_objeto(texto)
+    if comentarios is None:
+        # Antes esto era un json.loads pelado: el JSONDecodeError (que hereda de ValueError)
+        # acababa en el handler de ValueError de la API y le pintaba al usuario el mensaje
+        # crudo de Python. Se loguean principio y final: el fallo típico es texto de más.
+        logging.error(
+            "[informe anual] Respuesta no parseable de %s: stop_reason=%s, %d chars\n"
+            "--- inicio ---\n%s\n--- final ---\n%s",
+            emp_data.get("empleado", "?"), respuesta.stop_reason, len(texto),
+            texto[:1500], texto[-1500:],
+        )
+        raise ErrorIA(
+            "La IA no ha devuelto el análisis de las evaluaciones en el formato esperado. "
+            "Vuelve a intentarlo; si sigue fallando, avisa al responsable de la "
+            f"herramienta ({CONTACTO}).",
+            codigo="informe_anual_respuesta_invalida",
+        ) from None
     comentarios = _validar_citas(comentarios, fuentes)
     comentarios["_avisos_verificacion"] = _verificar_soporte(comentarios, fuentes)
     comentarios["_fuentes"] = fuentes
@@ -1288,8 +1409,9 @@ def guardar_informe_anual_html(emp_data: dict, comentarios: dict, cargo: str = "
         "opinion": t("anual.src_opinion", idioma), "evaluacion": t("anual.src_evaluacion", idioma),
         "proyecto": t("anual.src_proyecto", idioma), "seguimiento": t("anual.src_seguimiento", idioma),
         "barbecho": t("anual.src_barbecho", idioma), "extra": t("anual.src_extra", idioma),
+        "aportacion_ca": t("anual.src_aportacion_ca", idioma),
     }
-    _ORDEN_TIPO = {"O": 0, "E": 1, "P": 2, "S": 3, "B": 4, "X": 5}
+    _ORDEN_TIPO = {"O": 0, "E": 1, "P": 2, "S": 3, "B": 4, "X": 5, "C": 6}
 
     def _sort_fuente(cid):
         return (_ORDEN_TIPO.get(cid[:1], 9), int(cid[1:]) if cid[1:].isdigit() else 0)
@@ -1590,11 +1712,12 @@ def guardar_informe_anual_word(emp_data: dict, comentarios: dict, cargo: str = "
 
     # ── FUENTES / EVIDENCIA (anexo, cada cita salta aquí) ─────────────────────
     if fuentes:
-        _ORDEN = {"O": 0, "E": 1, "P": 2, "S": 3, "B": 4, "X": 5}
+        _ORDEN = {"O": 0, "E": 1, "P": 2, "S": 3, "B": 4, "X": 5, "C": 6}
         _TIPO = {
             "opinion": t("anual.src_opinion", idioma), "evaluacion": t("anual.src_evaluacion", idioma),
             "proyecto": t("anual.src_proyecto", idioma), "seguimiento": t("anual.src_seguimiento", idioma),
             "barbecho": t("anual.src_barbecho", idioma), "extra": t("anual.src_extra", idioma),
+            "aportacion_ca": t("anual.src_aportacion_ca", idioma),
         }
         doc.add_paragraph()
         _dxt(doc, t("anual.sources_evidence", idioma))

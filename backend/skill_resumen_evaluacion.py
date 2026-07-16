@@ -9,6 +9,8 @@ import logging
 
 from . import config
 from .clients import anthropic_client
+from .excepciones import ErrorIA
+from .ia import MSG_NO_DISPONIBLE
 
 
 # ── Criterios por cargo ────────────────────────────────────────────────────────
@@ -261,11 +263,12 @@ def generar_resumen_evaluacion(nombre: str, cargo: str, evaluaciones_texto: str,
         Texto con el resumen estructurado, listo para guardar en Notion.
 
     Raises:
-        RuntimeError: Si falta ANTHROPIC_API_KEY o el paquete anthropic.
+        ErrorIA: Si falta ANTHROPIC_API_KEY o falla la API de Claude. Su mensaje ya está
+            escrito para el usuario: publícalo tal cual en vez de sustituirlo.
         ValueError: Si el cargo no es reconocido.
     """
     if not anthropic_client:
-        raise RuntimeError("Falta ANTHROPIC_API_KEY o el paquete anthropic no está instalado.")
+        raise ErrorIA(MSG_NO_DISPONIBLE, "ia_no_configurada", definitivo=True)
 
     clave = _cargo_clave(cargo) if cargo else None
     if clave:
@@ -295,6 +298,10 @@ def generar_resumen_evaluacion(nombre: str, cargo: str, evaluaciones_texto: str,
             messages=[{"role": "user", "content": user_prompt}],
         )
         return "".join(b.text for b in respuesta.content if b.type == "text").strip()
+    except ErrorIA:
+        # El envoltorio de la API ya lo ha logueado con su motivo; aquí solo estorbaría
+        # una traza duplicada. Sube tal cual: su mensaje es el que verá el CA.
+        raise
     except Exception:
         logging.exception("Error generando resumen de evaluación para '%s'", nombre)
         raise

@@ -1,4 +1,6 @@
 import logging
+import threading
+import time
 from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, Body, Depends
@@ -103,6 +105,9 @@ def buscar_empleado_slack(nombre: str = "", area: str = "negocio", session=Depen
     evaluador_perfil = obtener_perfil_empleado(persona)
     cargo_evaluador = evaluador_perfil.get("cargo", "")
     relacion = comparar_jerarquia(cargo_evaluador, cargo_evaluado or "")
+    # Las preguntas que se sirven a continuación fijan la expectativa del evaluador, así que
+    # esta es la jerarquía que se grabará: se guarda aquí y se reutiliza al guardar.
+    _fijar_relacion(persona, empleado, relacion)
     tipo = tipo_relacion(relacion)
     idi = idioma_por_sesion(session)
     if area == "middleoffice":
@@ -157,6 +162,55 @@ def guardar_evaluacion_personal_route(datos: dict = Body(default={}), session=De
     return {"ok": True}
 
 
+# ── Jerarquía fijada al abrir la evaluación ───────────────────────────────────
+# El evaluador responde bajo una expectativa que le fijan las preguntas: si son bottom-to-top,
+# escribe sabiendo que eso es confidencial y que su CA no lo verá. Esa expectativa no puede
+# cambiar entre que abre el formulario y lo envía. Recalcular la jerarquía al guardar permitía
+# justo eso: basta con que el cargo del evaluador cambie —o con que venza la caché de empleados,
+# de 5 min, y se lea uno distinto del que se leyó al servir las preguntas— para que unas
+# respuestas escritas para el canal confidencial se graben como top-down y acaben publicadas
+# al CA. Se fija al servir las preguntas y se reutiliza al guardar, como ya hace el bot de
+# Slack con estado["relacion_jerarquica"].
+#
+# En el servidor y no en el cliente: este valor decide la privacidad, así que si viajara al
+# navegador cualquiera podría devolver "superior" y publicar su propia evaluación confidencial.
+# En memoria a propósito, igual que las conversaciones del bot: si el proceso se reinicia se
+# vuelve a calcular, que es exactamente el comportamiento que había antes.
+_relaciones_fijadas: dict = {}
+_lock_relaciones = threading.Lock()
+_TTL_RELACION_FIJADA = 6 * 60 * 60  # una evaluación abierta y olvidada no vive más que esto
+
+
+def _clave_relacion(evaluador: str, evaluado: str) -> tuple:
+    return (normalizar_nombre(evaluador), normalizar_nombre(evaluado))
+
+
+def _fijar_relacion(evaluador: str, evaluado: str, relacion: str) -> None:
+    with _lock_relaciones:
+        _relaciones_fijadas[_clave_relacion(evaluador, evaluado)] = (relacion, time.time())
+
+
+def _relacion_al_guardar(evaluador: str, evaluado: str, cargo_evaluado: str) -> str:
+    """La jerarquía fijada al abrir la evaluación; si no la hay, se recalcula."""
+    clave = _clave_relacion(evaluador, evaluado)
+    ahora = time.time()
+    with _lock_relaciones:
+        entrada = _relaciones_fijadas.get(clave)
+        # Purga oportunista: sin esto el dict crece sin límite mientras viva el proceso.
+        for k, (_, ts) in list(_relaciones_fijadas.items()):
+            if ahora - ts > _TTL_RELACION_FIJADA:
+                _relaciones_fijadas.pop(k, None)
+    if entrada and (ahora - entrada[1]) < _TTL_RELACION_FIJADA:
+        return entrada[0]
+    cargo_evaluador = obtener_perfil_empleado(evaluador).get("cargo", "")
+    relacion = comparar_jerarquia(cargo_evaluador, cargo_evaluado or "")
+    logging.info(
+        "Sin jerarquía fijada para '%s' -> '%s' (reinicio o sesión caducada); se recalcula: %s",
+        evaluador, evaluado, relacion,
+    )
+    return relacion
+
+
 @router.post("/api/guardar-evaluacion-slack")
 def guardar_evaluacion_slack(datos: dict = Body(default={}), session=Depends(require_session)):
     persona = session.get("persona", "")
@@ -169,9 +223,7 @@ def guardar_evaluacion_slack(datos: dict = Body(default={}), session=Depends(req
     respuestas_completas = {"evaluado": evaluado_nombre, "proyecto": proyecto_nombre}
     respuestas_completas.update({k: v for k, v in respuestas_usuario.items() if v})
     _, cargo_evaluado = buscar_empleado_y_cargo(evaluado_nombre)
-    evaluador_perfil = obtener_perfil_empleado(persona)
-    cargo_evaluador = evaluador_perfil.get("cargo", "")
-    relacion = comparar_jerarquia(cargo_evaluador, cargo_evaluado or "")
+    relacion = _relacion_al_guardar(persona, evaluado_nombre, cargo_evaluado)
     page_id = guardar_en_notion(persona, respuestas_completas, relacion=relacion, area=_AREA_DISPLAY.get(area, "Negocio"))
     if page_id:
         return {"ok": True, "page_id": page_id}
@@ -191,9 +243,7 @@ def actualizar_evaluacion_slack(datos: dict = Body(default={}), session=Depends(
     respuestas_completas = {"evaluado": evaluado_nombre, "proyecto": proyecto_nombre}
     respuestas_completas.update({k: v for k, v in respuestas_usuario.items() if v})
     _, cargo_evaluado = buscar_empleado_y_cargo(evaluado_nombre)
-    evaluador_perfil = obtener_perfil_empleado(persona)
-    cargo_evaluador = evaluador_perfil.get("cargo", "")
-    relacion = comparar_jerarquia(cargo_evaluador, cargo_evaluado or "")
+    relacion = _relacion_al_guardar(persona, evaluado_nombre, cargo_evaluado)
     ok = actualizar_en_notion(
         page_id, persona, respuestas_completas, relacion=relacion, area=_AREA_DISPLAY.get(area, "Negocio")
     )

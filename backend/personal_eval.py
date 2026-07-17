@@ -3,7 +3,6 @@ import logging
 import re
 import threading
 import time
-from datetime import datetime, timezone
 
 from . import config
 from .clients import slack_app
@@ -24,7 +23,6 @@ from .notion_service import (
     obtener_nombre_por_id_usuario,
     obtener_objetivos_persona,
     obtener_preguntas_personales,
-    PREGUNTAS_PERSONALES_DEFAULT,
     obtener_slack_id_por_nombre,
     obtener_slack_ids_empleados,
 )

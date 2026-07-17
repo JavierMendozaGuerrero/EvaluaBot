@@ -44,7 +44,6 @@ tar czf - \
   --exclude './.env_*' \
   --exclude './frontend/node_modules' \
   --exclude './frontend/dist' \
-  --exclude './dashboard_web' \
   --exclude './docs' \
   --exclude './deploy.sh' \
   --exclude './deploy-template.sh' \

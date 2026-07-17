@@ -2266,169 +2266,6 @@ function ChatEvalPersonal({ token, user, onComplete }) {
   );
 }
 
-function ChatEvalCA({ token, user, adviseesProp, onComplete }) {
-  const [msgs, setMsgs] = React.useState([{
-    role: "bot",
-    text: "📋 *CA: Revisión de advisees*\n\n_Esta revisión es totalmente privada, solo podrás verla tú._\n\n*Pulsa el botón* para comenzar.",
-  }]);
-  const [step, setStep] = React.useState("intro");
-  const [adviseeActual, setAdviseeActual] = React.useState("");
-  const [opinion, setOpinion] = React.useState("");
-  const [inputVal, setInputVal] = React.useState("");
-  const [loading, setLoading] = React.useState(false);
-  const [advisees, setAdvisees] = React.useState([]);
-  const [guardados, setGuardados] = React.useState([]);
-  const bottomRef = React.useRef(null);
-
-  React.useEffect(() => { bottomRef.current?.scrollIntoView({ behavior: "smooth" }); }, [msgs]);
-
-  React.useEffect(() => {
-    apiRequest("/api/mis-advisees", { token })
-      .then(d => setAdvisees((d.advisees || []).map(a => a.nombre).filter(Boolean)))
-      .catch(() => setAdvisees((adviseesProp || []).map(a => a.nombre || a).filter(Boolean)));
-  }, [token]);
-
-  const botSay = (text) => setMsgs(m => [...m, { role: "bot", text }]);
-  const userSay = (text) => setMsgs(m => [...m, { role: "user", text }]);
-
-  const disponibles = advisees.filter(a => !guardados.includes(a));
-
-  function handleComenzar() {
-    userSay("Comenzar");
-    if (advisees.length === 0) {
-      botSay("Cargando advisees...");
-    }
-    setStep("esperando_advisee");
-    botSay("¿De qué advisee te gustaría hacer seguimiento?");
-  }
-
-  async function handleAdvisee(nombre) {
-    const val = (nombre || inputVal).trim();
-    if (!val) return;
-    setInputVal("");
-    if (val.toLowerCase() === "no") {
-      userSay("No");
-      botSay("¡Perfecto, gracias por tu tiempo! 🎉");
-      setStep("terminado");
-      return;
-    }
-    const num = parseInt(val);
-    const adviseeNombre = !isNaN(num) && num >= 1 && num <= disponibles.length
-      ? disponibles[num - 1]
-      : val;
-    const found = advisees.find(a => a.toLowerCase() === adviseeNombre.toLowerCase());
-    if (!found) {
-      botSay(`*${adviseeNombre}* no aparece en tu lista de advisees. Selecciona uno de los botones o escribe *no* para terminar.`);
-      return;
-    }
-    userSay(found);
-    setAdviseeActual(found);
-    setLoading(true);
-    try {
-      const d = await apiRequest(`/api/resumen-evaluaciones-advisee?advisee=${encodeURIComponent(found)}`, { token });
-      botSay(d.resumen);
-      if (d.sinNovedades) {
-        botSay("¿De qué advisee te gustaría hacer seguimiento?");
-      } else {
-        botSay("¿Qué opinas de las evaluaciones? Escribe tu comentario sobre el progreso de tu advisee.");
-        setStep("esperando_opinion");
-      }
-    } catch (err) {
-      // Antes se descartaba el error y se decía siempre "inténtalo de nuevo": si la API
-      // se había quedado sin saldo, reintentar no servía de nada y nadie se enteraba.
-      botSay(`⚠️ ${err.message || t("err.load_evaluations")}`);
-    }
-    finally { setLoading(false); }
-  }
-
-  function handleOpinion() {
-    const val = inputVal.trim();
-    if (!val) return;
-    userSay(val);
-    setOpinion(val);
-    setInputVal("");
-    botSay(`*Resumen de tu valoración:*\n• Advisee: *${adviseeActual}*\n• Opinión: ${val}\n\n¿Lo guardo?`);
-    setStep("confirmacion");
-  }
-
-  async function handleConfirmar() {
-    userSay(t("cep.save_yes"));
-    setLoading(true);
-    try {
-      await apiRequest("/api/notas-ca", { token, method: "POST", body: { advisee: adviseeActual, nota: opinion } });
-      const nuevosGuardados = [...guardados, adviseeActual];
-      setGuardados(nuevosGuardados);
-      onComplete?.();
-      const restantes = advisees.filter(a => !nuevosGuardados.includes(a));
-      if (restantes.length > 0) {
-        botSay("✅ Opinión guardada en Notion.\n\n¿De qué advisee te gustaría hacer seguimiento?");
-        setStep("esperando_advisee");
-      } else {
-        botSay("✅ Opinión guardada en Notion.\n\n¡Has completado el seguimiento de todos tus advisees! 🎉");
-        setStep("terminado");
-      }
-    } catch { botSay("⚠️ No se pudo guardar en Notion. Revisa permisos/logs."); }
-    finally { setLoading(false); }
-  }
-
-  function handleModificar() {
-    userSay("✏️ Modificar");
-    setOpinion("");
-    botSay("¿Qué comentario deseas registrar sobre las evaluaciones de tu advisee?");
-    setStep("esperando_opinion");
-  }
-
-  function renderInput() {
-    if (loading) return <div className="chat-input-area"><div className="chat-input-row"><span className="fine" style={{ color: "var(--muted)" }}>...</span></div></div>;
-    if (step === "intro") return (
-      <div className="chat-input-area"><div className="chat-btns"><button className="chat-btn primary" onClick={handleComenzar}>Comenzar</button></div></div>
-    );
-    if (step === "esperando_advisee") return (
-      <div className="chat-input-area">
-        <div className="chat-sugerencias" style={{ flexWrap: "wrap" }}>
-          {disponibles.map(a => (
-            <button key={a} className="chat-btn" onClick={() => handleAdvisee(a)}>{a}</button>
-          ))}
-          <button className="chat-btn" onClick={() => handleAdvisee("no")}>❌ Terminar</button>
-        </div>
-      </div>
-    );
-    if (step === "esperando_opinion") return (
-      <div className="chat-input-area"><div className="chat-input-row">
-        <textarea className="chat-input chat-textarea" placeholder="Escribe tu opinión..." value={inputVal} onChange={e => setInputVal(e.target.value)} onKeyDown={e => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); handleOpinion(); } }} rows={3} autoFocus />
-        <button className="chat-send-btn" onClick={handleOpinion}>→</button>
-      </div></div>
-    );
-    if (step === "confirmacion") return (
-      <div className="chat-input-area"><div className="chat-btns">
-        <button className="chat-btn primary" onClick={handleConfirmar}>{t("cep.save_yes")}</button>
-        <button className="chat-btn" onClick={handleModificar}>{t("cep.btn_modificar")}</button>
-      </div></div>
-    );
-    if (step === "terminado") return (
-      <div className="chat-input-area"><span className="fine" style={{ color: "var(--muted)" }}>Revisión completada ✅</span></div>
-    );
-    return null;
-  }
-
-  return (
-    <div className="eval-chat-area">
-      <div className="chat-msgs">
-        {msgs.map((msg, i) => (
-          <div key={i} className={`chat-msg-${msg.role}`}>
-            {msg.role === "bot"
-              ? <><span className="chat-avatar">🤖</span><div className="chat-bubble-bot">{renderMd(msg.text)}</div></>
-              : <div className="chat-bubble-user">{msg.text}</div>
-            }
-          </div>
-        ))}
-        <div ref={bottomRef} />
-      </div>
-      {renderInput()}
-    </div>
-  );
-}
-
 function HistorialEvaluacionesPage({ token, evaluado, evaluador, proyecto, onBack }) {
   const [historial, setHistorial] = React.useState(null);
   const [error, setError] = React.useState(null);
@@ -2583,7 +2420,7 @@ function DetalleEvaluacionRealizadaPage({ ev, proyecto, onBack }) {
   );
 }
 
-function EvaluacionesSlackSection({ token, user, advisees, onNavigate, onCompletada }) {
+function EvaluacionesSlackSection({ token, user, onNavigate, onCompletada }) {
   // sessionStorage persiste dentro de la misma sesión del navegador (sobrevive navegar atrás/adelante).
   // Clave incluye los últimos 8 chars del token para que sea específica del usuario.
   const storageKey = `eval_completadas_${(token || "").slice(-8)}`;
@@ -2751,15 +2588,7 @@ function Dashboard({ token, user, onLogout, onNavigate, onBackToRoleSelect = nul
   const [status, setStatus] = useState("");
   const [links, setLinks] = useState(null);
   const [advisees, setAdvisees] = useState([]);
-  const [opinionesModal, setOpinionesModal] = useState(null);
-  const [loadingOpiniones, setLoadingOpiniones] = useState(false);
-  const [evaluadosAnual, setEvaluadosAnual] = useState([]);
   const [evaluadoAnual, setEvaluadoAnual] = useState("");
-  const [cargoAnual, setCargoAnual] = useState("");
-  const [statusAnual, setStatusAnual] = useState("");
-  const [linkAnual, setLinkAnual] = useState(null);
-  const [accesoActivo, setAccesoActivo] = useState(false);
-  const [togglingAcceso, setTogglingAcceso] = useState(false);
   const [informeFinalEmpleado, setInformeFinalEmpleado] = useState(null);
   const [adminModo, setAdminModo] = useState("borrador");
   const [informeFinalAdmin, setInformeFinalAdmin] = useState(null);
@@ -2826,18 +2655,11 @@ function Dashboard({ token, user, onLogout, onNavigate, onBackToRoleSelect = nul
 
   useEffect(() => {
     if (!isAdmin) return;
-    const apply = (data) => { const lista = data.evaluados || []; setEvaluadosAnual(lista); if (lista.length) setEvaluadoAnual(lista[0].value); };
+    const apply = (data) => { const lista = data.evaluados || []; if (lista.length) setEvaluadoAnual(lista[0].value); };
     apiRequestCached("/api/evaluados-anual", { token }, apply)
       .then(apply)
       .catch(() => {});
   }, [token, isAdmin]);
-
-  useEffect(() => {
-    const apply = (data) => setAccesoActivo(data.activo || false);
-    apiRequestCached("/api/acceso-advisees", { token }, apply)
-      .then(apply)
-      .catch(() => {});
-  }, [token]);
 
   useEffect(() => {
     if (isAdmin) return;
@@ -3012,24 +2834,11 @@ function Dashboard({ token, user, onLogout, onNavigate, onBackToRoleSelect = nul
     setStatus(t("dash.gen_report"));
     try {
       const body = { evaluado: targetEvaluado };
-      if (cargoAnual) body.cargo = cargoAnual;
       const data = await apiRequest("/api/generar", { token, method: "POST", body });
       setLinks(data);
       setStatus(t("dash.report_ready", { n: data.total }));
     } catch (err) {
       setStatus(err.message);
-    }
-  }
-
-  async function generateAnual() {
-    setLinkAnual(null);
-    setStatusAnual(t("dash.interpreting"));
-    try {
-      const data = await apiRequest("/api/generar-anual", { token, method: "POST", body: { evaluado: evaluadoAnual, cargo: cargoAnual } });
-      setStatusAnual(t("dash.annual_generated"));
-      setLinkAnual(data.docxUrl);
-    } catch (err) {
-      setStatusAnual(err.message);
     }
   }
 
@@ -3045,19 +2854,7 @@ function Dashboard({ token, user, onLogout, onNavigate, onBackToRoleSelect = nul
       a.click();
       URL.revokeObjectURL(url);
     } catch (err) {
-      setStatusAnual(err.message);
-    }
-  }
-
-  async function loadOpiniones(adviseeNombre) {
-    setLoadingOpiniones(true);
-    try {
-      const data = await apiRequest(`/api/opiniones-ca?advisee=${encodeURIComponent(adviseeNombre)}`, { token });
-      setOpinionesModal({ nombre: adviseeNombre, opiniones: data.opiniones || [] });
-    } catch (err) {
       setStatus(err.message);
-    } finally {
-      setLoadingOpiniones(false);
     }
   }
 
@@ -3083,18 +2880,6 @@ function Dashboard({ token, user, onLogout, onNavigate, onBackToRoleSelect = nul
       setStatus(t("dash.file_ready"));
     } catch (err) {
       setStatus(err.message);
-    }
-  }
-
-  async function toggleAcceso() {
-    setTogglingAcceso(true);
-    try {
-      const data = await apiRequest("/api/acceso-advisees", { token, method: "POST", body: { activo: !accesoActivo } });
-      setAccesoActivo(data.activo);
-    } catch (err) {
-      setStatus(err.message);
-    } finally {
-      setTogglingAcceso(false);
     }
   }
 
@@ -3631,37 +3416,6 @@ function Dashboard({ token, user, onLogout, onNavigate, onBackToRoleSelect = nul
           )}
         </section>
       )}
-
-      {opinionesModal && (
-        <section className="opiniones-modal panel">
-          <div className="opiniones-header">
-            <div>
-              <p className="kicker">Career Advisor</p>
-              <h2>{t("dash.opinions_about", { nombre: opinionesModal.nombre })}</h2>
-            </div>
-            <button className="secondary" onClick={() => setOpinionesModal(null)}>{t("common.close")}</button>
-          </div>
-          {opinionesModal.opiniones.length ? (
-            <div className="opiniones-list">
-              {opinionesModal.opiniones.map((op, i) => (
-                <article key={i} className="opinion-item">
-                  <p className="opinion-fecha fine">{op.fecha ? op.fecha.slice(0, 10) : t("common.no_date")}</p>
-                  {op.resumen_advisee && (
-                    <div className="opinion-resumen">
-                      <p className="fine"><strong>{t("dash.evals_seen")}</strong></p>
-                      <pre className="opinion-pre">{op.resumen_advisee}</pre>
-                    </div>
-                  )}
-                  <p className="fine"><strong>{t("dash.ca_opinion")}</strong></p>
-                  <p className="opinion-texto">{op.opinion || "—"}</p>
-                </article>
-              ))}
-            </div>
-          ) : (
-            <p>{t("dash.no_opinions", { nombre: opinionesModal.nombre })}</p>
-          )}
-        </section>
-      )}
       <Footer />
     </main>
   );
@@ -4044,13 +3798,6 @@ function AdviseeDetail({ token, advisee, advisees, onBack, onNavigate }) {
   const baseNotaRef = React.useRef("");
   const dictadoSoportado =
     typeof window !== "undefined" && !!(window.SpeechRecognition || window.webkitSpeechRecognition);
-  const [generandoBorrador, setGenerandoBorrador] = useState(false);
-  const [borradorError, setBorradorError] = useState("");
-  const [opinionesDocOpen, setOpinionesDocOpen] = useState(false);
-  const [generandoOpiniones, setGenerandoOpiniones] = useState(false);
-  const [opinionesDocError, setOpinionesDocError] = useState("");
-  const [realizarOpen, setRealizarOpen] = useState(false);
-  const [manualOpen, setManualOpen] = useState(false);
   const [generandoFuente, setGenerandoFuente] = useState("");
   const [fuenteError, setFuenteError] = useState("");
   const [fuenteOk, setFuenteOk] = useState(false);
@@ -4128,73 +3875,6 @@ function AdviseeDetail({ token, advisee, advisees, onBack, onNavigate }) {
     } catch {
     } finally {
       setTogglingAccesoIndividual(false);
-    }
-  }
-
-  // Genera el borrador de informe con Claude y lo descarga directamente (sin pantalla intermedia).
-  async function descargarBorrador() {
-    setGenerandoBorrador(true);
-    setBorradorError("");
-    try {
-      const data = await apiRequest("/api/generar", {
-        token,
-        method: "POST",
-        body: { evaluado: advisee.nombre },
-      });
-      const path = data.docxAnualUrl;
-      if (!path) throw new Error(t("ad.err_no_doc"));
-      const response = await fetch(apiUrl(path), { headers: { Authorization: `Bearer ${token}` } });
-      if (!response.ok) {
-        const d = await response.json().catch(() => ({}));
-        throw new Error(d.error || t("admin.err_download"));
-      }
-      const blob = await response.blob();
-      const url = URL.createObjectURL(blob);
-      const link = document.createElement("a");
-      link.href = url;
-      link.download = `informe_${advisee.nombre.replace(/\s+/g, "_")}.docx`;
-      link.click();
-      URL.revokeObjectURL(url);
-    } catch (err) {
-      setBorradorError(err.message);
-    } finally {
-      setGenerandoBorrador(false);
-    }
-  }
-
-  // Genera el documento de opiniones del CA en el backend (skill eval-resumen-opiniones-ca)
-  // y abre la versión web (HTML) o descarga el Word (.docx) según el formato pedido.
-  async function generarOpiniones(formato) {
-    setGenerandoOpiniones(true);
-    setOpinionesDocError("");
-    try {
-      const data = await apiRequest("/api/generar-opiniones-ca", {
-        token,
-        method: "POST",
-        body: { evaluado: advisee.nombre },
-      });
-      const path = formato === "web" ? data.htmlUrl : data.pdfUrl;
-      if (!path) throw new Error(t("ad.err_no_doc"));
-      if (formato === "web") {
-        openAuthedFile(path, token);
-      } else {
-        const response = await fetch(apiUrl(path), { headers: { Authorization: `Bearer ${token}` } });
-        if (!response.ok) {
-          const d = await response.json().catch(() => ({}));
-          throw new Error(d.error || t("admin.err_download"));
-        }
-        const blob = await response.blob();
-        const url = URL.createObjectURL(blob);
-        const link = document.createElement("a");
-        link.href = url;
-        link.download = `opiniones_${advisee.nombre.replace(/\s+/g, "_")}.pdf`;
-        link.click();
-        URL.revokeObjectURL(url);
-      }
-    } catch (err) {
-      setOpinionesDocError(err.message);
-    } finally {
-      setGenerandoOpiniones(false);
     }
   }
 
@@ -5124,13 +4804,6 @@ function ActivarEvaluacionesProyectoPage({ token, user, onBack, onActivado }) {
 // Página de selección de tipo de evaluación de proyecto
 // ---------------------------------------------------------------------------
 
-const TIPOS_EVAL_INFO = [
-  { tipo: "autoevaluacion", label: "Autoevaluación", desc: "Evalúa tu propio desempeño en el proyecto." },
-  { tipo: "mismos_miembros", label: "Evaluación a tus miembros del equipo del mismo nivel", desc: "Evalúa a un compañero de equipo del mismo nivel." },
-  { tipo: "miembros_a_manager", label: "Evaluación de miembros del equipo a managers", desc: "Evalúa al responsable del proyecto (NPS)." },
-  { tipo: "manager_a_miembros", label: "Evaluación de managers a miembros del equipo", desc: "Evalúa el desempeño de un miembro de tu equipo." },
-];
-
 // La lista de evaluaciones a hacer (y su tipo de plantilla) la decide el SERVIDOR
 // por jerarquía de empresa (GET /api/evaluaciones-proyecto-a-hacer y el campo
 // `a_hacer` de /api/proyectos-progreso). Aquí solo se construye la etiqueta visible.
@@ -6016,7 +5689,7 @@ function FormularioEvaluacionExtra({ token, evaluado, contexto, solicitudPageId,
   );
 }
 
-function EvaluacionesSlackPage({ token, user, advisees, onBack, onNavigate, completadasApp = {}, onCompletada }) {
+function EvaluacionesSlackPage({ token, user, onBack, onNavigate, completadasApp = {}, onCompletada }) {
   return (
     <main className="page">
       <nav className="nav">
@@ -6025,7 +5698,7 @@ function EvaluacionesSlackPage({ token, user, advisees, onBack, onNavigate, comp
       </nav>
       <div style={{ paddingTop: "clamp(44px, 6vw, 68px)" }}>
         <p className="kicker">{t("ess.page_kicker")}</p>
-        <EvaluacionesSlackSection token={token} user={user} advisees={advisees || []} onNavigate={onNavigate} completadasApp={completadasApp} onCompletada={onCompletada} />
+        <EvaluacionesSlackSection token={token} user={user} onNavigate={onNavigate} completadasApp={completadasApp} onCompletada={onCompletada} />
       </div>
       <Footer />
     </main>
@@ -6975,7 +6648,6 @@ function App() {
       <EvaluacionesSlackPage
         token={token}
         user={user}
-        advisees={[]}
         onBack={() => navigate(null)}
         onNavigate={navigate}
         completadasApp={slackEvalCompletadas}

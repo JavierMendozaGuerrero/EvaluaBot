@@ -1861,11 +1861,6 @@ def invalidar_cache_empleados() -> None:
     invalidar_cache_bbdd_evaluados()
 
 
-def obtener_lista_empleados() -> list[str]:
-    """Lee los nombres canonicos de empleados desde Notion."""
-    return [registro["nombre"] for registro in _obtener_registros_empleados()]
-
-
 def obtener_registros_empleados() -> list[dict]:
     """Lee empleados con nombre, email y aliases desde Notion."""
     return _obtener_registros_empleados()
@@ -2538,11 +2533,6 @@ def obtener_nombre_por_id_usuario(user_id: str) -> str | None:
         return None
 
 
-def validar_empleado_en_lista(nombre: str) -> bool:
-    """Comprueba si un nombre coincide con algun empleado de la lista de Notion."""
-    return buscar_empleado_en_lista(nombre) is not None
-
-
 _lock_bbdd_evaluados = threading.Lock()
 _bbdd_evaluados_cache: list | None = None
 _bbdd_evaluados_cache_ts: float = 0.0
@@ -2854,53 +2844,6 @@ def obtener_advisees(ca_nombre: str, ca_aliases=None) -> list[str]:
         return []
 
 
-def obtener_todos_los_advisees() -> list[str]:
-    """Devuelve todos los advisees únicos de TODOS los CAs desde la Lista CA."""
-    with lock:
-        db_id = _cache_lista_ca.get("db_id", "")
-    if not db_id:
-        resultado = notion.search(
-            query="Lista CA",
-            filter={"value": _tipo_objeto_busqueda_bbdd(), "property": "object"},
-            page_size=50,
-        )
-        for bbdd in resultado.get("results", []):
-            titulo_norm = normalizar_nombre(_extraer_titulo_bbdd(bbdd))
-            if titulo_norm in ("lista ca", "lista de cas") or titulo_norm.startswith("lista ca") or titulo_norm.startswith("lista de ca"):
-                db_id = _data_source_id(bbdd)
-                with lock:
-                    _cache_lista_ca["db_id"] = db_id
-                break
-    if not db_id:
-        return []
-    try:
-        nombres: set[str] = set()
-        cursor = None
-        while True:
-            kwargs: dict = {"page_size": 100}
-            if cursor:
-                kwargs["start_cursor"] = cursor
-            resp = _query_bbdd(db_id, **kwargs)
-            for fila in resp.get("results", []):
-                props = fila.get("properties", {})
-                for col_name, prop_val in props.items():
-                    if not re.match(r'^A\d+$', col_name):
-                        continue
-                    nombre_a = "".join(
-                        p.get("plain_text", "")
-                        for p in (prop_val.get("rich_text") or prop_val.get("title") or [])
-                    ).strip()
-                    if nombre_a:
-                        nombres.add(nombre_a)
-            if not resp.get("has_more"):
-                break
-            cursor = resp.get("next_cursor")
-        return list(nombres)
-    except Exception:
-        logging.exception("Error obteniendo todos los advisees")
-        return []
-
-
 def obtener_datos_empleados_por_nombres(nombres: list[str]) -> list[dict]:
     """Retorna {nombre, foto, email, cargo} para cada nombre desde 'Lista de empleados'.
 
@@ -3036,70 +2979,6 @@ def obtener_opiniones_ca_por_advisee(ca_nombre: str, advisee: str, ca_aliases=No
         return []
 
 
-def listar_advisees_con_opiniones_ca(ca_nombre: str, ca_aliases=None) -> list[str]:
-    """Lista evaluados con base 'Opiniones - ...' en Seguimiento CA para este CA."""
-    ca_norms = {normalizar_nombre(valor) for valor in [ca_nombre, *(ca_aliases or [])] if valor}
-    if not ca_norms:
-        return []
-
-    def texto_alias(props, nombres):
-        for nombre in nombres:
-            if nombre in props:
-                valor = _texto_propiedad(props, nombre)
-                if valor:
-                    return valor
-        return ""
-
-    def db_desde_bloque(bloque):
-        if bloque.get("type") == "child_database":
-            titulo = _titulo_child_database(bloque)
-            try:
-                db = notion.databases.retrieve(database_id=bloque["id"])
-                return titulo, _data_source_id(db)
-            except Exception:
-                logging.exception("No se pudo resolver la base de seguimiento %s", titulo)
-                return titulo, bloque["id"]
-        if bloque.get("type") == "link_to_page":
-            target_id = _target_link_to_page(bloque)
-            if not target_id:
-                return "", None
-            try:
-                db = notion.databases.retrieve(database_id=target_id)
-                return _extraer_titulo_bbdd(db), _data_source_id(db)
-            except Exception:
-                return "", None
-        return "", None
-
-    try:
-        parent = _parent_bbdd_en_pagina(config.NOTION_CA_TRACKING_PAGE_NAME, crear=False)
-        if parent.get("type") != "page_id":
-            return []
-
-        encontrados = []
-        for bloque in _iter_blocks(parent["page_id"]):
-            titulo, db_id = db_desde_bloque(bloque)
-            if not db_id or not titulo.startswith("Opiniones - "):
-                continue
-
-            try:
-                resp = _query_bbdd(db_id, page_size=100)
-            except Exception:
-                logging.exception("No se pudo leer la base de seguimiento %s", titulo)
-                continue
-
-            for fila in resp.get("results", []):
-                props = fila.get("properties", {})
-                ca_texto = texto_alias(props, ("CA", "CA que le evalua", "CA que le evalúa", "Career Advisor", "Evaluador"))
-                if normalizar_nombre(ca_texto) in ca_norms:
-                    encontrados.append(titulo.removeprefix("Opiniones - ").strip())
-                    break
-
-        return sorted(set(encontrados), key=normalizar_nombre)
-    except Exception:
-        logging.exception("Error listando advisees con opiniones CA")
-        return []
-
-
 _PROPS_OBJETIVOS = {
     "Name":      {"title": {}},
     "Fecha":     {"date": {}},
@@ -3155,22 +3034,6 @@ def _obtener_o_crear_bbdd_objetivos() -> str:
     with lock:
         _cache_objetivos_db["db_id"] = db_id
     return db_id
-
-
-def guardar_objetivos(ca_nombre: str, advisee_nombre: str, texto: str) -> None:
-    db_id = _obtener_o_crear_bbdd_objetivos()
-    fecha_iso = datetime.now(timezone.utc).isoformat()
-    fecha_str = datetime.now(config.ZONA_HORARIA_MADRID).strftime("%Y-%m-%d")
-    _crear_pagina_en_bbdd(
-        db_id,
-        {
-            "Name":      {"title":     [{"text": {"content": f"Objetivos {advisee_nombre} {fecha_str}"}}]},
-            "Fecha":     {"date":      {"start": fecha_iso}},
-            "CA":        {"rich_text": [{"text": {"content": ca_nombre[:2000]}}]},
-            "Objetivos": {"rich_text": [{"text": {"content": texto[:2000]}}]},
-            "Nombre":    {"rich_text": [{"text": {"content": advisee_nombre[:2000]}}]},
-        },
-    )
 
 
 def obtener_objetivos(advisee_nombre: str) -> list[dict]:

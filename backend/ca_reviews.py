@@ -33,7 +33,6 @@ from .notion_service import (
     _tipo_objeto_busqueda_bbdd,
     _usa_data_sources,
     idioma_por_slack_id,
-    idioma_de_persona,
     guardar_idioma_por_slack_id,
     invalidar_cache_empleados,
     buscar_empleado_en_lista,

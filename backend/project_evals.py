@@ -31,7 +31,6 @@ from .notion_service import (
     _buscar_bbdd_en_pagina_id,
     _data_source_id,
     _iter_blocks,
-    buscar_empleado_y_cargo,
     _page_or_database_link_by_name,
     _parent_bbdd_en_pagina,
     _parent_bbdd_referencia,

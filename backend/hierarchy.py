@@ -64,14 +64,6 @@ def comparar_jerarquia(cargo_evaluador: str, cargo_evaluado: str) -> str:
     return "igual"
 
 
-def sufijo_preguntas(relacion: str) -> str:
-    if relacion == "superior":
-        return " -EVALUANDO A DEBAJO"
-    if relacion == "inferior":
-        return " -EVALUANDO A GENTE DE ARRIBA"
-    return " -EVALUANDO A GENTE DE MI NIVEL"
-
-
 def tipo_relacion(relacion: str) -> str:
     """Convierte la relación jerárquica al nombre de sección en la BD de Preguntas."""
     if relacion == "superior":

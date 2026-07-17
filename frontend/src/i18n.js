@@ -40,11 +40,6 @@ function _notifyLang() {
 // Suscripción para forzar re-render al cambiar de idioma. Devuelve función para desuscribir.
 export function subscribeLang(fn) { _langListeners.add(fn); return () => _langListeners.delete(fn); }
 
-// ¿El usuario ha elegido idioma manualmente (con el selector)?
-export function hasManualLang() {
-  try { return localStorage.getItem(LANG_KEY) != null; } catch { return false; }
-}
-
 // Fija el idioma SIN persistir (usado por /api/me con el idioma de Notion).
 export function setLang(l) {
   const nl = _norm(l);
@@ -92,10 +87,8 @@ export const STRINGS = {
   "common.back": { es: "← Volver", en: "← Back" },
   "common.home": { es: "Inicio", en: "Home" },
   "common.logout": { es: "Cerrar sesión", en: "Log out" },
-  "common.close": { es: "Cerrar", en: "Close" },
   "common.cancel": { es: "Cancelar", en: "Cancel" },
   "common.save": { es: "Guardar", en: "Save" },
-  "common.send": { es: "Enviar", en: "Send" },
   "common.loading": { es: "Cargando…", en: "Loading…" },
   "pw.show": { es: "Mostrar contraseña", en: "Show password" },
   "pw.hide": { es: "Ocultar contraseña", en: "Hide password" },
@@ -113,7 +106,6 @@ export const STRINGS = {
   "err.ia_entrada_larga": { es: "Hay demasiada información para que la IA la procese de una vez. Acorta el texto y vuelve a intentarlo; si no puedes, avisa al responsable de la herramienta (tech@igeneris.com).", en: "There is too much information for the AI to process at once. Shorten the text and try again; if you can't, let the tool's owner know (tech@igeneris.com)." },
   "err.ia_error": { es: "La IA no ha podido responder ahora mismo. Vuelve a intentarlo; si sigue fallando, avisa al responsable de la herramienta (tech@igeneris.com).", en: "The AI could not answer right now. Try again; if it keeps failing, let the tool's owner know (tech@igeneris.com)." },
   "err.error_inesperado": { es: "Ha ocurrido un error inesperado y la acción no se ha completado. Vuelve a intentarlo; si sigue fallando, avisa al responsable de la herramienta (tech@igeneris.com).", en: "Something unexpected went wrong and the action was not completed. Try again; if it keeps failing, let the tool's owner know (tech@igeneris.com)." },
-  "err.load_evaluations": { es: "No se pudieron cargar las evaluaciones. Inténtalo de nuevo.", en: "Could not load the evaluations. Please try again." },
 
   // --- Panel admin ---
   "admin.reports": { es: "Informes", en: "Reports" },
@@ -158,8 +150,6 @@ export const STRINGS = {
   "common.saving": { es: "Guardando...", en: "Saving..." },
   "common.delete": { es: "Eliminar", en: "Delete" },
   "common.deleting": { es: "Eliminando...", en: "Deleting..." },
-  "goals.saved_one": { es: "Objetivo guardado correctamente.", en: "Goal saved successfully." },
-  "goals.saved_many": { es: "{n} objetivos guardados correctamente.", en: "{n} goals saved successfully." },
   "goals.confirm_delete": { es: "¿Eliminar este objetivo? Dejará de estar activo y pasará a objetivos antiguos.", en: "Delete this goal? It will no longer be active and will move to past goals." },
   "goals.kicker": { es: "Objetivos", en: "Goals" },
   "goals.new": { es: "Nuevo objetivo", en: "New goal" },
@@ -190,8 +180,6 @@ export const STRINGS = {
   "footer.terms": { es: "Términos", en: "Terms" },
 
   // --- Documentos legales (titulos; el cuerpo son .md aparte) ---
-  "legal.privacy_title": { es: "Política de privacidad", en: "Privacy policy" },
-  "legal.terms_title": { es: "Términos y condiciones", en: "Terms and conditions" },
   "legal.unavailable": { es: "Documento no disponible.", en: "Document not available." },
 
   // --- Seleccion de rol (admin) ---
@@ -308,16 +296,12 @@ export const STRINGS = {
   // --- Dashboard ---
   "dash.gen_report": { es: "Claude está generando el informe...", en: "Claude is generating the report..." },
   "dash.report_ready": { es: "Informe listo con {n} evaluaciones.", en: "Report ready with {n} evaluations." },
-  "dash.interpreting": { es: "Claude está interpretando el texto del evaluador...", en: "Claude is interpreting the evaluator’s text..." },
-  "dash.annual_generated": { es: "Informe anual generado.", en: "Annual report generated." },
   "dash.err_download_file": { es: "Error al descargar el archivo.", en: "Error downloading the file." },
   "dash.downloading": { es: "Descargando archivo...", en: "Downloading file..." },
   "dash.file_ready": { es: "Archivo listo.", en: "File ready." },
   "dash.todo_general": { es: "General", en: "General" },
   "dash.todo_project_lead": { es: "Responsable de proyecto", en: "Project lead" },
   "dash.todo_finished_projects": { es: "Ver evaluaciones de proyectos realizadas", en: "View completed project evaluations" },
-  "dash.finished_hint": { es: "Haz click para desplegar la sección", en: "Click to expand the section" },
-  "dash.nav_my_completed_evals": { es: "Mis evaluaciones realizadas", en: "My completed evaluations" },
   "dash.finished_loading": { es: "Cargando…", en: "Loading…" },
   "dash.finished_empty": { es: "No has realizado evaluaciones de proyecto en los últimos 2 años.", en: "You haven’t completed any project evaluations in the last 2 years." },
   "dash.finished_project_empty": { es: "Sin evaluaciones.", en: "No evaluations." },
@@ -326,7 +310,6 @@ export const STRINGS = {
   "dash.nav_activate_proj": { es: "Activar evaluaciones de proyecto", en: "Activate project evaluations" },
   "dash.nav_proj_evals": { es: "Evaluaciones por proyectos", en: "Evaluations by project" },
   "dash.nav_do_proj_evals": { es: "Realizar evaluaciones de proyecto", en: "Do project evaluations" },
-  "dash.proj_evals_pending": { es: "evaluaciones por completar", en: "evaluations left" },
   "dash.proj_evals_complete_label": { es: "Completado", en: "Completed" },
   "dash.proj_evals_unfinished": { es: "No terminado", en: "Not finished" },
   "dash.nav_my_advisees": { es: "Mis advisees", en: "My advisees" },
@@ -336,21 +319,12 @@ export const STRINGS = {
   "dash.nav_request_extra_eval": { es: "Pedir evaluación extra", en: "Request an extra evaluation" },
   "dash.nav_pending_extra_evals": { es: "Evaluaciones extra pendientes", en: "Pending extra evaluations" },
   "dash.extra_evals_to_complete": { es: "Evaluaciones extra a completar:", en: "Extra evaluations to complete:" },
-  "dash.my_role": { es: "Mi puesto", en: "My role" },
-  "dash.hero_kicker": { es: "Panel", en: "Dashboard" },
   "dash.pending_tasks": { es: "Tareas pendientes", en: "Pending tasks" },
   "dash.slack_mensual": { es: "Evaluación mensual", en: "Monthly evaluation" },
   "dash.slack_personal": { es: "Seguimiento personal", en: "Personal tracking" },
   "dash.slack_ca": { es: "Evaluación de tus advisees", en: "Advisee evaluation" },
   "dash.slack_suffix": { es: "(Evaluación en Slack)", en: "(Slack evaluation)" },
   "dash.no_pending_tasks": { es: "Sin tareas pendientes ✓", en: "No pending tasks ✓" },
-  "dash.task": { es: "Tarea", en: "Task" },
-  "dash.task_status": { es: "Estado", en: "Status" },
-  "dash.hero_hi": { es: "Hola,", en: "Hi," },
-  "dash.hero_pending_one": { es: "evaluación pendiente", en: "pending evaluation" },
-  "dash.hero_pending_many": { es: "evaluaciones pendientes", en: "pending evaluations" },
-  "dash.stat_done": { es: "{done} de {total} evaluaciones completadas", en: "{done} of {total} evaluations completed" },
-  "dash.stat_uptodate": { es: "Estás al día ✓", en: "You’re all caught up ✓" },
 
   "dash.my_profile": { es: "Mi perfil", en: "My profile" },
   "dash.my_country": { es: "Mi país", en: "My country" },
@@ -366,7 +340,6 @@ export const STRINGS = {
   "dash.received_empty": { es: "Todavía no tienes evaluaciones disponibles.", en: "No evaluations available yet." },
   "dash.no_reports": { es: "No hay informes disponibles", en: "No reports available" },
   "dash.open_web": { es: "Abrir en web", en: "Open in browser" },
-  "dash.no_access": { es: "No hay informes disponibles.", en: "No reports available." },
   "dash.manage_evals": { es: "Gestión de evaluaciones", en: "Evaluation management" },
   "dash.evaluated_person": { es: "Persona evaluada", en: "Person evaluated" },
   "dash.current_selection": { es: "Selección actual: {v}", en: "Current selection: {v}" },
@@ -385,10 +358,6 @@ export const STRINGS = {
   "dash.select_person": { es: "Selecciona una persona evaluada.", en: "Select a person to evaluate." },
   "dash.open_web_version": { es: "Abrir versión web", en: "Open web version" },
   "dash.no_final_report": { es: "No hay informe final disponible.", en: "No final report available." },
-  "dash.opinions_about": { es: "Opiniones sobre {nombre}", en: "Opinions about {nombre}" },
-  "dash.evals_seen": { es: "Evaluaciones vistas:", en: "Evaluations seen:" },
-  "dash.ca_opinion": { es: "Opinión del CA:", en: "CA opinion:" },
-  "dash.no_opinions": { es: "No hay opiniones guardadas sobre {nombre}.", en: "No saved opinions about {nombre}." },
 
   // --- Historial de evaluaciones ---
   "hist.err_load": { es: "No se pudieron cargar las evaluaciones.", en: "The evaluations could not be loaded." },
@@ -415,7 +384,6 @@ export const STRINGS = {
   "subir.word_file": { es: "Archivo Word (.docx)", en: "Word file (.docx)" },
   "subir.uploading_btn": { es: "Subiendo...", en: "Uploading..." },
   "subir.upload_btn": { es: "Subir informe", en: "Upload report" },
-  "subir.uploaded": { es: "Informe subido", en: "Report uploaded" },
 
   // --- Detalle de advisee (AdviseeDetail) ---
   "ad.err_no_doc": { es: "No se generó el documento.", en: "The document was not generated." },
@@ -425,13 +393,10 @@ export const STRINGS = {
   "ad.eyebrow": { es: "Advisee", en: "Advisee" },
   "ad.goals_history": { es: "Ver objetivos de mi advisee", en: "View my advisee’s goals" },
   "ad.edit_goals": { es: "Introducir objetivos", en: "Enter goals" },
-  "ad.close_manage": { es: "Cerrar gestión", en: "Close management" },
   "ad.manage_report": { es: "Gestionar Informe final", en: "Manage final report" },
-  "ad.close_make_final": { es: "Cerrar Realizar Informe final", en: "Close Make final report" },
   "ad.make_final": { es: "Realizar Informe final", en: "Make final report" },
   "ad.with_claude": { es: "Con ayuda de Claude", en: "With Claude’s help" },
   "ad.recommended": { es: "Opción recomendada", en: "Recommended option" },
-  "ad.close_manual": { es: "Cerrar manualmente", en: "Close manual" },
   "ad.manual": { es: "Manualmente", en: "Manually" },
   "ad.generating": { es: "Generando...", en: "Generating..." },
   "ad.dl_opinions": { es: "Descargar PDF de opiniones", en: "Download opinions PDF" },
@@ -470,16 +435,10 @@ export const STRINGS = {
   "mpa.summary_suffix": { es: ".", en: " section." },
   "mpa.no_projects": { es: "No tienes proyectos con evaluaciones activas.", en: "You have no projects with active evaluations." },
   "mpa.progress": { es: "{done} de {total} evaluaciones completadas", en: "{done} of {total} evaluations completed" },
-  "mpa.loading_state": { es: "Cargando estado de evaluaciones...", en: "Loading evaluation status..." },
   "mpa.no_data": { es: "Sin datos de evaluación todavía.", en: "No evaluation data yet." },
   "mpa.col_member": { es: "Miembro", en: "Member" },
-  "mpa.col_received": { es: "Recibidas", en: "Received" },
   "mpa.col_completed": { es: "Evaluaciones completadas", en: "Completed evaluations" },
-  "mpa.col_selfeval": { es: "Autoevaluación", en: "Self-evaluation" },
   "mpa.col_status": { es: "Estado", en: "Status" },
-  "mpa.evaluated_by": { es: "Evaluado por: {list}", en: "Evaluated by: {list}" },
-  "mpa.pending_from": { es: "Pendiente de: {list}", en: "Pending from: {list}" },
-  "mpa.pending_from_count": { es: "Pendiente de {n} persona(s)", en: "Pending from {n} person(s)" },
   "mpa.complete": { es: "Completo", en: "Complete" },
   "mpa.pending": { es: "Pendiente", en: "Pending" },
   "mpa.done_all": { es: "Ha completado todas sus evaluaciones", en: "Has completed all their evaluations" },
@@ -499,10 +458,6 @@ export const STRINGS = {
   "aep.err_type_project": { es: "Escribe el nombre del proyecto.", en: "Type the project name." },
   "aep.err_format": { es: "El nombre debe seguir el formato AÑO_EMPRESA_NOMBRE en mayúsculas, sin espacios ni tildes (p.ej. 2026_ACME_INNOVACION).", en: "The name must follow the format YEAR_COMPANY_NAME in uppercase, no spaces or accents (e.g. 2026_ACME_INNOVATION)." },
   "aep.format_bad": { es: "Formato erróneo", en: "Invalid format" },
-  "aep.err_select_employee": { es: "Selecciona al menos un empleado.", en: "Select at least one employee." },
-  "aep.err_deadline": { es: "Elige una fecha límite.", en: "Choose a deadline." },
-  "aep.deadline": { es: "Fecha límite", en: "Deadline" },
-  "aep.deadline_hint": { es: "Fecha tope para completar la evaluación. Por defecto, 2 semanas.", en: "Deadline to complete the evaluation. Default: 2 weeks." },
   "aep.activated": { es: "Evaluaciones activadas para {n} persona(s). Se les ha enviado una notificación por Slack.", en: "Evaluations activated for {n} person(s). They’ve been notified on Slack." },
   "aep.err_activate": { es: "No se pudo activar.", en: "Could not activate." },
   "aep.title": { es: "Activar evaluaciones", en: "Activate evaluations" },
@@ -548,9 +503,7 @@ export const STRINGS = {
   "fep.err_required": { es: "Por favor responde todas las preguntas obligatorias.", en: "Please answer all required questions." },
   "fep.saved_notion": { es: "Evaluación guardada correctamente en Notion.", en: "Evaluation saved successfully to Notion." },
   "fep.err_save": { es: "No se pudo guardar.", en: "Could not save." },
-  "fep.loading_questions": { es: "Cargando preguntas...", en: "Loading questions..." },
   "fep.saved_ok": { es: "Evaluación guardada correctamente.", en: "Evaluation saved successfully." },
-  "fep.new_eval": { es: "Nueva evaluación", en: "New evaluation" },
   "fep.person_to_eval": { es: "Persona a evaluar", en: "Person to evaluate" },
   "fep.select_dash": { es: "— Selecciona —", en: "— Select —" },
   "fep.evaluating_self": { es: "Evaluándote a ti mismo: {nombre}", en: "Evaluating yourself: {nombre}" },
@@ -629,7 +582,6 @@ export const STRINGS = {
   "eaw.year_projects": { es: "Proyectos del año: {list}", en: "Projects this year: {list}" },
   "eaw.yes_correct_start": { es: "Sí, es correcto · empezar", en: "Yes, correct · start" },
   "eaw.no_back": { es: "No, volver", en: "No, go back" },
-  "eaw.loading_area": { es: "Cargando área…", en: "Loading area…" },
   "eaw.wait_starting": { es: "Preparando la evaluación…", en: "Getting the evaluation ready…" },
   "eaw.wait_starting_detail": { es: "Estamos reuniendo todo lo que se ha dicho durante el año.", en: "We're gathering everything said over the year." },
   "eaw.wait_area": { es: "Preparando la evaluación de {nombre}…", en: "Getting {nombre}'s evaluation ready…" },
@@ -646,7 +598,6 @@ export const STRINGS = {
   "eaw.ref_unavailable": { es: "Referencia no disponible en esta área.", en: "Reference not available in this area." },
   "eaw.ref_hint": { es: "Pulsa una cita [E#] en la respuesta de la IA para ver la fuente al momento.", en: "Click a citation [E#] in the AI reply to see the source instantly." },
   "eaw.criteria_panel": { es: "Criterios y nivel", en: "Criteria & level" },
-  "eaw.no_criteria": { es: "Sin criterios ni diagnóstico para esta área.", en: "No criteria or diagnosis for this area." },
   "eaw.no_criteria_position": { es: "No existen criterios para este puesto.", en: "There are no criteria for this position." },
   "eaw.ph_respond_ai": { es: "Responde a la IA…", en: "Reply to the AI…" },
   "eaw.ph_main_points": { es: "Tus puntos principales y tu opinión…", en: "Your main points and your opinion…" },
@@ -670,8 +621,6 @@ export const STRINGS = {
   "eaw.jump_to_area": { es: "Ir a un área concreta", en: "Jump to a specific area" },
   "eaw.downloaded": { es: "Descargado", en: "Downloaded" },
   "ad.downloaded": { es: "Descargado", en: "Downloaded" },
-  "adplan.title": { es: "Plan de acción (año siguiente) — creado con ayuda de Claude", en: "Action plan (next year) — created with Claude's help" },
-  "adplan.open_assistant": { es: "Abrir asistente", en: "Open assistant" },
   "adplan.none_yet": { es: "Aún no hay plan guardado. Abre el asistente para crearlo con ayuda de Claude.", en: "No saved plan yet. Open the assistant to create one with Claude's help." },
   "adplan.page_title": { es: "Plan de acción", en: "Action plan" },
   "adplan.nav_title": { es: "Generar plan de acción", en: "Generate action plan" },
@@ -719,7 +668,6 @@ export const STRINGS = {
   "anualdoc.final_contrib": { es: "Nota final Contrib. To the firm (10%)", en: "Final Contrib. to the firm score (10%)" },
   "anualdoc.variable": { es: "Variable", en: "Variable" },
   "anualdoc.corp_objectives": { es: "Consecución Objetivos corp.", en: "Corp. objectives achievement" },
-  "anualdoc.variable_30": { es: "Variable (30%)", en: "Variable (30%)" },
   "anualdoc.total_variable": { es: "Total Variable {yy} =", en: "Total Variable {yy} =" },
   "anualdoc.eval_result": { es: "RESULTADO EVAL {yy}", en: "EVAL RESULT {yy}" },
   "anualdoc.promotion": { es: "PROMOCIÓN", en: "PROMOTION" },

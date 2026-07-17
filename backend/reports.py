@@ -101,7 +101,6 @@ def guardar_informe_html(informe, evaluaciones, evaluado, idioma="es"):
     cuerpo = "<br>".join(html.escape(linea) for linea in informe.splitlines())
     slug = slug_archivo(evaluado)
     ruta = os.path.join(config.CARPETA_WEB, f"informe_{slug}.html")
-    app_url = config.APP_PUBLIC_URL
     titulo = t("report.titulo", idioma)
     cerrar = t("report.cerrar", idioma)
     contenido = f"""<!DOCTYPE html>
@@ -175,7 +174,6 @@ def guardar_trayectoria_react(evaluaciones, evaluado, idioma="es"):
         raise RuntimeError("No hay evaluaciones en Notion para generar la trayectoria.")
     os.makedirs(config.CARPETA_WEB, exist_ok=True)
     slug = slug_archivo(evaluado)
-    app_url = config.APP_PUBLIC_URL
     ruta = os.path.join(config.CARPETA_WEB, f"trayectoria_{slug}.html")
     datos_json = (
         json.dumps(evaluaciones, ensure_ascii=False)

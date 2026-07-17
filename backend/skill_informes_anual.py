@@ -1562,7 +1562,7 @@ def guardar_informe_anual_word(emp_data: dict, comentarios: dict, cargo: str = "
     if Document is None:
         raise RuntimeError("Instala python-docx: pip install python-docx")
 
-    from docx.shared import Cm, Pt
+    from docx.shared import Cm
     from docx.enum.text import WD_ALIGN_PARAGRAPH
 
     vca = valores_ca or {}

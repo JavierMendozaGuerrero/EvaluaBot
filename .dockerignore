@@ -30,7 +30,6 @@ frontend/dist/
 # Archivos generados en local (en producción viven en el bucket de Cloud Storage).
 backend/dashboard_web/*
 !backend/dashboard_web/.gitkeep
-dashboard_web/
 
 # Configuración de herramientas de desarrollo
 .claude/

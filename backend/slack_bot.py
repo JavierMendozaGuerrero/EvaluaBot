@@ -2,7 +2,7 @@ import logging
 import re
 import threading
 import time
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta
 
 from slack_bolt.adapter.socket_mode import SocketModeHandler
 
@@ -13,7 +13,6 @@ from .slack_lists import añadir_pendiente, enlace_lista_pendientes, quitar_pend
 from .eval_tracking import registrar_envio_por_slack_id, marcar_completada_por_slack_id
 from .ca_reviews import ca_dm_activas, ca_dm_ts, ca_dm_ts_anterior, manejar_mensaje_ca
 from .personal_eval import (
-    enviar_pregunta_inicial_personal,
     manejar_mensaje_personal,
     personal_dm_activas,
     personal_dm_ts,
@@ -1664,19 +1663,10 @@ def handle_message_events(event, logger):
                 reply(t("bm.err_temp_data", idioma_por_slack_id(user_id)))
                 return
 
-    # Comprobar si ya completó la evaluación en este ciclo (solo para conversaciones nuevas)
-    _ya_respondio = False
     _area_notion_pre = None
     if _modo_peek == "pre_inicial":
         # Primer mensaje del hilo: barra de carga mientras preparamos la respuesta.
         with AnimacionCargando(dm_channel, thread_ts, idioma_por_slack_id(user_id)):
-            try:
-                _nombre_ya = _nombre_real(user_id, logger)
-                _hora_env = evaluacion_hora.get(user_id, 0)
-                if _hora_env:
-                    _ya_respondio = evaluacion_proyecto_guardada_desde(_nombre_ya, _hora_env)
-            except Exception:
-                logger.exception("Error comprobando si ya respondió en este ciclo")
             try:
                 # El área (Negocio/Palantir/MiddleOffice) ya está en la Lista de Empleados
                 # de Notion, así que no hace falta preguntarla si Notion la tiene.
@@ -1992,8 +1982,6 @@ def handle_message_events(event, logger):
                     valor_norm = _normalizar_valoracion(texto)
                     if valor_norm is None:
                         accion = "pedir_valor_modificacion"
-                        todas = estado.get("preguntas_area", [])
-                        pregunta_base = next((q["texto"] for q in todas if q["clave"] == campo), "")
                         pregunta = t("bm.reply_1_4", estado["idioma"])
                     else:
                         estado["respuestas"][campo] = valor_norm

@@ -1,6 +1,5 @@
 import json
 import logging
-import os
 import re
 import threading
 import time
@@ -3739,10 +3738,6 @@ def _asegurar_props_informes_web(db_id: str) -> None:
                 notion.databases.update(database_id=db_id, properties=faltan)
     except Exception:
         logging.exception("No se pudieron asegurar las propiedades de la BD de informes")
-
-
-def _titulo_child_page(bloque: dict) -> str:
-    return (bloque.get("child_page", {}) or {}).get("title", "")
 
 
 def _obtener_o_crear_pagina_informes() -> str:

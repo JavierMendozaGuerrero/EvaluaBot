@@ -2532,7 +2532,6 @@ function Dashboard({ token, user, onLogout, onNavigate, onBackToRoleSelect = nul
   const [status, setStatus] = useState("");
   const [links, setLinks] = useState(null);
   const [advisees, setAdvisees] = useState([]);
-  const [evaluadoAnual, setEvaluadoAnual] = useState("");
   const [informeFinalEmpleado, setInformeFinalEmpleado] = useState(null);
   const [adminModo, setAdminModo] = useState("borrador");
   const [informeFinalAdmin, setInformeFinalAdmin] = useState(null);
@@ -2596,14 +2595,6 @@ function Dashboard({ token, user, onLogout, onNavigate, onBackToRoleSelect = nul
       .then(apply)
       .catch(() => {});
   }, [token]);
-
-  useEffect(() => {
-    if (!isAdmin) return;
-    const apply = (data) => { const lista = data.evaluados || []; if (lista.length) setEvaluadoAnual(lista[0].value); };
-    apiRequestCached("/api/evaluados-anual", { token }, apply)
-      .then(apply)
-      .catch(() => {});
-  }, [token, isAdmin]);
 
   useEffect(() => {
     if (isAdmin) return;
@@ -2794,7 +2785,7 @@ function Dashboard({ token, user, onLogout, onNavigate, onBackToRoleSelect = nul
       const url = URL.createObjectURL(blob);
       const a = document.createElement("a");
       a.href = url;
-      a.download = `informe_anual_${evaluadoAnual.replace(/\s+/g, "_")}.docx`;
+      a.download = `informe_anual_${targetEvaluado.replace(/\s+/g, "_")}.docx`;
       a.click();
       URL.revokeObjectURL(url);
     } catch (err) {

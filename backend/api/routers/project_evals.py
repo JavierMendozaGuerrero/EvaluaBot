@@ -34,6 +34,25 @@ from ...project_evals import (
 router = APIRouter()
 
 
+def _no_es_su_proyecto(session, proyecto: str):
+    """Devuelve un 403 si `proyecto` no lo activó la persona de la sesión; None si sí.
+
+    Los endpoints de gestión de proyecto se direccionan por NOMBRE de proyecto, que el
+    cliente elige. Sin esta comprobación cualquier sesión puede leer el estado o tocar el
+    equipo de un proyecto ajeno con solo escribir su nombre.
+
+    El idioma se resuelve solo en la rama del 403: idioma_por_sesion() lee la Lista de
+    empleados de Notion, y el camino feliz no debe pagar esa consulta.
+    """
+    proyectos_mgr = {p["nombre_proyecto"] for p in obtener_proyectos_manager(session.get("persona", ""))}
+    if proyecto in proyectos_mgr:
+        return None
+    return JSONResponse(
+        {"error": t("pe.err_not_your_project", idioma_por_sesion(session))},
+        status_code=403,
+    )
+
+
 @router.get("/api/evaluaciones-proyecto-activas")
 def evaluaciones_proyecto_activas(session=Depends(require_session)):
     persona = session.get("persona", "")
@@ -64,12 +83,6 @@ def preguntas_evaluacion_proyecto(tipo: str = "", session=Depends(require_sessio
     if tipo == "autoevaluacion":
         preguntas = filtrar_liderazgo_autoeval(preguntas, session.get("persona", ""))
     return {"preguntas": preguntas}
-
-
-@router.get("/api/equipo-proyecto")
-def equipo_proyecto(proyecto: str = "", session=Depends(require_session)):
-    empleados = obtener_equipo_proyecto(proyecto) if proyecto else []
-    return {"empleados": empleados}
 
 
 @router.get("/api/evaluaciones-proyecto-a-hacer")
@@ -119,11 +132,12 @@ def mis_evaluaciones_proyecto_realizadas(session=Depends(require_session)):
 def estado_proyecto(proyecto: str = "", session=Depends(require_session)):
     if not proyecto:
         return JSONResponse({"error": "Falta el proyecto."}, status_code=400)
+    if (denegado := _no_es_su_proyecto(session, proyecto)) is not None:
+        return denegado
     estado = obtener_estado_evaluaciones_proyecto(proyecto)
     cfg_anon = cargar_anonimato()
     es_admin = session.get("is_admin", False)
     for m in estado:
-        m["n_pendientes"] = len(m["pendientes"])
         if not (es_admin or evaluadores_visibles_para_advisee(m.get("evaluado", ""), cfg_anon)):
             m["evaluadores"] = []
             m["pendientes"] = []
@@ -154,6 +168,8 @@ def modificar_equipo_proyecto(datos: dict = Body(default={}), session=Depends(re
     empleado = datos.get("empleado", "").strip()
     if accion not in ("añadir", "eliminar") or not proyecto or not empleado:
         return JSONResponse({"error": t("pe.err_missing_fields", idi)}, status_code=400)
+    if (denegado := _no_es_su_proyecto(session, proyecto)) is not None:
+        return denegado
     if accion == "añadir":
         return añadir_miembro_proyecto(manager, proyecto, empleado, idi)
     return eliminar_miembro_proyecto(proyecto, empleado, idi)
@@ -166,9 +182,8 @@ def recordatorio_proyecto(datos: dict = Body(default={}), session=Depends(requir
     proyecto = datos.get("proyecto", "").strip()
     if not proyecto:
         return JSONResponse({"error": t("pe.err_missing_fields", idi)}, status_code=400)
-    proyectos_mgr = {p["nombre_proyecto"] for p in obtener_proyectos_manager(manager)}
-    if proyecto not in proyectos_mgr:
-        return JSONResponse({"error": t("pe.err_not_your_project", idi)}, status_code=403)
+    if (denegado := _no_es_su_proyecto(session, proyecto)) is not None:
+        return denegado
     resultado = enviar_recordatorios_proyecto(proyecto, manager)
     return {"ok": True, **resultado}
 

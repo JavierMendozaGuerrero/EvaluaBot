@@ -1,7 +1,6 @@
 import logging
 import os
 import time
-import urllib.parse
 
 from fastapi import APIRouter, Body, Depends, File, Form, UploadFile
 from fastapi.responses import JSONResponse
@@ -19,11 +18,11 @@ from ...anonimato import cargar_config as cargar_anonimato, evaluadores_visibles
 from ...notion_service import (
     advisee_tiene_acceso_individual,
     ca_tiene_acceso_activo,
-    guardar_informe_final,
+    guardar_informe_final_estructurado,
     idioma_de_persona,
     obtener_advisees,
     obtener_ca_de_empleado,
-    obtener_informe_final_reciente,
+    obtener_informe_final_estructurado_reciente,
 )
 from ...reports import generar_archivo_trayectoria, generar_archivos_informe
 from ...skill_informes_anual import generar_informe_anual
@@ -57,27 +56,19 @@ def informe_final(evaluado: str = "", session=Depends(require_session)):
             ca_del_evaluado
             and (ca_tiene_acceso_activo(ca_del_evaluado) or advisee_tiene_acceso_individual(evaluado, ca_del_evaluado))
         )
-        informe = obtener_informe_final_reciente(evaluado) if acceso else None
-        if acceso and informe:
-            return {
-                "disponible": True,
-                "accesoActivo": True,
-                "docxUrl": url_archivo(informe["docx"], evaluado),
-                "htmlUrl": url_archivo(informe["html"], evaluado) if informe.get("html") else None,
-            }
-        if acceso:
-            return {"disponible": False, "accesoActivo": True, "mensaje": "Tu CA aún no ha subido tu informe final."}
-        return {"disponible": False, "accesoActivo": False, "mensaje": "Tu CA aún no ha publicado tu informe final."}
+        if not acceso:
+            return {"disponible": False, "accesoActivo": False, "mensaje": "Tu CA aún no ha publicado tu informe final."}
+        # Fuente de verdad: el informe estructurado en Notion → se regenera el Word 1:1.
+        reg = _regenerar_desde_notion(evaluado)
+        if reg:
+            return {"disponible": True, "accesoActivo": True, **reg}
+        return {"disponible": False, "accesoActivo": True, "mensaje": "Tu CA aún no ha subido tu informe final."}
     if not es_admin and not es_ca:
         raise PermissionError("No tienes permiso para ver este informe.")
-    informe = obtener_informe_final_reciente(evaluado)
-    if not informe:
-        return {"disponible": False, "mensaje": "No hay informe final disponible."}
-    return {
-        "disponible": True,
-        "docxUrl": url_archivo(informe["docx"], evaluado),
-        "htmlUrl": url_archivo(informe["html"], evaluado) if informe.get("html") else None,
-    }
+    reg = _regenerar_desde_notion(evaluado)
+    if reg:
+        return {"disponible": True, **reg}
+    return {"disponible": False, "mensaje": "No hay informe final disponible."}
 
 
 @router.post("/api/generar")
@@ -199,7 +190,8 @@ def _exigir_ca_del_advisee(session, evaluado: str) -> None:
 
 
 def _publicar_informe_final(evaluado: str, docx_filename: str, session) -> dict:
-    """Convierte el .docx a HTML, lo registra en Notion como informe final y devuelve las URLs."""
+    """Convierte el .docx a HTML y devuelve las URLs. El registro en Notion lo hace el informe
+    estructurado por persona ('Informe final - {Nombre}'); ya no se usa la BD plana antigua."""
     docx_path = os.path.join(config.CARPETA_WEB, docx_filename)
     html_filename = ""
     if mammoth:
@@ -216,22 +208,46 @@ def _publicar_informe_final(evaluado: str, docx_filename: str, session) -> dict:
         except Exception:
             logging.exception("Error convirtiendo docx a HTML")
             html_filename = ""
-    url_notion = (
-        f"{config.APP_PUBLIC_URL}/api/files/{urllib.parse.quote(docx_filename)}"
-        f"?evaluado={urllib.parse.quote(evaluado)}"
-    )
-    ca_subida = session.get("persona", "") if not session.get("is_admin") else ""
-    guardar_informe_final(
-        ca_nombre=ca_subida,
-        advisee=evaluado,
-        docx_filename=docx_filename,
-        html_filename=html_filename,
-        url=url_notion,
-    )
     resp_data = {"ok": True, "docxUrl": url_archivo(docx_filename, evaluado)}
     if html_filename:
         resp_data["htmlUrl"] = url_archivo(html_filename, evaluado)
     return resp_data
+
+
+def _regenerar_desde_notion(evaluado: str) -> dict | None:
+    """Si hay informe estructurado en Notion, regenera el .docx (+HTML) desde él y devuelve las
+    URLs. Así el advisee descarga siempre el Word rellenado con lo que el CA guardó. None si no hay."""
+    try:
+        borrador = obtener_informe_final_estructurado_reciente(evaluado)
+    except Exception:
+        logging.exception("No se pudo leer el informe estructurado de %s", evaluado)
+        borrador = None
+    if not borrador:
+        return None
+    try:
+        slug_ev = slug_archivo(evaluado)
+        docx_filename = f"informe_final_{slug_ev}.docx"
+        eval_anual_sesion.word_desde_borrador(borrador, docx_filename)
+        resp = {"docxUrl": url_archivo(docx_filename, evaluado)}
+        if mammoth:
+            try:
+                html_filename = f"informe_final_{slug_ev}.html"
+                docx_path = os.path.join(config.CARPETA_WEB, docx_filename)
+                html_path = os.path.join(config.CARPETA_WEB, html_filename)
+                with open(docx_path, "rb") as df:
+                    resultado_html = mammoth.convert_to_html(df)
+                documento = envolver_informe_final_html(
+                    resultado_html.value, f"Informe final · {evaluado}" if evaluado else "Informe final"
+                )
+                with open(html_path, "w", encoding="utf-8") as hf:
+                    hf.write(documento)
+                resp["htmlUrl"] = url_archivo(html_filename, evaluado)
+            except Exception:
+                logging.exception("No se pudo regenerar el HTML desde Notion para %s", evaluado)
+        return resp
+    except Exception:
+        logging.exception("No se pudo regenerar el informe desde Notion para %s", evaluado)
+        return None
 
 
 @router.post("/api/subir-informe-final")
@@ -258,10 +274,29 @@ def subir_borrador_informe_final(datos: dict = Body(default={}), session=Depends
     if not evaluado:
         return JSONResponse({"error": "Falta el campo evaluado."}, status_code=400)
     _exigir_ca_del_advisee(session, evaluado)
+    borrador_dict = None
     if isinstance(datos.get("borrador"), dict):
-        eval_anual_sesion.guardar_borrador(evaluado, datos["borrador"])
+        borrador_dict = eval_anual_sesion.guardar_borrador(evaluado, datos["borrador"]).get("borrador")
     slug_ev = slug_archivo(evaluado)
     ts = int(time.time())
     docx_filename = f"informe_final_{slug_ev}_{ts}.docx"
     eval_anual_sesion.generar_docx_borrador(evaluado, docx_filename)
-    return _publicar_informe_final(evaluado, docx_filename, session)
+    resp = _publicar_informe_final(evaluado, docx_filename, session)
+
+    # Guarda el CONTENIDO de cada celda como informe estructurado en la BD "Informes finales"
+    # de TO-SEE (histórico). No bloquea la publicación si Notion falla.
+    if borrador_dict is None:
+        try:
+            borrador_dict = eval_anual_sesion.obtener_borrador(evaluado).get("borrador")
+        except Exception:
+            borrador_dict = None
+    if borrador_dict:
+        try:
+            ca_nombre = session.get("persona", "") if not session.get("is_admin") else ""
+            guardado = guardar_informe_final_estructurado(
+                ca_nombre, borrador_dict, docx_filename=docx_filename, url=resp.get("docxUrl", "")
+            )
+            resp["notionUrl"] = guardado.get("url", "")
+        except Exception:
+            logging.exception("No se pudo guardar el informe estructurado en Notion para %s", evaluado)
+    return resp

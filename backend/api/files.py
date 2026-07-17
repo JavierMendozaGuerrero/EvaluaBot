@@ -85,7 +85,12 @@ def servir_archivo_protegido(
         or nombre_archivo.startswith(f"informe_anual_{slug}.")
     )
     es_trayectoria = nombre_archivo.startswith(f"trayectoria_{slug}.")
-    es_final = nombre_archivo.startswith(f"informe_final_{slug}_")
+    # Acepta tanto el nombre con timestamp (subida/publicación: informe_final_{slug}_{ts}.docx)
+    # como el estable sin timestamp que genera la regeneración desde Notion (informe_final_{slug}.docx/html).
+    es_final = (
+        nombre_archivo.startswith(f"informe_final_{slug}_")
+        or nombre_archivo.startswith(f"informe_final_{slug}.")
+    )
     es_opiniones = nombre_archivo.startswith(f"opiniones_ca_{slug}.")
     es_fuente_pdf = any(
         nombre_archivo.startswith(f"{p}_{slug}.")

@@ -1,3 +1,4 @@
+import json
 import logging
 import os
 import re
@@ -3663,72 +3664,242 @@ def toggle_acceso_advisee_individual(ca_nombre: str, advisee: str, activo: bool)
 
 
 # ---------------------------------------------------------------------------
-# Informes Finales
+# Informe final estructurado — BD por persona "Informe final - {Nombre}" dentro
+# de la página "Informes finales" en TO-SEE. Sustituye a la antigua BD plana de
+# referencias: aquí se persiste el CONTENIDO de cada celda del informe.
 # ---------------------------------------------------------------------------
 
-_PROPS_INFORMES_FINALES = {
+
+_MARCA_DATOS_INFORME = "⚙️ Datos del informe (no editar)"
+
+_PROPS_INFORMES_WEB = {
     "Name": {"title": {}},
-    "CA": {"rich_text": {}},
+    "Empleado": {"rich_text": {}},
+    "Estado": {"select": {"options": [{"name": "Borrador", "color": "yellow"}, {"name": "Final", "color": "green"}]}},
+    "Año evaluado": {"number": {}},
     "Fecha": {"date": {}},
+    "CA saliente": {"rich_text": {}},
+    "CA entrante": {"rich_text": {}},
+    "Posición actual": {"rich_text": {}},
+    "Posición siguiente": {"rich_text": {}},
+    "Salario actual": {"rich_text": {}},
+    "Nuevo salario fijo": {"rich_text": {}},
+    "Total Variable": {"rich_text": {}},
+    "Promoción": {"rich_text": {}},
     "Archivo_docx": {"rich_text": {}},
-    "Archivo_html": {"rich_text": {}},
     "URL": {"url": {}},
 }
 
-_cache_informes_finales_db: dict = {"db_id": None}
-_lock_informes_finales = threading.Lock()
+# Estructura en Notion: TO-SEE → página "Informes finales" → una BD por persona
+# "Informe final - {Nombre}" (mismo patrón que "Evaluaciones - {Nombre}"). Cada informe
+# guardado es una fila (Borrador/Final) con la plantilla en el cuerpo de su página.
+_NOMBRE_PAGINA_INFORMES = "Informes finales"
+_PREFIJO_INFORME_PERSONA = "Informe final - "
+_cache_bbdd_informes_web: dict = {}          # {persona_normalizada: db_id}
+_cache_pagina_informes: dict = {"page_id": None}
+_lock_informes_web = threading.Lock()
 
 
-def _obtener_o_crear_bbdd_informes_finales() -> str:
-    with _lock_informes_finales:
-        if _cache_informes_finales_db["db_id"]:
-            return _cache_informes_finales_db["db_id"]
-        titulo = "Informes Finales"
+def _crear_bbdd_en_pagina(parent_page_id: str, titulo: str, props: dict, inline: bool = False) -> str:
+    """Crea una BD hija de la página. inline=False → aparece como una línea con icono de BD
+    (como 'Evaluaciones - {nombre}'); inline=True → tabla embebida en la página."""
+    if _usa_data_sources():
+        nueva = notion.databases.create(
+            parent={"type": "page_id", "page_id": parent_page_id},
+            title=[{"type": "text", "text": {"content": titulo}}],
+            is_inline=inline,
+            initial_data_source={
+                "title": [{"type": "text", "text": {"content": titulo}}],
+                "properties": props,
+            },
+        )
+        nueva = notion.databases.retrieve(database_id=nueva["id"])
+    else:
+        nueva = notion.databases.create(
+            parent={"type": "page_id", "page_id": parent_page_id},
+            title=[{"type": "text", "text": {"content": titulo}}],
+            is_inline=inline,
+            properties=props,
+        )
+    return _data_source_id(nueva)
 
-        # 1) Escanear los hijos de la raíz (donde la crea este código): consistencia
-        #    inmediata frente al lag de indexación de notion.search.
-        db_id = _buscar_bbdd_en_pagina_id(_parent_bbdd_referencia()["page_id"], titulo)
 
-        # 2) Fallback: búsqueda global. Si falla, se propaga: no crear a ciegas.
+def _asegurar_props_informes_web(db_id: str) -> None:
+    """Añade columnas que falten si la BD se creó con una versión anterior del esquema."""
+    try:
+        if _usa_data_sources():
+            bd = notion.data_sources.retrieve(data_source_id=db_id)
+            faltan = {k: v for k, v in _PROPS_INFORMES_WEB.items() if k not in bd.get("properties", {})}
+            if faltan:
+                notion.data_sources.update(data_source_id=db_id, properties=faltan)
+        else:
+            bd = notion.databases.retrieve(database_id=db_id)
+            faltan = {k: v for k, v in _PROPS_INFORMES_WEB.items() if k not in bd.get("properties", {})}
+            if faltan:
+                notion.databases.update(database_id=db_id, properties=faltan)
+    except Exception:
+        logging.exception("No se pudieron asegurar las propiedades de la BD de informes")
+
+
+def _titulo_child_page(bloque: dict) -> str:
+    return (bloque.get("child_page", {}) or {}).get("title", "")
+
+
+def _obtener_o_crear_pagina_informes() -> str:
+    """page_id de la página 'Informes finales' bajo TO-SEE (la crea si falta)."""
+    if _cache_pagina_informes["page_id"]:
+        return _cache_pagina_informes["page_id"]
+
+    parent = _parent_bbdd_en_pagina(config.NOTION_TOSEE_PAGE_NAME, crear=False)
+    if parent.get("type") != "page_id":
+        raise RuntimeError(
+            f"No se encontró la página '{config.NOTION_TOSEE_PAGE_NAME}' en Notion. "
+            "Compártela con la integración o crea la página TO-SEE."
+        )
+    tosee_id = parent["page_id"]
+
+    objetivo = normalizar_nombre(_NOMBRE_PAGINA_INFORMES)
+    page_id = None
+    for bloque in _iter_blocks(tosee_id):
+        if bloque.get("type") == "child_page" and normalizar_nombre(_titulo_child_page(bloque)) == objetivo:
+            page_id = bloque["id"]
+            break
+    if not page_id:
+        pagina = notion.pages.create(
+            parent={"type": "page_id", "page_id": tosee_id},
+            properties={"title": {"title": [{"type": "text", "text": {"content": _NOMBRE_PAGINA_INFORMES}}]}},
+        )
+        page_id = pagina["id"]
+        logging.info("Página '%s' creada bajo '%s'", _NOMBRE_PAGINA_INFORMES, config.NOTION_TOSEE_PAGE_NAME)
+
+    _cache_pagina_informes["page_id"] = page_id
+    return page_id
+
+
+def _obtener_o_crear_bbdd_informe_persona(empleado: str) -> str:
+    """BD 'Informe final - {empleado}' dentro de la página 'Informes finales' (una por persona)."""
+    empleado = str(empleado or "").strip()
+    clave = normalizar_nombre(empleado)
+    with _lock_informes_web:
+        if _cache_bbdd_informes_web.get(clave):
+            return _cache_bbdd_informes_web[clave]
+
+        page_id = _obtener_o_crear_pagina_informes()
+        titulo = f"{_PREFIJO_INFORME_PERSONA}{empleado}"
+        db_id = _buscar_bbdd_en_pagina_id(page_id, titulo)
         if not db_id:
-            resultado = notion.search(
-                query=titulo,
-                filter={"value": _tipo_objeto_busqueda_bbdd(), "property": "object"},
-                page_size=10,
-            )
-            for bbdd in resultado.get("results", []):
-                if normalizar_nombre(_extraer_titulo_bbdd(bbdd)) == normalizar_nombre(titulo):
-                    db_id = _data_source_id(bbdd)
-                    break
+            db_id = _crear_bbdd_en_pagina(page_id, titulo, _PROPS_INFORMES_WEB, inline=False)
+            logging.info("BD '%s' creada en Notion", titulo)
+        else:
+            _asegurar_props_informes_web(db_id)
 
-        # 3) Crear solo si de verdad no existe.
-        if not db_id:
-            parent = _parent_bbdd_referencia()
-            if _usa_data_sources():
-                nueva = notion.databases.create(
-                    parent=parent,
-                    title=[{"type": "text", "text": {"content": titulo}}],
-                    initial_data_source={"title": [{"type": "text", "text": {"content": titulo}}], "properties": _PROPS_INFORMES_FINALES},
-                )
-                nueva = notion.databases.retrieve(database_id=nueva["id"])
-            else:
-                nueva = notion.databases.create(
-                    parent=parent,
-                    title=[{"type": "text", "text": {"content": titulo}}],
-                    properties=_PROPS_INFORMES_FINALES,
-                )
-            db_id = _data_source_id(nueva)
-            logging.info("Base de datos 'Informes Finales' creada en Notion")
-
-        _cache_informes_finales_db["db_id"] = db_id
+        _cache_bbdd_informes_web[clave] = db_id
         return db_id
 
 
-def guardar_informe_final(ca_nombre: str, advisee: str, docx_filename: str, html_filename: str, url: str) -> None:
-    db_id = _obtener_o_crear_bbdd_informes_finales()
-    advisee_norm = normalizar_nombre(advisee)
+def _rt_celda(texto) -> list:
+    """rich_text para una celda/valor, troceado en <=1900 chars (límite Notion 2000)."""
+    texto = str(texto if texto is not None else "")
+    if not texto:
+        return []
+    return [{"type": "text", "text": {"content": texto[i:i + 1900]}} for i in range(0, len(texto), 1900)]
 
-    existentes = []
+
+def _prop_rt(valor) -> dict:
+    return {"rich_text": _rt_celda(valor)}
+
+
+def _tabla_block(filas: list, header: bool = True) -> dict:
+    ancho = max((len(f) for f in filas), default=1)
+    filas_norm = [list(f) + [""] * (ancho - len(f)) for f in filas]
+    return {
+        "object": "block", "type": "table",
+        "table": {
+            "table_width": ancho, "has_column_header": header, "has_row_header": False,
+            "children": [
+                {"type": "table_row", "table_row": {"cells": [_rt_celda(c) for c in fila]}}
+                for fila in filas_norm
+            ],
+        },
+    }
+
+
+def _heading_block(texto: str) -> dict:
+    return {"object": "block", "type": "heading_2",
+            "heading_2": {"rich_text": [{"type": "text", "text": {"content": texto}}]}}
+
+
+def _bloques_informe(borrador: dict) -> list:
+    """Reproduce la plantilla oficial como bloques de Notion (tablas) + JSON de regeneración."""
+    anio = borrador.get("anio", "")
+    anio_sig = borrador.get("anioSiguiente", "")
+    yy = f"'{str(anio)[-2:]}" if anio != "" else ""
+    yy_sig = f"'{str(anio_sig)[-2:]}" if anio_sig != "" else ""
+    ret = borrador.get("retribucion", {}) or {}
+    res = borrador.get("resultadoEval", {}) or {}
+
+    bloques = []
+
+    # Datos del empleado
+    bloques.append(_tabla_block([
+        ["Empleado", borrador.get("empleado", ""), "Fecha", borrador.get("fecha", "")],
+        [f"CA {yy}", borrador.get("caActual", ""), "Posición actual", borrador.get("cargo", "")],
+        [f"CA {yy_sig}", borrador.get("caSiguiente", ""), "Salario actual", borrador.get("salarioActual", "")],
+    ], header=False))
+
+    # Calificación (ciclo evaluado/planificado, p. ej. 2025/2026)
+    ciclo = f"{anio}/{anio_sig}" if anio != "" and anio_sig != "" else f"{anio}{anio_sig}"
+    bloques.append(_heading_block(f"CALIFICACIÓN {ciclo}".strip()))
+    filas_cal = [["Proyectos", "Nota", "Comentarios"]]
+    for d in borrador.get("dimensiones", []):
+        filas_cal.append([d.get("etiqueta", ""), d.get("nota", ""), d.get("comentarios", "")])
+    bloques.append(_tabla_block(filas_cal, header=True))
+
+    # Retribución variable
+    bloques.append(_tabla_block([
+        ["Nota final Proyectos", ret.get("notaProyectos", ""), "Variable (60%)", ret.get("variable60", "")],
+        ["Nota final Contrib. to the firm", ret.get("notaContribucion", ""), "Variable (10%)", ret.get("variable", "")],
+        ["Consecución Objetivos corp.", ret.get("objetivosCorporativos", ""),
+         f"Total Variable {yy}", ret.get("totalVariable", "")],
+    ], header=False))
+
+    # Resultado de la evaluación
+    bloques.append(_heading_block(f"RESULTADO EVAL {yy}".strip()))
+    bloques.append(_tabla_block([
+        ["Promoción", res.get("promocion", ""), f"Posición {yy_sig}", res.get("cargoSiguiente", ""),
+         "Nuevo salario fijo", res.get("nuevoSalarioFijo", "")],
+    ], header=False))
+
+    # Objetivos del año siguiente
+    bloques.append(_heading_block(f"OPORTUNIDADES DE MEJORA / OBJETIVOS {yy_sig}".strip()))
+    filas_obj = [["#", "Objetivo / oportunidad de mejora", "Deadline"]]
+    for i, o in enumerate(borrador.get("objetivos", []), start=1):
+        filas_obj.append([str(i), o.get("texto", ""), o.get("deadline", "")])
+    bloques.append(_tabla_block(filas_obj, header=True))
+
+    # JSON de regeneración (dentro de un toggle colapsado)
+    js = json.dumps(borrador, ensure_ascii=False)
+    codigos = [
+        {"object": "block", "type": "code",
+         "code": {"language": "json", "rich_text": [{"type": "text", "text": {"content": js[i:i + 1900]}}]}}
+        for i in range(0, len(js), 1900)
+    ] or [{"object": "block", "type": "code",
+           "code": {"language": "json", "rich_text": [{"type": "text", "text": {"content": "{}"}}]}}]
+    bloques.append({
+        "object": "block", "type": "toggle",
+        "toggle": {"rich_text": [{"type": "text", "text": {"content": _MARCA_DATOS_INFORME}}], "children": codigos},
+    })
+
+    return bloques
+
+
+def _estado_de(props: dict) -> str:
+    return (props.get("Estado", {}).get("select") or {}).get("name", "")
+
+
+def _archivar_borradores_previos(db_id: str, empleado: str) -> None:
+    """Deja un único borrador por persona: archiva los borradores anteriores de 'empleado'."""
+    empleado_norm = normalizar_nombre(empleado)
     cursor = None
     while True:
         kwargs: dict = {"page_size": 100}
@@ -3737,53 +3908,108 @@ def guardar_informe_final(ca_nombre: str, advisee: str, docx_filename: str, html
         resp = _query_bbdd(db_id, **kwargs)
         for fila in resp.get("results", []):
             props = fila.get("properties", {})
-            nombre_val = " ".join(p.get("plain_text", "") for p in props.get("Name", {}).get("title", [])).strip()
-            if normalizar_nombre(nombre_val) != advisee_norm:
+            if _estado_de(props) != "Borrador":
                 continue
-            existentes.append({
-                "page_id": fila["id"],
-                "fecha": (props.get("Fecha", {}).get("date") or {}).get("start", ""),
-                "docx": _texto_rich_text(props, "Archivo_docx"),
-                "html": _texto_rich_text(props, "Archivo_html"),
-            })
+            emp = _texto_rich_text(props, "Empleado")
+            if empleado_norm and normalizar_nombre(emp) != empleado_norm:
+                continue
+            try:
+                notion.pages.update(page_id=fila["id"], archived=True)
+            except Exception:
+                logging.exception("No se pudo archivar el borrador previo %s", fila["id"])
         if not resp.get("has_more"):
             break
         cursor = resp.get("next_cursor")
 
-    existentes.sort(key=lambda x: x["fecha"])
-    while len(existentes) >= 2:
-        oldest = existentes.pop(0)
-        try:
-            notion.pages.update(page_id=oldest["page_id"], archived=True)
-        except Exception:
-            logging.exception("No se pudo archivar informe final antiguo %s", oldest["page_id"])
-        for fname in (oldest.get("docx", ""), oldest.get("html", "")):
-            if fname:
-                try:
-                    ruta = os.path.join(config.CARPETA_WEB, os.path.basename(fname))
-                    if os.path.exists(ruta):
-                        os.remove(ruta)
-                except Exception:
-                    logging.exception("No se pudo borrar archivo antiguo: %s", fname)
 
+def guardar_informe_final_estructurado(ca_nombre: str, borrador: dict,
+                                       docx_filename: str = "", url: str = "",
+                                       estado: str = "Final") -> dict:
+    """Crea una fila en la BD 'Informe final - {empleado}' (una BD por persona, dentro de la
+    página 'Informes finales' de TO-SEE) con las propiedades filtrables + la plantilla como
+    tablas + el JSON de regeneración. Devuelve {page_id, url}.
+
+    estado='Final': versión oficial, histórico (siempre crea una fila nueva).
+    estado='Borrador': autoguardado editable; se mantiene UN solo borrador por persona
+    (se archivan los borradores anteriores) para no llenar Notion de filas."""
+    empleado = str(borrador.get("empleado", "")).strip()
+    db_id = _obtener_o_crear_bbdd_informe_persona(empleado)
+    es_borrador = estado == "Borrador"
+    # Al guardar (borrador nuevo o versión Final) se archiva el borrador anterior: en curso
+    # queda uno solo, y al finalizar el borrador queda superado por la versión oficial.
+    _archivar_borradores_previos(db_id, empleado)
     fecha = datetime.now(timezone.utc)
-    _crear_pagina_en_bbdd(db_id, {
-        "Name": {"title": [{"text": {"content": advisee}}]},
-        "CA": {"rich_text": [{"text": {"content": ca_nombre}}]},
-        "Fecha": {"date": {"start": fecha.isoformat()}},
-        "Archivo_docx": {"rich_text": [{"text": {"content": docx_filename}}]},
-        "Archivo_html": {"rich_text": [{"text": {"content": html_filename}}]},
-        "URL": {"url": url},
-    })
+    fecha_txt = str(borrador.get("fecha", "")).strip() or fecha.date().isoformat()
+    titulo = (f"Borrador · {fecha_txt}" if es_borrador
+              else f"Informe final · {fecha_txt}")[:2000]
 
-
-def obtener_informe_final_reciente(advisee: str) -> dict | None:
-    """Devuelve {pdf, html} del informe final más reciente del advisee, o None."""
+    anio = borrador.get("anio")
     try:
-        db_id = _obtener_o_crear_bbdd_informes_finales()
-        advisee_norm = normalizar_nombre(advisee)
-        registros = []
-        cursor = None
+        anio_num = int(anio) if str(anio).strip() != "" else None
+    except (TypeError, ValueError):
+        anio_num = None
+
+    res = borrador.get("resultadoEval", {}) or {}
+    props = {
+        "Name": {"title": [{"text": {"content": titulo}}]},
+        "Empleado": _prop_rt(empleado),
+        "Estado": {"select": {"name": estado}},
+        "Año evaluado": {"number": anio_num},
+        "Fecha": {"date": {"start": fecha.isoformat()}},
+        "CA saliente": _prop_rt(borrador.get("caActual")),
+        "CA entrante": _prop_rt(borrador.get("caSiguiente")),
+        "Posición actual": _prop_rt(borrador.get("cargo")),
+        "Posición siguiente": _prop_rt(res.get("cargoSiguiente")),
+        "Salario actual": _prop_rt(borrador.get("salarioActual")),
+        "Nuevo salario fijo": _prop_rt(res.get("nuevoSalarioFijo")),
+        "Total Variable": _prop_rt((borrador.get("retribucion", {}) or {}).get("totalVariable")),
+        "Promoción": _prop_rt(res.get("promocion")),
+    }
+    if docx_filename:
+        props["Archivo_docx"] = _prop_rt(docx_filename)
+    if url:
+        props["URL"] = {"url": url}
+
+    parent = {"data_source_id": db_id} if _usa_data_sources() else {"database_id": db_id}
+    pagina = notion.pages.create(parent=parent, properties=props, children=_bloques_informe(borrador))
+    logging.info("Informe final estructurado guardado en Notion para '%s'", empleado)
+    return {"page_id": pagina["id"], "url": pagina.get("url", "")}
+
+
+def _leer_json_informe(page_id: str) -> dict | None:
+    """Extrae el borrador guardado del toggle de datos JSON de la página."""
+    for bloque in _iter_blocks(page_id):
+        if bloque.get("type") != "toggle":
+            continue
+        texto = "".join(r.get("plain_text", "") for r in bloque["toggle"].get("rich_text", []))
+        if _MARCA_DATOS_INFORME[:2] not in texto and "Datos del informe" not in texto:
+            continue
+        partes = []
+        for hijo in _iter_blocks(bloque["id"]):
+            if hijo.get("type") == "code":
+                partes.append("".join(r.get("plain_text", "") for r in hijo["code"].get("rich_text", [])))
+        try:
+            return json.loads("".join(partes))
+        except (json.JSONDecodeError, ValueError):
+            logging.exception("JSON de informe corrupto en la página %s", page_id)
+            return None
+    return None
+
+
+def _informe_estructurado_reciente(advisee: str, solo_estado: str) -> dict | None:
+    """Devuelve el borrador (dict) de la página más reciente del advisee cuyo Estado coincide.
+
+    solo_estado='Final'  → última versión oficial (para el Word del advisee).
+    solo_estado='Borrador' → borrador en curso (para restaurar tras perder la caché local).
+    Las filas antiguas sin 'Estado' se tratan como 'Final' por compatibilidad."""
+    try:
+        db_id = _obtener_o_crear_bbdd_informe_persona(advisee)
+    except Exception:
+        logging.exception("No se pudo acceder a la BD de informes de '%s'", advisee)
+        return None
+    candidatos = []
+    cursor = None
+    try:
         while True:
             kwargs: dict = {"page_size": 100}
             if cursor:
@@ -3791,24 +4017,33 @@ def obtener_informe_final_reciente(advisee: str) -> dict | None:
             resp = _query_bbdd(db_id, **kwargs)
             for fila in resp.get("results", []):
                 props = fila.get("properties", {})
-                nombre_val = " ".join(p.get("plain_text", "") for p in props.get("Name", {}).get("title", [])).strip()
-                if normalizar_nombre(nombre_val) != advisee_norm:
+                estado = _estado_de(props) or "Final"
+                if estado != solo_estado:
                     continue
-                registros.append({
+                candidatos.append({
+                    "page_id": fila["id"],
                     "fecha": (props.get("Fecha", {}).get("date") or {}).get("start", ""),
-                    "docx": _texto_rich_text(props, "Archivo_docx"),
-                    "html": _texto_rich_text(props, "Archivo_html"),
                 })
             if not resp.get("has_more"):
                 break
             cursor = resp.get("next_cursor")
-        if not registros:
-            return None
-        registros.sort(key=lambda x: x["fecha"], reverse=True)
-        return registros[0]
     except Exception:
-        logging.exception("Error obteniendo informe final de '%s'", advisee)
+        logging.exception("Error consultando informes (%s) de '%s'", solo_estado, advisee)
         return None
+    if not candidatos:
+        return None
+    candidatos.sort(key=lambda x: x["fecha"], reverse=True)
+    return _leer_json_informe(candidatos[0]["page_id"])
+
+
+def obtener_informe_final_estructurado_reciente(advisee: str) -> dict | None:
+    """Última versión FINAL del advisee (fuente de verdad para regenerar su Word). None si no hay."""
+    return _informe_estructurado_reciente(advisee, "Final")
+
+
+def obtener_borrador_estructurado(advisee: str) -> dict | None:
+    """Borrador en curso guardado en Notion (para restaurar si se pierde la caché local)."""
+    return _informe_estructurado_reciente(advisee, "Borrador")
 
 
 # ---------------------------------------------------------------------------

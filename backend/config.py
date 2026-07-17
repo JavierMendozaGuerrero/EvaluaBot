@@ -128,9 +128,10 @@ PREGUNTAS = [
 ]
 
 IGENERIS_CSS = """
+  @import url('https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700;800&display=swap');
   :root { color-scheme: light; --ink: #101010; --muted: #5e5e5e; --line: #d8d8d8; --paper: #ffffff; --soft: #f4f4f1; --accent: #101010; }
   * { box-sizing: border-box; }
-  body { margin: 0; font-family: Arial, Helvetica, sans-serif; color: var(--ink); background: var(--paper); }
+  body { margin: 0; font-family: 'Outfit', system-ui, sans-serif; color: var(--ink); background: var(--paper); }
   .page { min-height: 100vh; padding: 28px clamp(18px, 4vw, 56px) 56px; }
   .nav { display: flex; align-items: center; justify-content: space-between; gap: 24px; padding-bottom: 28px; border-bottom: 1px solid var(--line); }
   .brand { font-size: 24px; font-weight: 800; letter-spacing: -0.02em; text-decoration: none; color: var(--ink); }

@@ -2049,8 +2049,6 @@ function ChatEvalPersonal({ token, user, onComplete }) {
   const [step, setStep] = React.useState("intro");
   const [comentario, setComentario] = React.useState("");
   const [inputVal, setInputVal] = React.useState("");
-  const [urgenciaVal, setUrgenciaVal] = React.useState("");
-  const [urgenciaDesc, setUrgenciaDesc] = React.useState("");
   const [loading, setLoading] = React.useState(false);
   const bottomRef = React.useRef(null);
 
@@ -2109,45 +2107,6 @@ function ChatEvalPersonal({ token, user, onComplete }) {
     setStep("esperando_comentario");
   }
 
-  function handleUrgencia() {
-    userSay("🚨 Urgencia");
-    setUrgenciaVal("");
-    setUrgenciaDesc("");
-    botSay("🚨 Describe en una frase breve la urgencia:");
-    setStep("urgencia_descripcion");
-  }
-
-  function handleUrgenciaSubmit() {
-    const val = urgenciaVal.trim();
-    if (!val) return;
-    userSay(val);
-    setUrgenciaDesc(val);
-    setUrgenciaVal("");
-    botSay(`📋 Tu urgencia:\n_${val}_\n\n¿La envío a tu CA?`);
-    setStep("urgencia_confirmacion");
-  }
-
-  async function handleUrgenciaEnviar() {
-    userSay("✅ Enviar al CA");
-    setLoading(true);
-    try {
-      const d = await apiRequest("/api/urgencia-personal", { token, method: "POST", body: { descripcion: urgenciaDesc } });
-      botSay(d.ok ? "✅ Tu urgencia ha sido enviada a tu CA." : "⚠️ No se pudo notificar a tu CA. Contacta directamente.");
-    } catch (e) {
-      botSay(`⚠️ No se pudo notificar: ${e.message || "Error desconocido"}`);
-    } finally {
-      setLoading(false);
-    }
-    setStep("esperando_comentario");
-  }
-
-  function handleUrgenciaModificar() {
-    userSay("✏️ Modificar");
-    setUrgenciaVal("");
-    botSay("🚨 Describe de nuevo la urgencia:");
-    setStep("urgencia_descripcion");
-  }
-
   function handleComentario() {
     const val = inputVal.trim();
     if (!val) return;
@@ -2201,7 +2160,6 @@ function ChatEvalPersonal({ token, user, onComplete }) {
         <div className="chat-btns" style={{ marginBottom: "8px" }}>
           <button className="chat-btn" onClick={handleVerObjetivos}>📋 Ver mis objetivos</button>
           <button className="chat-btn" onClick={handleVerCriterios}>📊 Ver criterios</button>
-          <button className="chat-btn" style={{ color: "var(--danger, #e53e3e)" }} onClick={handleUrgencia}>🚨 Urgencia</button>
         </div>
         <div className="chat-input-row">
           <textarea className="chat-input chat-textarea" placeholder="Escribe tu comentario..." value={inputVal} onChange={e => setInputVal(e.target.value)} onKeyDown={e => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); handleComentario(); } }} rows={3} autoFocus />
@@ -2214,20 +2172,6 @@ function ChatEvalPersonal({ token, user, onComplete }) {
         <button className="chat-btn" onClick={() => handleCriteriosGrupo("negocio")}>Negocio</button>
         <button className="chat-btn" onClick={() => handleCriteriosGrupo("palantir")}>Palantir</button>
         <button className="chat-btn" onClick={() => handleCriteriosGrupo("middleoffice")}>Middle Office</button>
-      </div></div>
-    );
-    if (step === "urgencia_descripcion") return (
-      <div className="chat-input-area">
-        <div className="chat-input-row">
-          <textarea className="chat-input chat-textarea" placeholder="Describe la urgencia..." value={urgenciaVal} onChange={e => setUrgenciaVal(e.target.value)} onKeyDown={e => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); handleUrgenciaSubmit(); } }} rows={2} autoFocus />
-          <button className="chat-send-btn" onClick={handleUrgenciaSubmit}>→</button>
-        </div>
-      </div>
-    );
-    if (step === "urgencia_confirmacion") return (
-      <div className="chat-input-area"><div className="chat-btns">
-        <button className="chat-btn primary" onClick={handleUrgenciaEnviar}>✅ Enviar al CA</button>
-        <button className="chat-btn" onClick={handleUrgenciaModificar}>✏️ Modificar</button>
       </div></div>
     );
     if (step === "confirmacion") return (
@@ -3798,10 +3742,32 @@ function AdviseeDetail({ token, advisee, advisees, onBack, onNavigate }) {
   const baseNotaRef = React.useRef("");
   const dictadoSoportado =
     typeof window !== "undefined" && !!(window.SpeechRecognition || window.webkitSpeechRecognition);
+  const [realizarOpen, setRealizarOpen] = useState(false);
   const [generandoFuente, setGenerandoFuente] = useState("");
   const [fuenteError, setFuenteError] = useState("");
   const [fuenteOk, setFuenteOk] = useState(false);
   const [tieneEvaluacionesExtra, setTieneEvaluacionesExtra] = useState(false);
+  const [verInformeBusy, setVerInformeBusy] = useState(false);
+  const [sinInformeFinal, setSinInformeFinal] = useState(false); // no hay versión final en Notion
+
+  // Abre la versión final del informe guardada en Notion; si no hay, muestra el aviso con enlace.
+  async function verVersionActualInforme() {
+    setVerInformeBusy(true); setSinInformeFinal(false);
+    try {
+      const data = await apiRequest(`/api/informe-final?evaluado=${encodeURIComponent(advisee.nombre)}`, { token });
+      if (data.disponible && data.htmlUrl) {
+        openAuthedFile(data.htmlUrl, token);
+      } else if (data.disponible && data.docxUrl) {
+        openAuthedFile(data.docxUrl, token);
+      } else {
+        setSinInformeFinal(true);
+      }
+    } catch {
+      setSinInformeFinal(true);
+    } finally {
+      setVerInformeBusy(false);
+    }
+  }
 
   // Descarga un PDF de una fuente (opiniones, evals proyecto, seguimiento, evals mensuales).
   async function descargarFuentePdf(endpoint, etiqueta) {
@@ -4004,32 +3970,29 @@ function AdviseeDetail({ token, advisee, advisees, onBack, onNavigate }) {
                         onClick={() => onNavigate({ type: "eval-anual", advisee, advisees, from: "advisee-detail" })}
                         external
                       />
-                      <AdviseeNavGroup label={t("ad.manual")} open={manualOpen} onToggle={() => setManualOpen((v) => !v)}>
-                        <DashNavItem label={generandoFuente === "/api/generar-opiniones-ca" ? t("ad.generating") : t("ad.dl_opinions")} onClick={() => descargarFuentePdf("/api/generar-opiniones-ca", "opiniones")} disabled={!!generandoFuente} download />
-                        <DashNavItem label={generandoFuente === "/api/generar-pdf-evals-proyecto" ? t("ad.generating") : t("ad.dl_proj_evals")} onClick={() => descargarFuentePdf("/api/generar-pdf-evals-proyecto", "evals_proyecto")} disabled={!!generandoFuente} download />
-                        <DashNavItem label={generandoFuente === "/api/generar-pdf-seguimiento" ? t("ad.generating") : t("ad.dl_personal_tracking")} onClick={() => descargarFuentePdf("/api/generar-pdf-seguimiento", "seguimiento_personal")} disabled={!!generandoFuente} download />
-                        <DashNavItem label={generandoFuente === "/api/generar-pdf-evals-mensuales" ? t("ad.generating") : t("ad.dl_monthly_evals")} onClick={() => descargarFuentePdf("/api/generar-pdf-evals-mensuales", "evals_mensuales")} disabled={!!generandoFuente} download />
-                        {tieneEvaluacionesExtra && (
-                          <DashNavItem label={generandoFuente === "/api/generar-pdf-evals-extra" ? t("ad.generating") : t("ad.dl_extra_evals")} onClick={() => descargarFuentePdf("/api/generar-pdf-evals-extra", "evals_extra")} disabled={!!generandoFuente} download />
-                        )}
-                        {/* Mismo PDF que el de To-see, repetido aquí como "total" de la lista:
-                            la regla superior es lo que hace legible que agrupa las fuentes de arriba. */}
-                        <div style={{ borderTop: "1px solid var(--border)", marginTop: 6, paddingTop: 2 }}>
-                          <DashNavItem
-                            label={generandoFuente === "/api/generar-pdf-completo" ? t("ad.generating") : t("ad.dl_all_in_one")}
-                            onClick={() => descargarFuentePdf("/api/generar-pdf-completo", "info_completa")}
-                            disabled={!!generandoFuente}
-                            download
-                          />
-                        </div>
-                        {fuenteError && <p className="form-error">{fuenteError}</p>}
-                      </AdviseeNavGroup>
+                      {/* "Manualmente" lleva directo al informe editable en la web; los PDFs de
+                          fuentes se descargan desde la propia página de rellenar (barra superior). */}
+                      <DashNavItem
+                        label={t("ad.manual")}
+                        onClick={() => onNavigate({ type: "eval-anual", advisee, advisees, from: "advisee-detail", modo: "manual" })}
+                        external
+                      />
                     </AdviseeNavGroup>
                     <DashNavItem
-                      label={t("ad.upload_final")}
-                      onClick={() => onNavigate({ type: "subir-informe", advisee, from: "advisee-detail", advisees })}
+                      label={verInformeBusy ? t("ad.generating") : t("ad.view_current_report")}
+                      onClick={verVersionActualInforme}
+                      disabled={verInformeBusy}
                       external
                     />
+                    {sinInformeFinal && (
+                      <p className="fine" style={{ margin: "2px 0 6px", paddingLeft: 14 }}>
+                        {t("ad.no_final_pre", { nombre: advisee.nombre })}
+                        <a href="#" onClick={(e) => { e.preventDefault(); onNavigate({ type: "eval-anual", advisee, advisees, from: "advisee-detail" }); }}>
+                          {t("ad.no_final_link")}
+                        </a>
+                        {t("ad.no_final_post")}
+                      </p>
+                    )}
                     <div style={{ display: "flex", alignItems: "center", marginTop: 8 }}>
                       <span className="dash-dot" />
                       <button
@@ -5803,8 +5766,68 @@ function BarraEspera({ segundosTipicos = 60, titulo, detalle }) {
   );
 }
 
-function EvaluacionAnualWizard({ token, advisee, onBack }) {
+// Notas de área permitidas en el informe final: A (achieves), E (exceeds), EM (expects more).
+const NOTAS_AREA = ["A", "E", "EM"];
+// Opciones fijas de retribución variable.
+const OPC_VARIABLE = ["100%", "50%", "25%", "0%"];
+const OPC_OBJ_CORP = [">96%", "95%", "94%", "92%-93%", "<92%"];
+
+// Extrae el número de un valor de porcentaje ("60%" → "60"); "" si no hay número.
+function pctNumero(v) {
+  const m = String(v ?? "").match(/-?\d+([.,]\d+)?/);
+  return m ? m[0].replace(",", ".") : "";
+}
+
+function esNumero(v) {
+  const s = String(v ?? "").trim();
+  return s !== "" && !isNaN(parseFloat(s));
+}
+
+// Detectores de formato inválido para el resaltado en rojo en vivo. Un campo VACÍO no se
+// marca (eso lo avisa la validación al guardar); solo se marca lo que está mal escrito.
+function notaEnteraMal(v) {
+  const s = String(v ?? "").trim();
+  if (s === "") return false;
+  const n = Number(s);
+  return !(Number.isInteger(n) && n >= 1 && n <= 5);
+}
+function numeroMal(v) {
+  const s = String(v ?? "").trim();
+  return s !== "" && isNaN(parseFloat(s));
+}
+function pctMal(v) {
+  const s = String(v ?? "").trim();
+  return s !== "" && !esNumero(pctNumero(s));
+}
+
+// Reglas para poder guardar la versión FINAL: todo relleno (salvo objetivos) y con el tipo
+// correcto. Devuelve la lista de errores (vacía si el informe es válido).
+function erroresBorradorFinal(b) {
+  const e = [];
+  if (!String(b.caSiguiente || "").trim()) e.push(t("eaw.val_ca_next"));
+  if (!esNumero(b.salarioActual)) e.push(t("eaw.val_salary"));
+  (b.dimensiones || []).forEach((d) => {
+    if (!NOTAS_AREA.includes(String(d.nota || "").trim().toUpperCase())) e.push(t("eaw.val_area_score", { area: d.etiqueta }));
+    if (!String(d.comentarios || "").trim()) e.push(t("eaw.val_area_comment", { area: d.etiqueta }));
+  });
+  const r = b.retribucion || {};
+  const nP = Number(r.notaProyectos);
+  const nC = Number(r.notaContribucion);
+  if (!(Number.isInteger(nP) && nP >= 1 && nP <= 5)) e.push(t("eaw.val_score_projects"));
+  if (!(Number.isInteger(nC) && nC >= 1 && nC <= 5)) e.push(t("eaw.val_score_cttf"));
+  [["variable60", t("anualdoc.variable_60")], ["variable", t("anualdoc.variable")],
+   ["objetivosCorporativos", t("anualdoc.corp_objectives")], ["totalVariable", t("eaw.total_variable_short")]]
+    .forEach(([k, label]) => { if (!esNumero(pctNumero(r[k]))) e.push(t("eaw.val_pct", { field: label })); });
+  const res = b.resultadoEval || {};
+  if (!["SÍ", "SI", "NO"].includes(String(res.promocion || "").trim().toUpperCase())) e.push(t("eaw.val_promotion"));
+  if (!String(res.cargoSiguiente || "").trim()) e.push(t("eaw.val_position"));
+  if (!esNumero(res.nuevoSalarioFijo)) e.push(t("eaw.val_new_salary"));
+  return e;
+}
+
+function EvaluacionAnualWizard({ token, advisee, onBack, modo }) {
   const nombre = (advisee && advisee.nombre) || advisee || "";
+  const esManual = modo === "manual";
   const [est, setEst] = useState(null);
   const [step, setStep] = useState("loading"); // loading|identidad|loop|resumen|hecho|error
   const [error, setError] = useState("");
@@ -5818,6 +5841,7 @@ function EvaluacionAnualWizard({ token, advisee, onBack }) {
   const [borrSaved, setBorrSaved] = useState(false);
   const [subiendo, setSubiendo] = useState(false);
   const [subida, setSubida] = useState(null);   // respuesta de la subida (urls)
+  const [valErrors, setValErrors] = useState([]); // errores de validación al guardar versión final
   const [descInfo, setDescInfo] = useState(false);
   const [infoOk, setInfoOk] = useState(false);
   const [citaSel, setCitaSel] = useState(null);  // cid de la cita abierta en el chat
@@ -5828,9 +5852,60 @@ function EvaluacionAnualWizard({ token, advisee, onBack }) {
   const [planInstr, setPlanInstr] = useState("");
   const [planBusy, setPlanBusy] = useState(false);
   const [planGuardado, setPlanGuardado] = useState(false);
+  // Descarga de PDFs de fuentes (barra superior del flujo manual) + vista previa lateral.
+  const [generandoFuente, setGenerandoFuente] = useState("");
+  const [fuenteError, setFuenteError] = useState("");
+  const [tieneEvaluacionesExtra, setTieneEvaluacionesExtra] = useState(false);
+  const [fuentePreview, setFuentePreview] = useState(null); // {url, etiqueta} | null
+
+  // Descarga el PDF de una fuente y, además, lo abre en el panel lateral para leerlo al rellenar.
+  async function descargarFuentePdf(endpoint, etiqueta, titulo) {
+    setGenerandoFuente(endpoint); setFuenteError("");
+    try {
+      const data = await apiRequest(endpoint, { token, method: "POST", body: { evaluado: nombre } });
+      if (!data.pdfUrl) throw new Error("sin documento");
+      const response = await fetch(apiUrl(data.pdfUrl), { headers: { Authorization: `Bearer ${token}` } });
+      if (!response.ok) throw new Error("descarga");
+      const blob = await response.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `${etiqueta}_${nombre.replace(/\s+/g, "_")}.pdf`;
+      a.click();
+      // Se conserva el objectURL para la vista previa; se revoca al reemplazarlo o cerrarlo.
+      setFuentePreview((prev) => { if (prev?.url) URL.revokeObjectURL(prev.url); return { url, etiqueta: titulo || etiqueta }; });
+    } catch (err) {
+      console.error(`Descarga de fuente ${endpoint}:`, err);
+      setFuenteError(t("ad.err_no_source_info"));
+    } finally {
+      setGenerandoFuente("");
+    }
+  }
+
+  function cerrarPreview() {
+    setFuentePreview((prev) => { if (prev?.url) URL.revokeObjectURL(prev.url); return null; });
+  }
+
+  // Al salir del asistente se libera el objectURL de la vista previa.
+  useEffect(() => () => { setFuentePreview((prev) => { if (prev?.url) URL.revokeObjectURL(prev.url); return null; }); }, []);
+
+  // Solo el flujo manual necesita saber si hay evaluaciones extra (para mostrar su botón).
+  useEffect(() => {
+    if (!esManual) return;
+    apiRequest(`/api/evaluaciones-extra-recibidas?evaluado=${encodeURIComponent(nombre)}`, { token })
+      .then((data) => setTieneEvaluacionesExtra((data.evaluaciones || []).length > 0))
+      .catch(() => setTieneEvaluacionesExtra(false));
+  }, [token, nombre, esManual]);
 
   useEffect(() => {
     let alive = true;
+    // Flujo manual: se salta la conversación por áreas y abre el Word editable en blanco.
+    if (esManual) {
+      apiRequest("/api/eval-anual/iniciar-manual", { token, method: "POST", body: { evaluado: nombre } })
+        .then((r) => { if (!alive) return; setBorr(r.borrador); setStep("borrador"); })
+        .catch((e) => { if (alive) { setError(e.message); setStep("error"); } });
+      return () => { alive = false; };
+    }
     apiRequest("/api/eval-anual/iniciar", { token, method: "POST", body: { evaluado: nombre } })
       .then((data) => {
         if (!alive) return;
@@ -5842,7 +5917,7 @@ function EvaluacionAnualWizard({ token, advisee, onBack }) {
       })
       .catch((e) => { if (alive) { setError(e.message); setStep("error"); } });
     return () => { alive = false; };
-  }, [token, nombre, reloadNonce]);
+  }, [token, nombre, reloadNonce, esManual]);
 
   // Depende de la CLAVE del área actual (no de `est` entero): así, cuando enviar()
   // actualiza `est` para reflejar que un área quedó desconfirmada, este efecto no
@@ -5930,6 +6005,9 @@ function EvaluacionAnualWizard({ token, advisee, onBack }) {
   }
 
   async function subirInformeFinal() {
+    const errs = erroresBorradorFinal(borr);
+    setValErrors(errs);
+    if (errs.length) { window.scrollTo({ top: 0, behavior: "smooth" }); return; }
     if (!window.confirm(t("eaw.upload_confirm"))) return;
     setSubiendo(true); setError("");
     try {
@@ -6325,20 +6403,69 @@ function EvaluacionAnualWizard({ token, advisee, onBack }) {
     if (!borr) return shell(<p className="fine">{t("common.loading")}</p>);
     const yy = `'${String(borr.anio).slice(-2)}`;
     const yySig = `'${String(borr.anioSiguiente).slice(-2)}`;
+    const docPage = {
+      maxWidth: 840, margin: "0 auto", background: "#fff", color: "#101010",
+      boxShadow: "0 6px 28px rgba(0,0,0,.14)", border: "1px solid #e6e6e2",
+      borderRadius: 4, padding: "clamp(24px, 5vw, 56px)",
+      fontFamily: "var(--font-sans)",
+    };
+    const brand = { textAlign: "center", fontWeight: 700, fontSize: 26, letterSpacing: ".01em", marginBottom: 4 };
     const td = { border: "1px solid #101010", padding: "8px 10px", verticalAlign: "top", fontSize: 14 };
     const tdLabel = { ...td, fontWeight: 700, background: "#f7f7f4", width: 140 };
     const tabla = { width: "100%", borderCollapse: "collapse", marginBottom: 20 };
     const secTitle = { fontSize: 13, textTransform: "uppercase", letterSpacing: ".08em", borderBottom: "2px solid #101010", paddingBottom: 6, margin: "26px 0 12px" };
-    const inCell = { width: "100%", border: "none", background: "transparent", padding: 0, margin: 0, minHeight: 0, height: "auto", fontSize: 14, outline: "none" };
-    const taCell = { ...inCell, resize: "vertical", fontFamily: "inherit", lineHeight: 1.45 };
+    const inCell = { width: "100%", border: "1px solid transparent", background: "#f2f6ff", borderRadius: 3, padding: "2px 5px", margin: 0, minHeight: 0, height: "auto", fontSize: 14, outline: "none", fontFamily: "inherit" };
+    const taCell = { ...inCell, resize: "vertical", lineHeight: 1.45 };
+    const errStyle = { borderColor: "#C1121F", background: "#ffe9e9", color: "#7a0f16" };
+    const marcar = (mal) => (mal ? errStyle : {});
     const setDim = (clave, patch) => setBorr((b) => ({ ...b, dimensiones: b.dimensiones.map((d) => (d.clave === clave ? { ...d, ...patch } : d)) }));
     const setRet = (k, v) => setBorr((b) => ({ ...b, retribucion: { ...b.retribucion, [k]: v } }));
     const setRes = (k, v) => setBorr((b) => ({ ...b, resultadoEval: { ...b.resultadoEval, [k]: v } }));
     const setObj = (i, patch) => setBorr((b) => ({ ...b, objetivos: b.objetivos.map((o, j) => (j === i ? { ...o, ...patch } : o)) }));
+    // Input de porcentaje: número + sufijo "%", almacenado como "N%".
+    const pctInput = (k) => (
+      <div style={{ display: "flex", alignItems: "center", gap: 3 }}>
+        <input type="number" min="0" max="100" style={{ ...inCell, textAlign: "right", ...marcar(pctMal(borr.retribucion[k])) }}
+          value={pctNumero(borr.retribucion[k])}
+          onChange={(e) => setRet(k, e.target.value === "" ? "" : `${e.target.value}%`)} />
+        <span style={{ fontSize: 14 }}>%</span>
+      </div>
+    );
+    // Desplegable de retribución con opciones fijas.
+    const selectRet = (k, opciones) => (
+      <select style={inCell} value={borr.retribucion[k] || ""} onChange={(e) => setRet(k, e.target.value)}>
+        <option value="">—</option>
+        {opciones.map((o) => <option key={o} value={o}>{o}</option>)}
+      </select>
+    );
     return shell(
       <section className="panel">
-        <h2 style={{ marginTop: 0, textAlign: "center", textDecoration: "underline" }}>{t("anualdoc.title")}</h2>
-        <p className="fine" style={{ marginBottom: 18 }}>{t("eaw.draft_step_desc")}</p>
+        <p className="fine" style={{ marginBottom: 18, textAlign: "center" }}>{esManual ? t("eaw.draft_step_desc_manual") : t("eaw.draft_step_desc")}</p>
+        {esManual && (
+          <div style={{ maxWidth: 840, margin: "0 auto 16px", padding: "12px 14px", border: "1px solid var(--border)", borderRadius: 8, background: "var(--surface, #fafafa)" }}>
+            <p className="fine" style={{ margin: "0 0 8px", fontWeight: 600 }}>{t("eaw.sources_bar")}</p>
+            <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
+              {[
+                ["/api/generar-opiniones-ca", "opiniones", t("eaw.src_opinions")],
+                ["/api/generar-pdf-evals-proyecto", "evals_proyecto", t("eaw.src_proj")],
+                ["/api/generar-pdf-seguimiento", "seguimiento_personal", t("eaw.src_tracking")],
+                ["/api/generar-pdf-evals-mensuales", "evals_mensuales", t("eaw.src_monthly")],
+                ...(tieneEvaluacionesExtra ? [["/api/generar-pdf-evals-extra", "evals_extra", t("eaw.src_extra")]] : []),
+                ["/api/generar-pdf-completo", "info_completa", t("eaw.src_all")],
+              ].map(([ep, et, label]) => (
+                <button key={ep} className="secondary" disabled={!!generandoFuente}
+                  onClick={() => descargarFuentePdf(ep, et, label)}
+                  style={{ height: 32, minHeight: "auto", padding: "0 12px", fontSize: 12 }}>
+                  {generandoFuente === ep ? t("ad.generating") : label}
+                </button>
+              ))}
+            </div>
+            {fuenteError && <p className="form-error" style={{ margin: "8px 0 0" }}>{fuenteError}</p>}
+          </div>
+        )}
+        <div style={docPage}>
+        <div style={brand}>.Igeneris</div>
+        <h2 style={{ margin: "0 0 24px", textAlign: "center", textDecoration: "underline", fontFamily: "inherit", fontSize: 20 }}>{t("anualdoc.title")}</h2>
 
         <table style={tabla}><tbody>
           <tr>
@@ -6353,15 +6480,15 @@ function EvaluacionAnualWizard({ token, advisee, onBack }) {
             <td style={tdLabel}>{`CA ${yySig}`}</td>
             <td style={td}><input style={inCell} value={borr.caSiguiente} onChange={(e) => setBorr((b) => ({ ...b, caSiguiente: e.target.value }))} /></td>
             <td style={tdLabel}>{t("anualdoc.current_salary")}</td>
-            <td style={td}><input style={inCell} value={borr.salarioActual} onChange={(e) => setBorr((b) => ({ ...b, salarioActual: e.target.value }))} /></td>
+            <td style={td}><input type="number" min="0" style={{ ...inCell, ...marcar(numeroMal(borr.salarioActual)) }} value={borr.salarioActual} onChange={(e) => setBorr((b) => ({ ...b, salarioActual: e.target.value }))} /></td>
           </tr>
         </tbody></table>
 
-        <h3 style={secTitle}>{t("anualdoc.rating_year", { anio: borr.anio })}</h3>
+        <h3 style={secTitle}>{t("anualdoc.rating_year", { anio: `${borr.anio}/${borr.anioSiguiente}` })}</h3>
         <table style={tabla}>
           <thead><tr>
             <th style={{ ...tdLabel, width: 170 }}>{t("anualdoc.projects")}</th>
-            <th style={{ ...tdLabel, width: 60, textAlign: "center" }}>{t("anualdoc.score")}</th>
+            <th style={{ ...tdLabel, width: 90, textAlign: "center" }}>{t("anualdoc.score")}</th>
             <th style={tdLabel}>{t("anualdoc.comments")}</th>
           </tr></thead>
           <tbody>
@@ -6369,7 +6496,10 @@ function EvaluacionAnualWizard({ token, advisee, onBack }) {
               <tr key={d.clave}>
                 <td style={{ ...td, fontWeight: 500 }}>{d.etiqueta}</td>
                 <td style={{ ...td, textAlign: "center" }}>
-                  <input style={{ ...inCell, textAlign: "center" }} value={d.nota} onChange={(e) => setDim(d.clave, { nota: e.target.value })} />
+                  <select style={{ ...inCell, textAlign: "center" }} value={String(d.nota || "").toUpperCase()} onChange={(e) => setDim(d.clave, { nota: e.target.value })}>
+                    <option value="">—</option>
+                    {NOTAS_AREA.map((n) => <option key={n} value={n}>{n}</option>)}
+                  </select>
                 </td>
                 <td style={td}>
                   <textarea rows={Math.max(3, (d.comentarios || "").split("\n").length)} style={taCell}
@@ -6379,25 +6509,26 @@ function EvaluacionAnualWizard({ token, advisee, onBack }) {
             ))}
           </tbody>
         </table>
+        <p className="fine" style={{ margin: "-12px 0 20px", fontSize: 12 }}>{t("eaw.score_legend")}</p>
 
         <table style={tabla}><tbody>
           <tr>
             <td style={{ ...tdLabel, width: "34%" }}>{t("anualdoc.final_projects")}</td>
-            <td style={{ ...td, width: "12%" }}><input style={inCell} value={borr.retribucion.notaProyectos} onChange={(e) => setRet("notaProyectos", e.target.value)} /></td>
+            <td style={{ ...td, width: "12%" }}><input type="number" min="1" max="5" step="1" style={{ ...inCell, textAlign: "center", ...marcar(notaEnteraMal(borr.retribucion.notaProyectos)) }} value={borr.retribucion.notaProyectos} onChange={(e) => setRet("notaProyectos", e.target.value)} /></td>
             <td style={{ ...td, width: "20%" }}>{t("anualdoc.variable_60")}</td>
-            <td style={td}><input style={inCell} value={borr.retribucion.variable60} onChange={(e) => setRet("variable60", e.target.value)} /></td>
+            <td style={td}>{selectRet("variable60", OPC_VARIABLE)}</td>
           </tr>
           <tr>
             <td style={tdLabel}>{t("anualdoc.final_contrib")}</td>
-            <td style={td}><input style={inCell} value={borr.retribucion.notaContribucion} onChange={(e) => setRet("notaContribucion", e.target.value)} /></td>
+            <td style={td}><input type="number" min="1" max="5" step="1" style={{ ...inCell, textAlign: "center", ...marcar(notaEnteraMal(borr.retribucion.notaContribucion)) }} value={borr.retribucion.notaContribucion} onChange={(e) => setRet("notaContribucion", e.target.value)} /></td>
             <td style={td}>{t("anualdoc.variable")}</td>
-            <td style={td}><input style={inCell} value={borr.retribucion.variable} onChange={(e) => setRet("variable", e.target.value)} /></td>
+            <td style={td}>{selectRet("variable", OPC_VARIABLE)}</td>
           </tr>
           <tr>
             <td style={tdLabel}>{t("anualdoc.corp_objectives")}</td>
-            <td style={td}><input style={inCell} value={borr.retribucion.objetivosCorporativos} onChange={(e) => setRet("objetivosCorporativos", e.target.value)} /></td>
+            <td style={td}>{selectRet("objetivosCorporativos", OPC_OBJ_CORP)}</td>
             <td style={{ ...td, fontWeight: 700 }}>{t("anualdoc.total_variable", { yy })}</td>
-            <td style={td}><input style={inCell} value={borr.retribucion.totalVariable} onChange={(e) => setRet("totalVariable", e.target.value)} /></td>
+            <td style={td}>{pctInput("totalVariable")}</td>
           </tr>
         </tbody></table>
 
@@ -6405,11 +6536,17 @@ function EvaluacionAnualWizard({ token, advisee, onBack }) {
         <table style={tabla}><tbody>
           <tr>
             <td style={{ ...tdLabel, width: "18%" }}>{t("anualdoc.promotion")}</td>
-            <td style={{ ...td, width: "15%" }}><input style={inCell} value={borr.resultadoEval.promocion} onChange={(e) => setRes("promocion", e.target.value)} /></td>
+            <td style={{ ...td, width: "15%" }}>
+              <select style={inCell} value={String(borr.resultadoEval.promocion || "").toUpperCase().replace("SI", "SÍ")} onChange={(e) => setRes("promocion", e.target.value)}>
+                <option value="">—</option>
+                <option value="SÍ">SÍ</option>
+                <option value="NO">NO</option>
+              </select>
+            </td>
             <td style={{ ...tdLabel, width: "18%" }}>{t("anualdoc.position_next", { yy: yySig })}</td>
             <td style={{ ...td, width: "15%" }}><input style={inCell} value={borr.resultadoEval.cargoSiguiente} onChange={(e) => setRes("cargoSiguiente", e.target.value)} /></td>
             <td style={tdLabel}>{t("anualdoc.new_fixed_salary")}
-              <input style={{ ...inCell, fontWeight: 400, marginTop: 4 }} value={borr.resultadoEval.nuevoSalarioFijo} onChange={(e) => setRes("nuevoSalarioFijo", e.target.value)} />
+              <input type="number" min="0" style={{ ...inCell, fontWeight: 400, marginTop: 4, ...marcar(numeroMal(borr.resultadoEval.nuevoSalarioFijo)) }} value={borr.resultadoEval.nuevoSalarioFijo} onChange={(e) => setRes("nuevoSalarioFijo", e.target.value)} />
             </td>
           </tr>
         </tbody></table>
@@ -6431,19 +6568,29 @@ function EvaluacionAnualWizard({ token, advisee, onBack }) {
                   </div>
                 </td>
                 <td style={td}>
-                  <input style={{ ...inCell, textAlign: "center" }} value={o.deadline} onChange={(e) => setObj(i, { deadline: e.target.value })} />
+                  <input type="date" style={{ ...inCell, textAlign: "center" }} value={o.deadline} onChange={(e) => setObj(i, { deadline: e.target.value })} />
                 </td>
               </tr>
             ))}
           </tbody>
         </table>
-        <button className="secondary" style={{ marginBottom: 20 }}
+        <button className="secondary" style={{ marginBottom: 4 }}
           onClick={() => setBorr((b) => ({ ...b, objetivos: [...b.objetivos, { texto: "", deadline: "" }] }))}>
           {t("eaw.add_objective")}
         </button>
+        </div>
+
+        {valErrors.length > 0 && (
+          <div style={{ margin: "18px auto", maxWidth: 840, padding: "12px 16px", border: "1px solid #C1121F", borderRadius: 8, background: "#fff4f4" }}>
+            <p style={{ margin: "0 0 6px", fontWeight: 700, color: "#C1121F" }}>{t("eaw.val_intro")}</p>
+            <ul style={{ margin: 0, paddingLeft: 20, color: "#7a0f16", fontSize: 13 }}>
+              {valErrors.map((msg, i) => <li key={i}>{msg}</li>)}
+            </ul>
+          </div>
+        )}
 
         {subida && (
-          <div style={{ marginBottom: 16 }}>
+          <div style={{ margin: "18px 0" }}>
             <SavedOk text={t("eaw.uploaded_ok")} color="#000" />
             <div className="actions" style={{ justifyContent: "center" }}>
               {subida.htmlUrl && <button className="secondary" onClick={() => openAuthedFile(subida.htmlUrl, token)}>{t("dash.open_web_version")}</button>}
@@ -6465,9 +6612,25 @@ function EvaluacionAnualWizard({ token, advisee, onBack }) {
             </span>
           )}
         </div>
-        <div className="actions" style={{ marginTop: 10 }}>
-          <button className="secondary" onClick={() => setStep("resumen")}>{t("eaw.back_to_areas")}</button>
-        </div>
+        {!esManual && (
+          <div className="actions" style={{ marginTop: 10 }}>
+            <button className="secondary" onClick={() => setStep("resumen")}>{t("eaw.back_to_areas")}</button>
+          </div>
+        )}
+
+        {fuentePreview && (
+          <aside style={{
+            position: "fixed", top: 0, right: 0, height: "100vh", width: "clamp(320px, 32vw, 480px)",
+            background: "#fff", boxShadow: "-6px 0 24px rgba(0,0,0,.18)", zIndex: 1000,
+            display: "flex", flexDirection: "column",
+          }}>
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8, padding: "10px 14px", borderBottom: "1px solid var(--border)" }}>
+              <strong style={{ fontSize: 13, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{fuentePreview.etiqueta}</strong>
+              <button className="secondary" onClick={cerrarPreview} style={{ height: 28, minHeight: "auto", padding: "0 12px", fontSize: 12, flexShrink: 0 }}>{t("eaw.preview_close")}</button>
+            </div>
+            <iframe title={fuentePreview.etiqueta} src={fuentePreview.url} style={{ flex: 1, border: "none", width: "100%" }} />
+          </aside>
+        )}
       </section>
     );
   }
@@ -6614,7 +6777,7 @@ function App() {
   } else if (page?.type === "subir-informe") {
     content = <SubirInformePage token={token} advisee={page.advisee} onBack={backTo(page)} />;
   } else if (page?.type === "eval-anual") {
-    content = <EvaluacionAnualWizard token={token} advisee={page.advisee} onBack={backTo(page)} />;
+    content = <EvaluacionAnualWizard token={token} advisee={page.advisee} modo={page.modo} onBack={backTo(page)} />;
   } else if (page?.type === "activar-evaluaciones-proyecto") {
     content = <ActivarEvaluacionesProyectoPage token={token} user={user} onBack={() => navigate(null)} />;
   } else if (page?.type === "mis-proyectos-activos") {

@@ -1,9 +1,12 @@
 from fastapi import APIRouter, Body, Depends
 from fastapi.responses import JSONResponse
 
+import logging
+
 from ..deps import exigir_acceso_advisee, require_admin, require_session
 from ..files import url_archivo
 from ... import eval_anual_sesion as eval_sesion
+from ...notion_service import guardar_informe_final_estructurado
 from ...skill_informes_anual import generar_informe_anual, obtener_empleados_evaluacion_anual
 from ...utils import slug_archivo
 
@@ -80,6 +83,15 @@ def eval_anual_iniciar(datos: dict = Body(default={}), session=Depends(require_s
     if evaluado is None:
         return JSONResponse({"error": "Falta el campo evaluado."}, status_code=400)
     return eval_sesion.iniciar_sesion(evaluado, cargo=datos.get("cargo", "").strip())
+
+
+@router.post("/api/eval-anual/iniciar-manual")
+def eval_anual_iniciar_manual(datos: dict = Body(default={}), session=Depends(require_session)):
+    """Abre el informe para rellenarlo manualmente en la web (Word editable en blanco)."""
+    evaluado = _requiere_evaluado(datos.get("evaluado", ""), session)
+    if evaluado is None:
+        return JSONResponse({"error": "Falta el campo evaluado."}, status_code=400)
+    return eval_sesion.iniciar_manual(evaluado, cargo=datos.get("cargo", "").strip())
 
 
 @router.post("/api/eval-anual/confirmar-identidad")
@@ -163,7 +175,18 @@ def eval_anual_borrador_guardar(datos: dict = Body(default={}), session=Depends(
     evaluado = _requiere_evaluado(datos.get("evaluado", ""), session)
     if evaluado is None:
         return JSONResponse({"error": "Falta el campo evaluado."}, status_code=400)
-    return eval_sesion.guardar_borrador(evaluado, datos.get("borrador") or {})
+    res = eval_sesion.guardar_borrador(evaluado, datos.get("borrador") or {})
+    # Persiste también el borrador en Notion (Estado='Borrador') para que no dependa de la
+    # caché local: si el contenedor se reinicia, el borrador se recupera desde Notion.
+    borrador = res.get("borrador") if isinstance(res, dict) else None
+    if borrador:
+        try:
+            ca_nombre = session.get("persona", "") if not session.get("is_admin") else ""
+            guardado = guardar_informe_final_estructurado(ca_nombre, borrador, estado="Borrador")
+            res["notionUrl"] = guardado.get("url", "")
+        except Exception:
+            logging.exception("No se pudo persistir el borrador en Notion para %s", evaluado)
+    return res
 
 
 @router.post("/api/eval-anual/finalizar")

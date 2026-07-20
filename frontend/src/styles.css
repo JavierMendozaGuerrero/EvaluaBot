@@ -405,8 +405,13 @@ button:disabled, .button:disabled { opacity: .45; cursor: not-allowed; }
   white-space: nowrap;
 }
 
-/* Desglose de cumplimiento por ciclo × tipo en el perfil de admin */
-.eval-compliance-rows { margin-top: 6px; display: flex; flex-direction: column; gap: 4px; }
+/* Desglose de cumplimiento en el perfil de admin: año > mes > categoría > tipo.
+   Cada nivel sangra con un filete a la izquierda, como .advisee-gestion. */
+.eval-compliance-mes { margin-top: 14px; padding-left: 14px; border-left: 1px solid var(--border); }
+.eval-compliance-mes-nombre { margin: 0; font-size: 14px; }
+.eval-compliance-cat { margin-top: 8px; padding-left: 14px; }
+/* Los tipos cuelgan de su categoría: un escalón más de sangría y su puntito de lista. */
+.eval-compliance-rows { margin-top: 6px; padding-left: 14px; display: flex; flex-direction: column; gap: 4px; }
 .eval-compliance-row { display: flex; justify-content: space-between; gap: 16px; font-size: 14px; }
 .eval-compliance-ratio { font-variant-numeric: tabular-nums; color: var(--muted); }
 .advisee-detail-foto { width: clamp(120px, 22vw, 180px); height: clamp(120px, 22vw, 180px); border-radius: 50%; object-fit: cover; font-size: clamp(40px, 8vw, 56px); }

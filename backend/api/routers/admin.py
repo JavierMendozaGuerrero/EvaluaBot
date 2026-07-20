@@ -5,7 +5,7 @@ from fastapi import APIRouter, Body, Depends
 from ..deps import require_admin
 from ... import config
 from ...anonimato import cargar_config as cargar_anonimato, guardar_config as guardar_anonimato
-from ...utils import slug_archivo
+from ...utils import normalizar_nombre, slug_archivo
 
 router = APIRouter()
 
@@ -22,7 +22,18 @@ def anonimato_evaluadores_post(datos: dict = Body(default={}), session=Depends(r
     if "global_anonimo" in datos:
         cfg["global_anonimo"] = bool(datos["global_anonimo"])
     if "advisees_revelados" in datos:
-        cfg["advisees_revelados"] = list(datos["advisees_revelados"])
+        # Guardamos el nombre tal cual llega (se muestra al admin), pero sin repetidos:
+        # el mismo advisee puede llegar escrito de varias formas y duplicado en la lista
+        # haría imposible quitarle la revelación.
+        vistos = set()
+        limpios = []
+        for nombre in datos["advisees_revelados"]:
+            clave = normalizar_nombre(nombre)
+            if not clave or clave in vistos:
+                continue
+            vistos.add(clave)
+            limpios.append(nombre)
+        cfg["advisees_revelados"] = limpios
     guardar_anonimato(cfg)
     nuevos = set(cfg.get("advisees_revelados") or [])
     for advisee_cambiado in anteriores.symmetric_difference(nuevos):

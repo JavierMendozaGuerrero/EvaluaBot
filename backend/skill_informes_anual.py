@@ -1038,7 +1038,8 @@ def interpretar_evaluaciones_anual(emp_data: dict, cargo: str = "", criterios: s
     elif idioma == "pt":
         system += (
             "\n\nIDIOMA: Escreve TODO o texto dos comentários em português europeu (os campos "
-            "'lider', 'equipo', 'sin_nivel', 'contribution_to_firm' e 'resultado'). Os dados de "
+            "'lider', 'equipo', 'sin_nivel', 'contribution_to_firm', 'evaluaciones_adicionales' "
+            "e 'resultado'). Os dados de "
             "origem podem estar em espanhol; traduz o significado, não copies texto em espanhol. "
             "Mantém as chaves do JSON e as etiquetas de citação como [E3] exatamente como se indica. "
             "Quando não houver evidência para uma dimensão, escreve exatamente 'Informação "
@@ -1300,8 +1301,11 @@ def _tabla_dims(doc, dims, comentarios, fuentes=None):
 
 # ── HTML: generación ─────────────────────────────────────────────────────────
 
-def guardar_informe_anual_html(emp_data: dict, comentarios: dict, cargo: str = "", idioma: str = "es") -> str:
-    fuentes = comentarios.get("_fuentes", {})
+def guardar_informe_anual_html(emp_data: dict, comentarios: dict, cargo: str = "", idioma: str = "es",
+                               incluir_fuentes: bool = True) -> str:
+    # `incluir_fuentes=False` para todo documento que pueda acabar en manos del advisee: el anexo
+    # trae el texto crudo de cada evaluación y el nombre del evaluador. Ver guardar_informe_anual_word.
+    fuentes = comentarios.get("_fuentes", {}) if incluir_fuentes else {}
 
     def esc(v):
         return html_lib.escape(str(v or ""))
@@ -1553,7 +1557,8 @@ def _celda_emp(cell, label, valor, w):
 
 
 def guardar_informe_anual_word(emp_data: dict, comentarios: dict, cargo: str = "", idioma: str = "es",
-                               valores_ca: dict | None = None, nombre_archivo: str = "") -> str:
+                               valores_ca: dict | None = None, nombre_archivo: str = "",
+                               incluir_fuentes: bool = True) -> str:
     """Genera el .docx replicando la plantilla oficial de EVALUACIÓN ANUAL de IGENERIS.
 
     Campos que el sistema no posee (CA '26, salarios, % variable, promoción, deadlines,
@@ -1565,6 +1570,9 @@ def guardar_informe_anual_word(emp_data: dict, comentarios: dict, cargo: str = "
     objetivos[{texto,deadline}]). Si falta una clave, su hueco se queda en blanco.
     `nombre_archivo`: nombre del .docx a escribir en CARPETA_WEB (por defecto
     informe_anual_{slug}.docx).
+    `incluir_fuentes`: el anexo de Fuentes/Evidencia es SOLO para el CA. Lleva el texto literal
+    de cada evaluación y el nombre de quien la escribió, así que enseñárselo al advisee rompe el
+    anonimato de los evaluadores. Pásalo en False en cualquier documento que él pueda descargar.
     """
     if Document is None:
         raise RuntimeError("Instala python-docx: pip install python-docx")
@@ -1580,7 +1588,7 @@ def guardar_informe_anual_word(emp_data: dict, comentarios: dict, cargo: str = "
     def _v(d, clave):
         return str(d.get(clave) or "").strip()
 
-    fuentes = comentarios.get("_fuentes", {})
+    fuentes = comentarios.get("_fuentes", {}) if incluir_fuentes else {}
     ahora = datetime.now(timezone.utc)
     anio_eval = ahora.year - 1          # se evalúa el año anterior (p. ej. 2025 en marzo 2026)
     anio_sig = ahora.year               # año siguiente al evaluado
@@ -1700,7 +1708,7 @@ def guardar_informe_anual_word(emp_data: dict, comentarios: dict, cargo: str = "
     _dxb(ch0); _dxw(ch0, w_obj)
     _dxb(ch1); _dxw(ch1, w_dl)
     _dxr(ch0.paragraphs[0], "", size=9)
-    _dxr(ch1.paragraphs[0], "Deadline", bold=True, size=9, center=True)
+    _dxr(ch1.paragraphs[0], t("anual.deadline", idioma), bold=True, size=9, center=True)
     for i in range(n_filas):
         c0, c1 = t_obj.rows[i + 1].cells
         _dxb(c0); _dxw(c0, w_obj)

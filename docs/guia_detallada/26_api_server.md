@@ -14,7 +14,7 @@ El token se valida contra la capa de sesiones (`obtener_sesion_por_token`, del m
 - **Autenticado:** cualquier sesión válida.
 - **CA (Career Advisor / tutor):** el acceso a datos de un `evaluado`/`advisee` se comprueba con `obtener_advisees(...)` (comparando nombres normalizados) y, en el caso de la evaluación anual y PDFs de fuente, con el helper [`_exigir_acceso_advisee()`](../backend/api_server.py#L155).
 - **Admin:** `sesion.get("is_admin")` da acceso total y evita las comprobaciones de tutela.
-- **Propio (self-service):** en informes/trayectoria el propio empleado puede ver su documento solo si su CA ha activado el acceso (`ca_tiene_acceso_activo` / `advisee_tiene_acceso_individual`).
+- **Propio (self-service):** en informes/trayectoria el propio empleado puede ver su documento solo si su CA le ha concedido el acceso individual (`advisee_tiene_acceso_individual`). El CA solo puede concederlo si ya hay una versión **Final** publicada del informe: un borrador no cuenta (`existe_informe_final`).
 
 **Cómo enruta las peticiones:** No hay router declarativo. Cada método HTTP (`do_GET`, `do_POST`, `do_DELETE`) parsea la ruta con `urllib.parse.urlparse(self.path).path` y encadena comparaciones `if ruta == "..."` (o `ruta.startswith(...)` para prefijos como `/api/eval-anual/` y `/api/files/`). Si ninguna coincide, responde 404. Todo el cuerpo va dentro de un `try/except` que captura `PermissionError` → 403 y cualquier otra excepción → 500 (registrando el traceback con `logging.exception`). Las respuestas se serializan con [`responder_json()`](../backend/api_server.py#L134), que aplica gzip si el cliente lo acepta y el cuerpo supera 1 KB.
 
@@ -38,7 +38,6 @@ Acceso: **público** = sin sesión; **auth** = cualquier sesión válida; **CA**
 | GET | `/api/criterios-evaluacion` | Criterios de evaluación por `grupo` (negocio/palantir/middleoffice) | auth | [`do_GET`](../backend/api_server.py#L246) |
 | GET | `/api/objetivos` | Objetivos de una persona (query `nombre`) | auth | [`do_GET`](../backend/api_server.py#L257) |
 | GET | `/api/evaluados-anual` | Empleados con evaluación anual pendiente/disponible | admin | [`do_GET`](../backend/api_server.py#L266) |
-| GET | `/api/acceso-advisees` | Indica si el CA tiene el acceso global de advisees activado | auth (CA) | [`do_GET`](../backend/api_server.py#L275) |
 | GET | `/api/acceso-advisee-individual` | Indica si un `advisee` concreto tiene acceso individual activo | auth (CA) | [`do_GET`](../backend/api_server.py#L283) |
 | GET | `/api/informe-final` | URLs del informe final (docx/html) de un `evaluado`; con lógica self-service | CA / self / admin | [`do_GET`](../backend/api_server.py#L295) |
 | GET | `/api/evaluaciones-proyecto-activas` | Proyectos con evaluación activa para la persona | auth | [`do_GET`](../backend/api_server.py#L340) |
@@ -79,7 +78,6 @@ Acceso: **público** = sin sesión; **auth** = cualquier sesión válida; **CA**
 | POST | `/api/eval-anual/responder-area` | Registra la respuesta de un área (`clave`, `texto`) | CA / admin | [`do_POST`](../backend/api_server.py#L731) |
 | POST | `/api/eval-anual/confirmar-area` | Confirma un área de la evaluación anual | CA / admin | [`do_POST`](../backend/api_server.py#L735) |
 | POST | `/api/eval-anual/finalizar` | Finaliza la sesión y devuelve URLs del informe anual | CA / admin | [`do_POST`](../backend/api_server.py#L739) |
-| POST | `/api/acceso-advisees` | Activa/desactiva el acceso global de advisees del CA | auth (CA) | [`do_POST`](../backend/api_server.py#L748) |
 | POST | `/api/acceso-advisee-individual` | Activa/desactiva el acceso individual de un `advisee` | auth (CA) | [`do_POST`](../backend/api_server.py#L756) |
 | POST | `/api/subir-informe-final` | Sube (multipart) el docx del informe final y lo convierte a HTML | CA / admin | [`do_POST`](../backend/api_server.py#L767) |
 | POST | `/api/activar-evaluaciones-proyecto` | Activa evaluaciones de proyecto para una lista de empleados | auth (manager) | [`do_POST`](../backend/api_server.py#L817) |
@@ -194,7 +192,7 @@ Clase servidor ([api_server.py:92](../backend/api_server.py#L92)) que hereda de 
 - **Qué hace:** Sirve un archivo generado (docx/pdf/html) desde `config.CARPETA_WEB` aplicando control de acceso y caché.
 - **Parámetros:** `nombre_archivo` (ruta relativa tras `/api/files/`), `query` (query string con `evaluado`).
 - **Devuelve/Responde:** El binario del archivo con su `Content-Type` (docx/pdf/html), `Cache-Control: private, max-age=300` y `ETag`. Devuelve 304 si el `If-None-Match` coincide; 404 si el archivo no existe; 403 en violaciones de acceso.
-- **Efectos y control de acceso:** Requiere sesión. Determina el tipo de archivo por su prefijo respecto al `slug` del evaluado (borrador `informe_`/`informe_anual_`, `trayectoria_`, `informe_final_`, `opiniones_ca_`, o PDFs de fuente `evals_proyecto`/`seguimiento_personal`/`evals_mensuales`/`info_completa`). Si el nombre no corresponde a la persona autorizada → 403. Borradores, opiniones y PDFs de fuente son solo para CA/admin. Trayectoria e informe final permiten al propio empleado (`es_propio`) solo si su CA tiene el acceso activo (`ca_tiene_acceso_activo`). Usa `os.path.basename` para evitar path traversal.
+- **Efectos y control de acceso:** Requiere sesión. Determina el tipo de archivo por su prefijo respecto al `slug` del evaluado (borrador `informe_`/`informe_anual_`, `trayectoria_`, `informe_final_`, `opiniones_ca_`, o PDFs de fuente `evals_proyecto`/`seguimiento_personal`/`evals_mensuales`/`info_completa`). Si el nombre no corresponde a la persona autorizada → 403. Borradores, opiniones y PDFs de fuente son solo para CA/admin. Trayectoria e informe final permiten al propio empleado (`es_propio`) solo si su CA le ha concedido el acceso individual (`advisee_tiene_acceso_individual`). Usa `os.path.basename` para evitar path traversal.
 - **Notas:** [api_server.py:967](../backend/api_server.py#L967). Lee el archivo completo en memoria antes de enviarlo.
 
 ---

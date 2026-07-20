@@ -26,7 +26,7 @@ Documentación exhaustiva del frontend de EvaluaBot. Todo el código de la SPA v
 
 **Autenticación (token).** El login (`/api/login`) devuelve `{ token, user }`. Según el check "Recuérdame" se guarda en `localStorage` (persistente) o `sessionStorage` (sesión). En cada arranque, `App` valida el token contra `/api/me`; si falla, limpia caché y token. `handleLogout()` ([main.jsx:3960](../frontend/src/main.jsx#L3960)) borra ambos almacenamientos, la caché y todo el estado.
 
-**i18n.** La internacionalización se importa desde `./i18n` ([main.jsx:8](../frontend/src/main.jsx#L8)): `t(clave, params)` traduce, `setLang` / `getLang` fijan/leen el idioma, `nombreMes` da el nombre del mes. El idioma se establece a partir de `user.idioma` tras login y tras `/api/me`. **Ojo:** los tres chats conversacionales (`ChatEvalPersonal`, `ChatEvalCA` y partes de otros) tienen **muchos textos en español "hardcodeados"**, no traducidos con `t()`.
+**i18n.** La internacionalización se importa desde `./i18n` ([main.jsx:8](../frontend/src/main.jsx#L8)): `t(clave, params)` traduce, `setLang` / `getLang` fijan/leen el idioma, `nombreMes` da el nombre del mes. El idioma se establece a partir de `user.idioma` tras login y tras `/api/me`. El catálogo `STRINGS` lleva `es`/`en`; el portugués es un overlay aparte (`pt.js`) que **genera** `backend/generar_i18n_pt.py` traduciendo con Claude — no se escribe a mano, y si falta una clave en `pt` el motor cae a `es`.
 
 **Barra de carga global.** Un pequeño *store* (`_loading`, [main.jsx:29](../frontend/src/main.jsx#L29)) cuenta peticiones en curso y el componente invisible `TopLoadingBar` ([main.jsx:3649](../frontend/src/main.jsx#L3649)) traduce ese progreso a variables CSS que pintan una barra sobre `.nav`.
 
@@ -288,10 +288,9 @@ Hashes de URL reconocidos: `#privacidad`, `#terminos` (páginas legales); `?rese
   - **Panel admin embebido** (si admin y sección "admin" activa): selector de persona evaluada, alternancia "Borrador de Claude" / "Final del CA", generación de informe anual (`/api/generar`, `/api/generar-anual`) y acceso al informe final.
   - **Modal de opiniones del CA** cuando `opinionesModal` está activo.
 - **Acciones y endpoints (principales):**
-  - Carga inicial (varios `apiRequestCached`): `/api/evaluados`, `/api/mis-advisees`, `/api/evaluados-anual` (admin), `/api/acceso-advisees`, `/api/informe-final`, `/api/mi-perfil`, `/api/objetivos`, `/api/evaluaciones-proyecto-activas`, `/api/proyectos-manager`.
+  - Carga inicial (varios `apiRequestCached`): `/api/evaluados`, `/api/mis-advisees`, `/api/evaluados-anual` (admin), `/api/informe-final`, `/api/mi-perfil`, `/api/objetivos`, `/api/evaluaciones-proyecto-activas`, `/api/proyectos-manager`.
   - `generate()` → `POST /api/generar`; `generateAnual()` → `POST /api/generar-anual`; `downloadAnual()` descarga el `.docx`.
   - `loadOpiniones()` → `GET /api/opiniones-ca?advisee=...`.
-  - `toggleAcceso()` → `POST /api/acceso-advisees`.
   - `openFile()` abre HTML o descarga Word.
   - Navegación: los ítems del To-do llaman a `onNavigate({ type: ... })`.
 - **Props / estado:** `token`, `user`, `onLogout`, `onNavigate`, `onBackToRoleSelect`. Estado muy amplio (evaluados, advisees, perfil, misObjetivos, proyectosActivos, proyectosManager, opinionesModal, adminModo, informes, flags de colapsables, etc.).

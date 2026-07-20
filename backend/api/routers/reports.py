@@ -17,11 +17,11 @@ from ..files import envolver_informe_final_html, url_archivo
 from ...anonimato import cargar_config as cargar_anonimato, evaluadores_visibles_para_advisee
 from ...notion_service import (
     advisee_tiene_acceso_individual,
-    ca_tiene_acceso_activo,
     guardar_informe_final_estructurado,
     idioma_de_persona,
     obtener_advisees,
     obtener_ca_de_empleado,
+    obtener_informe_estructurado_actual,
     obtener_informe_final_estructurado_reciente,
 )
 from ...reports import generar_archivo_trayectoria, generar_archivos_informe
@@ -41,7 +41,13 @@ router = APIRouter()
 
 
 @router.get("/api/informe-final")
-def informe_final(evaluado: str = "", session=Depends(require_session)):
+def informe_final(evaluado: str = "", incluir_borrador: bool = False, session=Depends(require_session)):
+    """URLs del informe del evaluado. Por defecto SOLO la versión publicada.
+
+    incluir_borrador=1 lo pide el CA desde 'Ver versión actual del informe', donde sí quiere
+    ver su trabajo en curso. Es opt-in a propósito: el resto de pantallas (panel de admin,
+    subir informe) hablan de "el informe final" y enseñar ahí un borrador engañaría. Al
+    advisee no se le sirve el borrador aunque lo pida: para él solo existe lo publicado."""
     ca_nombre = session.get("persona", "")
     advisees_ca = obtener_advisees(
         ca_nombre,
@@ -52,10 +58,7 @@ def informe_final(evaluado: str = "", session=Depends(require_session)):
     es_propio = normalizar_nombre(evaluado) == normalizar_nombre(ca_nombre)
     if es_propio and not es_admin and not es_ca:
         ca_del_evaluado = obtener_ca_de_empleado(evaluado)
-        acceso = bool(
-            ca_del_evaluado
-            and (ca_tiene_acceso_activo(ca_del_evaluado) or advisee_tiene_acceso_individual(evaluado, ca_del_evaluado))
-        )
+        acceso = bool(ca_del_evaluado and advisee_tiene_acceso_individual(evaluado, ca_del_evaluado))
         if not acceso:
             return {"disponible": False, "accesoActivo": False, "mensaje": "Tu CA aún no ha publicado tu informe final."}
         # Fuente de verdad: el informe estructurado en Notion → se regenera el Word 1:1.
@@ -65,7 +68,7 @@ def informe_final(evaluado: str = "", session=Depends(require_session)):
         return {"disponible": False, "accesoActivo": True, "mensaje": "Tu CA aún no ha subido tu informe final."}
     if not es_admin and not es_ca:
         raise PermissionError("No tienes permiso para ver este informe.")
-    reg = _regenerar_desde_notion(evaluado)
+    reg = _regenerar_desde_notion(evaluado, incluir_borrador=incluir_borrador)
     if reg:
         return {"disponible": True, **reg}
     return {"disponible": False, "mensaje": "No hay informe final disponible."}
@@ -173,7 +176,7 @@ def trayectoria(datos: dict = Body(default={}), session=Depends(require_session)
         if not es_propio:
             raise PermissionError("Solo administradores o CAs pueden generar informes.")
         ca_tray = obtener_ca_de_empleado(evaluado)
-        if not (ca_tray and (ca_tiene_acceso_activo(ca_tray) or advisee_tiene_acceso_individual(evaluado, ca_tray))):
+        if not (ca_tray and advisee_tiene_acceso_individual(evaluado, ca_tray)):
             raise PermissionError("Tu CA aún no ha publicado tu informe final.")
     validar_acceso_sesion(session, evaluado, extra_permitidos=advisees_ca)
     total, slug = generar_archivo_trayectoria(evaluado)
@@ -214,30 +217,48 @@ def _publicar_informe_final(evaluado: str, docx_filename: str, session) -> dict:
     return resp_data
 
 
-def _regenerar_desde_notion(evaluado: str) -> dict | None:
+def _regenerar_desde_notion(evaluado: str, incluir_borrador: bool = False) -> dict | None:
     """Si hay informe estructurado en Notion, regenera el .docx (+HTML) desde él y devuelve las
-    URLs. Así el advisee descarga siempre el Word rellenado con lo que el CA guardó. None si no hay."""
+    URLs y el 'estado' ('Final'|'Borrador'). Así el advisee descarga siempre el Word rellenado
+    con lo que el CA guardó. None si no hay.
+
+    incluir_borrador=True (solo CA/admin): sirve la versión actual aunque sea un borrador en
+    curso, y CON el anexo de Fuentes/Evidencia, que es la razón de ser de esta vista: el CA
+    repasa el informe contrastando de dónde sale cada cosa.
+
+    Por eso se escribe siempre con nombre propio (`revision_informe_*`), sea Borrador o Final,
+    y no reutiliza `informe_final_*`: ese lo descarga el advisee con acceso concedido, así que
+    pisarlo con un borrador en curso —o con el anexo de fuentes— se lo filtraría."""
     try:
-        borrador = obtener_informe_final_estructurado_reciente(evaluado)
+        if incluir_borrador:
+            actual = obtener_informe_estructurado_actual(evaluado)
+        else:
+            contenido = obtener_informe_final_estructurado_reciente(evaluado)
+            actual = {"estado": "Final", "contenido": contenido} if contenido else None
     except Exception:
         logging.exception("No se pudo leer el informe estructurado de %s", evaluado)
-        borrador = None
-    if not borrador:
+        actual = None
+    if not actual:
         return None
+    borrador = actual["contenido"]
+    es_borrador = actual["estado"] == "Borrador"
+    titulo_doc = "Borrador del informe" if es_borrador else "Informe final"
     try:
         slug_ev = slug_archivo(evaluado)
-        docx_filename = f"informe_final_{slug_ev}.docx"
-        eval_anual_sesion.word_desde_borrador(borrador, docx_filename)
-        resp = {"docxUrl": url_archivo(docx_filename, evaluado)}
+        prefijo = "revision_informe" if incluir_borrador else "informe_final"
+        docx_filename = f"{prefijo}_{slug_ev}.docx"
+        fuentes = eval_anual_sesion.fuentes_para_revision(evaluado) if incluir_borrador else None
+        eval_anual_sesion.word_desde_borrador(borrador, docx_filename, fuentes=fuentes)
+        resp = {"estado": actual["estado"], "docxUrl": url_archivo(docx_filename, evaluado)}
         if mammoth:
             try:
-                html_filename = f"informe_final_{slug_ev}.html"
+                html_filename = f"{prefijo}_{slug_ev}.html"
                 docx_path = os.path.join(config.CARPETA_WEB, docx_filename)
                 html_path = os.path.join(config.CARPETA_WEB, html_filename)
                 with open(docx_path, "rb") as df:
                     resultado_html = mammoth.convert_to_html(df)
                 documento = envolver_informe_final_html(
-                    resultado_html.value, f"Informe final · {evaluado}" if evaluado else "Informe final"
+                    resultado_html.value, f"{titulo_doc} · {evaluado}" if evaluado else titulo_doc
                 )
                 with open(html_path, "w", encoding="utf-8") as hf:
                     hf.write(documento)

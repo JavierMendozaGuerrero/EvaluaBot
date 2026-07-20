@@ -80,7 +80,6 @@ RUTAS_GET = [
     "/api/opiniones-ca?advisee={evaluado}",
     "/api/objetivos?nombre={evaluado}",
     "/api/tareas-slack",
-    "/api/acceso-advisees",
     "/api/acceso-advisee-individual?advisee={evaluado}",
     "/api/informe-final?evaluado={evaluado}",
     "/api/evaluaciones-proyecto-activas",

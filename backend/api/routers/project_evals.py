@@ -30,6 +30,7 @@ from ...project_evals import (
     obtener_proyectos_manager,
     tipo_evaluacion_por_jerarquia,
 )
+from ...utils import normalizar_nombre
 
 router = APIRouter()
 
@@ -170,9 +171,13 @@ def modificar_equipo_proyecto(datos: dict = Body(default={}), session=Depends(re
         return JSONResponse({"error": t("pe.err_missing_fields", idi)}, status_code=400)
     if (denegado := _no_es_su_proyecto(session, proyecto)) is not None:
         return denegado
+    if accion == "eliminar" and normalizar_nombre(empleado) == normalizar_nombre(manager):
+        # El manager es quien activó el proyecto: si se da de baja a sí mismo, el proyecto
+        # queda sin nadie que pueda gestionarlo (obtener_proyectos_manager va por Activado_por).
+        return JSONResponse({"error": t("pe.err_remove_self", idi)}, status_code=400)
     if accion == "añadir":
         return añadir_miembro_proyecto(manager, proyecto, empleado, idi)
-    return eliminar_miembro_proyecto(proyecto, empleado, idi)
+    return eliminar_miembro_proyecto(proyecto, empleado, idi, manager)
 
 
 @router.post("/api/recordatorio-proyecto")

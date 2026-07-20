@@ -3,8 +3,10 @@
 Reglas (decididas con negocio, 15/07/2026):
   - Evals mensuales: el CA solo lee las de un superior. Bottom-to-top, entre iguales y
     sin dirección registrada no salen (ver _solo_top_down).
-  - Evals de proyecto: se ven las dos direcciones y el proyecto, nunca el 'tipo' (delata
-    el nivel del evaluador).
+  - Evals de proyecto: se ven las dos direcciones, el proyecto y —desde el 20/07/2026, a
+    petición de negocio— el tipo de evaluación, agrupando por proyecto y dentro de él por
+    tipo. Antes el tipo se ocultaba porque delata el nivel del evaluador; se acepta ese
+    coste a cambio de que el CA entienda de dónde viene cada bloque.
   - En ninguna de las dos sale el nombre del evaluador salvo para admin (anonimo=False).
   - El PDF combinado hereda exactamente las mismas reglas.
 
@@ -77,17 +79,42 @@ def test_mensuales_solo_top_down_y_sin_nombre(fuentes):
         assert etiqueta not in texto
 
 
-def test_proyecto_ambas_direcciones_con_proyecto_pero_sin_nombre_ni_nivel(fuentes):
+def test_proyecto_ambas_direcciones_agrupadas_por_proyecto_y_tipo_sin_nombre(fuentes):
     slug = m.generar_pdf_evals_proyecto(ADVISEE, anonimo=True)
     texto = _texto(fuentes, f"evals_proyecto_{slug}.pdf")
 
     assert "CUERPO_PROY_TOP_DOWN" in texto
     assert "CUERPO_PROY_BOTTOM_UP" in texto
     assert "Proyecto Alfa" in texto and "Proyecto Beta" in texto
+    assert "Recibida del manager" in texto
+    assert "Recibida del equipo" in texto
+    # El nombre del evaluador sigue oculto: el tipo se muestra, la identidad no.
     for nombre in NOMBRES:
         assert nombre not in texto
-    assert "managers a miembros" not in texto
-    assert "miembros del equipo a managers" not in texto
+
+
+def test_proyecto_ordena_por_proyecto_y_dentro_por_tipo(fuentes):
+    """Autoevaluación primero, luego lo recibido; y todo el bloque de un proyecto junto."""
+    datos = [
+        {"proyecto": "Proyecto Beta", "evaluador": "X", "respuestas": "B_MANAGER",
+         "tipo": "Evaluación de managers a miembros del equipo", "fecha": "2026-07-01"},
+        {"proyecto": "Proyecto Alfa", "evaluador": "X", "respuestas": "A_MANAGER",
+         "tipo": "Evaluación de managers a miembros del equipo", "fecha": "2026-07-02"},
+        {"proyecto": "Proyecto Alfa", "evaluador": ADVISEE, "respuestas": "A_AUTO",
+         "tipo": "Autoevaluación", "fecha": "2026-07-03"},
+    ]
+    monkey = m.obtener_evaluaciones_proyecto_por_evaluado
+    m.obtener_evaluaciones_proyecto_por_evaluado = lambda a: list(datos)
+    try:
+        entradas = m._entradas_evals_proyecto(ADVISEE, anonimo=True)
+    finally:
+        m.obtener_evaluaciones_proyecto_por_evaluado = monkey
+
+    assert [(e["grupo"], e["subgrupo"]) for e in entradas] == [
+        ("Proyecto Alfa", "Autoevaluación"),
+        ("Proyecto Alfa", "Recibida del manager"),
+        ("Proyecto Beta", "Recibida del manager"),
+    ]
 
 
 def test_pdf_combinado_hereda_las_mismas_reglas(fuentes):
@@ -100,7 +127,8 @@ def test_pdf_combinado_hereda_las_mismas_reglas(fuentes):
         assert oculto not in texto
     for nombre in NOMBRES:
         assert nombre not in texto
-    assert "managers a miembros" not in texto
+    # El combinado agrupa igual que el PDF individual de proyecto.
+    assert "Recibida del manager" in texto
 
 
 def test_admin_ve_nombres_pero_nunca_el_feedback_confidencial(fuentes):

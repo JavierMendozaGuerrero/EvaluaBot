@@ -4,6 +4,10 @@ import "./styles/globals.css";
 import "./styles/components.css";
 import "./styles.css";
 import { t, tieneClave, setLang, setLangManual, getLang, subscribeLang, nombreMes } from "./i18n";
+// El logo se importa (no se escribe la ruta a mano) para que Vite lo copie a dist/
+// y reescriba la URL en el build. Una ruta literal "/src/logo.png" solo funciona
+// con el servidor de desarrollo y da 404 en produccion.
+import logoUrl from "./logo.png";
 
 // El texto de cada documento legal se carga bajo demanda (import dinámico) al abrir
 // la página, para no arrastrar el markdown en el bundle inicial.
@@ -149,6 +153,36 @@ function stopLoading() {
   _emitLoading();
 }
 
+// Las fotos van en <img src> y las descarga el navegador por su cuenta, fuera de
+// apiRequest: la barra llegaba al 100% con la rejilla todavía sin caras, y las fotos
+// aparecían después de que dijera "listo". Precargarlas contándolas en la tanda hace
+// que la barra no termine hasta que están de verdad.
+//
+// Quien llama debe tener ya un hueco pedido en la tanda (startLoading) para que el
+// contador no baje a 0 entre el JSON y esta precarga: si llegara a 0, la tanda se
+// cerraría y las fotos abrirían otra, con la barra reapareciendo desde cero.
+function precargarImagenes(urls, { timeoutMs = 8000 } = {}) {
+  const pendientes = [...new Set(urls.filter(Boolean))];
+  return Promise.all(pendientes.map((url) => new Promise((resolve) => {
+    startLoading();
+    let acabado = false;
+    // Una foto rota (onerror) o una URL de Notion que no responde no puede dejar la
+    // barra clavada: pase lo que pase se libera el hueco una sola vez.
+    const acabar = () => {
+      if (acabado) return;
+      acabado = true;
+      clearTimeout(temporizador);
+      stopLoading();
+      resolve();
+    };
+    const temporizador = setTimeout(acabar, timeoutMs);
+    const img = new Image();
+    img.onload = acabar;
+    img.onerror = acabar;
+    img.src = url;
+  })));
+}
+
 // Traduce el error que devuelve el backend. El backend manda `error` (texto en español,
 // ya escrito para el usuario) y, cuando sabe qué ha pasado, un `code` estable: si ese
 // código está traducido lo pintamos en el idioma del usuario, y si no cae al texto del
@@ -157,6 +191,14 @@ function mensajeDeError(data) {
   const clave = data && data.code ? `err.${data.code}` : "";
   if (clave && tieneClave(clave)) return t(clave);
   return (data && data.error) || t("common.err_generic");
+}
+
+// Equivalente en JS de `normalizar_nombre` del backend (backend/utils.py): pliega
+// tildes y espacios para que "Pedrós" y "Pedros" comparen igual. Los nombres vienen
+// de Notion y no siempre llegan escritos igual en cada sitio.
+function normalizarNombre(valor) {
+  return (valor || "").trim().toLowerCase().split(/\s+/).join(" ")
+    .normalize("NFD").replace(/\p{Mn}/gu, "");
 }
 
 async function apiRequest(path, { token, method = "GET", body } = {}) {
@@ -499,7 +541,7 @@ function LegalPage({ doc, onBack }) {
   return (
     <main className="page">
       <nav className="nav">
-        <a className="brand" href="/"><img src="/src/logo.png" alt="igeneris" className="brand-logo" /></a>
+        <a className="brand" href="/"><img src={logoUrl} alt="igeneris" className="brand-logo" /></a>
         <NavBack onBack={onBack} />
       </nav>
       <div className="legal-wrap">
@@ -517,7 +559,7 @@ function AdminRoleSelect({ user, onChoose, onLogout }) {
   return (
     <main className="page auth-page">
       <nav className="nav">
-        <a className="brand" href="/"><img src="/src/logo.png" alt="igeneris" className="brand-logo" /></a>
+        <a className="brand" href="/"><img src={logoUrl} alt="igeneris" className="brand-logo" /></a>
         <div className="nav-user">
           <div className="nav-user-info">
             <span className="nav-user-name">{persona}</span>
@@ -563,16 +605,31 @@ function AdminPanel({ token, onBack }) {
   const [detalleCumplimiento, setDetalleCumplimiento] = useState(null);
 
   useEffect(() => {
+    let vivo = true;
+    // Hueco reservado en la tanda hasta tener las fotos: la lista se pinta en cuanto
+    // llega el JSON (los nombres se ven ya), pero la barra sigue viva mientras bajan
+    // las caras, en vez de decir "listo" y que luego aparezcan.
+    startLoading();
     apiRequest("/api/evaluados", { token })
-      .then((data) => setEvaluados(data.evaluados || []))
+      .then(async (data) => {
+        const lista = data.evaluados || [];
+        if (!vivo) return;
+        setEvaluados(lista);
+        setCargandoEvaluados(false);
+        await precargarImagenes(lista.map((e) => e.foto));
+      })
       .catch(() => {})
-      .finally(() => setCargandoEvaluados(false));
+      .finally(() => {
+        stopLoading();
+        if (vivo) setCargandoEvaluados(false);
+      });
     apiRequest("/api/anonimato-evaluadores", { token })
       .then((data) => setAnonimato(data))
       .catch(() => {});
     apiRequest("/api/cumplimiento-evaluaciones", { token })
       .then((data) => setCumplimiento(data.cumplimiento || {}))
       .catch(() => {});
+    return () => { vivo = false; };
   }, [token]);
 
   useEffect(() => {
@@ -614,8 +671,9 @@ function AdminPanel({ token, onBack }) {
     setAnonLoading(true);
     try {
       const revelados = anonimato.advisees_revelados || [];
-      const nuevos = revelados.includes(nombre)
-        ? revelados.filter((n) => n !== nombre)
+      const objetivo = normalizarNombre(nombre);
+      const nuevos = revelados.some((n) => normalizarNombre(n) === objetivo)
+        ? revelados.filter((n) => normalizarNombre(n) !== objetivo)
         : [...revelados, nombre];
       const data = await apiRequest("/api/anonimato-evaluadores", {
         token, method: "POST", body: { advisees_revelados: nuevos },
@@ -705,7 +763,7 @@ function AdminPanel({ token, onBack }) {
     return (
       <main className="page">
         <nav className="nav">
-          <a className="brand" href="/"><img src="/src/logo.png" alt="igeneris" className="brand-logo" /></a>
+          <a className="brand" href="/"><img src={logoUrl} alt="igeneris" className="brand-logo" /></a>
           <button className="link-button" onClick={() => { setSelected(null); setInformeFinal(null); setStatusMsg(""); setFuenteError(""); }}>{t("common.back")}</button>
         </nav>
         <div className="admin-employee-wrap">
@@ -759,7 +817,8 @@ function AdminPanel({ token, onBack }) {
                   <p className="kicker">Evaluadores</p>
                   {(() => {
                     const globalRevelado = !anonimato.global_anonimo;
-                    const individualRevelado = (anonimato.advisees_revelados || []).includes(selected.nombre);
+                    const individualRevelado = (anonimato.advisees_revelados || [])
+                      .some((n) => normalizarNombre(n) === normalizarNombre(selected.nombre));
                     const visible = globalRevelado || individualRevelado;
                     return (
                       <button
@@ -805,21 +864,29 @@ function AdminPanel({ token, onBack }) {
                   <p className="fine">{t("admin.eval_compliance_empty")}</p>
                 ) : (
                   <div className="objetivos-list">
-                    {detalleCumplimiento.map((ciclo, i) => (
-                      <article key={i} className="objetivo-item">
-                        <p className="opinion-fecha fine">{t("admin.eval_cycle")} {ciclo.ciclo}</p>
-                        <div className="eval-compliance-rows">
-                          {["mensual", "personal", "ca", "proyecto", "extra"]
-                            .filter((tp) => ciclo.tipos[tp])
-                            .map((tp) => (
-                              <div key={tp} className="eval-compliance-row">
-                                <span>{t(`admin.eval_type_${tp}`)}</span>
-                                <span className="eval-compliance-ratio">
-                                  {ciclo.tipos[tp].realizadas}/{ciclo.tipos[tp].enviadas}
-                                </span>
+                    {detalleCumplimiento.map((anio) => (
+                      <article key={anio.anio} className="objetivo-item">
+                        <p className="kicker">{t("admin.eval_year")} {anio.anio}</p>
+                        {anio.meses.map((mes) => (
+                          <div key={mes.mes} className="eval-compliance-mes">
+                            <p className="eval-compliance-mes-nombre">{nombreMes(mes.mes - 1)}</p>
+                            {mes.categorias.map((cat) => (
+                              <div key={cat.categoria} className="eval-compliance-cat">
+                                <p className="fine">{t(`admin.eval_cat_${cat.categoria}`)}</p>
+                                <div className="eval-compliance-rows">
+                                  {cat.tipos.map((tp) => (
+                                    <div key={tp.tipo} className="eval-compliance-row">
+                                      {/* Un tipo nuevo en Notion que aún no esté traducido se pinta
+                                          con su clave cruda antes que con "admin.eval_type_loquesea". */}
+                                      <span><span className="dash-dot" />{tieneClave(`admin.eval_type_${tp.tipo}`) ? t(`admin.eval_type_${tp.tipo}`) : tp.tipo}</span>
+                                      <span className="eval-compliance-ratio">{tp.realizadas}/{tp.enviadas}</span>
+                                    </div>
+                                  ))}
+                                </div>
                               </div>
                             ))}
-                        </div>
+                          </div>
+                        ))}
                       </article>
                     ))}
                   </div>
@@ -840,7 +907,7 @@ function AdminPanel({ token, onBack }) {
     return (
       <main className="page">
         <nav className="nav">
-          <a className="brand" href="/"><img src="/src/logo.png" alt="igeneris" className="brand-logo" /></a>
+          <a className="brand" href="/"><img src={logoUrl} alt="igeneris" className="brand-logo" /></a>
           <button className="link-button" onClick={() => setVistaGlobalConfidencial(false)} style={{ marginLeft: "auto" }}>{t("common.back")}</button>
         </nav>
         <div className="admin-search-wrap">
@@ -883,7 +950,7 @@ function AdminPanel({ token, onBack }) {
   return (
     <main className="page">
       <nav className="nav">
-        <a className="brand" href="/"><img src="/src/logo.png" alt="igeneris" className="brand-logo" /></a>
+        <a className="brand" href="/"><img src={logoUrl} alt="igeneris" className="brand-logo" /></a>
         {anonimato && (
           <button
             className="link-button"
@@ -1018,7 +1085,7 @@ function MisObjetivosPage({ token, persona, onBack }) {
   return (
     <main className="page">
       <nav className="nav">
-        <a className="brand" href="/"><img src="/src/logo.png" alt="igeneris" className="brand-logo" /></a>
+        <a className="brand" href="/"><img src={logoUrl} alt="igeneris" className="brand-logo" /></a>
         <NavBack onBack={onBack} />
       </nav>
       <section className="hero dashboard-hero">
@@ -1161,7 +1228,7 @@ function ObjetivosPage({ token, advisee, caName, onBack, vista = "form", onCambi
   return (
     <main className="page">
       <nav className="nav">
-        <a className="brand" href="/"><img src="/src/logo.png" alt="igeneris" className="brand-logo" /></a>
+        <a className="brand" href="/"><img src={logoUrl} alt="igeneris" className="brand-logo" /></a>
         <NavBack onBack={onBack} />
       </nav>
       <div className="profile-wrap" style={{ flex: 1 }}>
@@ -1426,7 +1493,7 @@ function AuthScreen({ onLogin }) {
   return (
     <main className="page auth-page">
       <nav className="nav">
-        <a className="brand" href="/"><img src="/src/logo.png" alt="igeneris" className="brand-logo" /></a>
+        <a className="brand" href="/"><img src={logoUrl} alt="igeneris" className="brand-logo" /></a>
       </nav>
       <div style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center", padding: "48px 24px" }}>
        <div className="auth-body" style={{ paddingTop: 0 }}>
@@ -2044,7 +2111,7 @@ function ChatEvalPersonal({ token, user, onComplete }) {
   const persona = user?.persona || user?.username || "";
   const [msgs, setMsgs] = React.useState([{
     role: "bot",
-    text: "📝 *Seguimiento personal*\n\n_Esta evaluación es totalmente privada, solo podrá verla tu CA._\n_Si en algún momento quieres cancelar, cierra esta sección._\n\n*Pulsa el botón* para comenzar.",
+    text: t("csp.intro"),
   }]);
   const [step, setStep] = React.useState("intro");
   const [comentario, setComentario] = React.useState("");
@@ -2058,8 +2125,8 @@ function ChatEvalPersonal({ token, user, onComplete }) {
   const userSay = (text) => setMsgs(m => [...m, { role: "user", text }]);
 
   function handleComenzar() {
-    userSay("Comenzar");
-    botSay("*Esta es tu oportunidad para:*\n\n*1.* Explicar cómo estás ayudando en _\"Contribution to the firm\"_\n*2.* Cómo te estás acercando a tus objetivos\n*3.* Señalar limitaciones o aspectos relevantes respecto al cumplimiento de los criterios de evaluación\n*4.* Si necesitas ayuda con algún tema o has tenido alguna dificultad que quieras comentar\n\nYa puedes escribir tu comentario.");
+    userSay(t("cep.btn_comenzar"));
+    botSay(t("csp.chance_to"));
     setStep("esperando_comentario");
   }
 
@@ -2069,21 +2136,23 @@ function ChatEvalPersonal({ token, user, onComplete }) {
       const objs = d.objetivos || [];
       if (objs.length) {
         const lineas = objs.map(o => `• *${o.titulo}*${o.kpis ? `\n  _KPIs: ${o.kpis}_` : ""}`).join("\n");
-        botSay(`📌 *Tus objetivos actuales:*\n\n${lineas}`);
+        botSay(`${t("csp.my_goals")}
+
+${lineas}`);
       } else {
-        botSay("📌 No tienes objetivos registrados actualmente.");
+        botSay(t("csp.no_goals"));
       }
-    } catch (e) { botSay(`⚠️ No se pudieron cargar los objetivos: ${e.message || "Error desconocido"}`); }
+    } catch (e) { botSay(t("csp.err_goals", { msg: e.message || t("csp.err_unknown") })); }
   }
 
   function handleVerCriterios() {
-    userSay("📊 Ver criterios");
-    botSay("¿Para qué área quieres ver los criterios?");
+    userSay(t("csp.btn_criteria"));
+    botSay(t("csp.ask_area"));
     setStep("criterios_grupo");
   }
 
   async function handleCriteriosGrupo(grupo) {
-    const labels = { negocio: "Negocio", palantir: "Palantir", middleoffice: "Middle Office" };
+    const labels = { negocio: t("cep.area_negocio"), palantir: "Palantir", middleoffice: "Middle Office" };
     userSay(labels[grupo] || grupo);
     setLoading(true);
     try {
@@ -2091,16 +2160,18 @@ function ChatEvalPersonal({ token, user, onComplete }) {
       const criterios = d.criterios || {};
       const entries = Object.entries(criterios);
       if (!entries.length) {
-        botSay("📊 No hay criterios disponibles para este área.");
+        botSay(t("csp.no_criteria"));
       } else {
-        const texto = `📊 *Criterios — ${labels[grupo] || grupo}*\n\n` +
+        const texto = `${t("csp.criteria_head", { area: labels[grupo] || grupo })}
+
+` +
           entries.map(([dim, niveles]) =>
             `*${dim}*\n` + Object.entries(niveles).map(([n, ts]) => `  _${n}:_ ${Array.isArray(ts) ? ts.join(". ") : ts}`).join("\n")
           ).join("\n\n");
         botSay(texto);
       }
     } catch (e) {
-      botSay(`⚠️ No se pudieron cargar los criterios: ${e.message || "Error desconocido"}`);
+      botSay(t("csp.err_criteria", { msg: e.message || t("csp.err_unknown") }));
     } finally {
       setLoading(false);
     }
@@ -2113,7 +2184,7 @@ function ChatEvalPersonal({ token, user, onComplete }) {
     userSay(val);
     setComentario(val);
     setInputVal("");
-    botSay(`📋 Tu comentario:\n_${val}_\n\n¿Lo guardo?`);
+    botSay(t("csp.your_comment", { val }));
     setStep("confirmacion");
   }
 
@@ -2122,30 +2193,30 @@ function ChatEvalPersonal({ token, user, onComplete }) {
     setLoading(true);
     try {
       await apiRequest("/api/guardar-evaluacion-personal", { token, method: "POST", body: { comentario } });
-      botSay("✅ Evaluación guardada. ¿Quieres añadir otro comentario?");
+      botSay(t("csp.saved_more"));
       setStep("preguntando_otro");
-    } catch (e) { botSay(`⚠️ No se pudo guardar: ${e.message || "Error desconocido"}`); }
+    } catch (e) { botSay(t("csp.err_save", { msg: e.message || t("csp.err_unknown") })); }
     finally { setLoading(false); }
   }
 
   function handleModificar() {
-    userSay("✏️ Modificar");
+    userSay(t("cep.btn_modificar"));
     setComentario("");
-    botSay("Escribe de nuevo tu comentario:");
+    botSay(t("csp.rewrite"));
     setStep("esperando_comentario");
   }
 
   function handleOtroSi() {
-    userSay("✅ Sí");
+    userSay(t("cep.yes"));
     setComentario("");
     setInputVal("");
-    botSay("¿Qué más me quieres contar? Responde con tu comentario.");
+    botSay(t("csp.what_else"));
     setStep("esperando_comentario");
   }
 
   function handleOtroNo() {
-    userSay("❌ No");
-    botSay("Muchas gracias. Ya puedes cerrar esta sección 👋");
+    userSay(t("cep.no"));
+    botSay(t("csp.bye"));
     setStep("terminado");
     onComplete?.();
   }
@@ -2153,23 +2224,23 @@ function ChatEvalPersonal({ token, user, onComplete }) {
   function renderInput() {
     if (loading) return <div className="chat-input-area"><div className="chat-input-row"><span className="fine" style={{ color: "var(--muted)" }}>...</span></div></div>;
     if (step === "intro") return (
-      <div className="chat-input-area"><div className="chat-btns"><button className="chat-btn primary" onClick={handleComenzar}>Comenzar</button></div></div>
+      <div className="chat-input-area"><div className="chat-btns"><button className="chat-btn primary" onClick={handleComenzar}>{t("cep.btn_comenzar")}</button></div></div>
     );
     if (step === "esperando_comentario") return (
       <div className="chat-input-area">
         <div className="chat-btns" style={{ marginBottom: "8px" }}>
-          <button className="chat-btn" onClick={handleVerObjetivos}>📋 Ver mis objetivos</button>
-          <button className="chat-btn" onClick={handleVerCriterios}>📊 Ver criterios</button>
+          <button className="chat-btn" onClick={handleVerObjetivos}>{t("csp.btn_goals")}</button>
+          <button className="chat-btn" onClick={handleVerCriterios}>{t("csp.btn_criteria")}</button>
         </div>
         <div className="chat-input-row">
-          <textarea className="chat-input chat-textarea" placeholder="Escribe tu comentario..." value={inputVal} onChange={e => setInputVal(e.target.value)} onKeyDown={e => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); handleComentario(); } }} rows={3} autoFocus />
+          <textarea className="chat-input chat-textarea" placeholder={t("csp.ph_comment")} value={inputVal} onChange={e => setInputVal(e.target.value)} onKeyDown={e => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); handleComentario(); } }} rows={3} autoFocus />
           <button className="chat-send-btn" onClick={handleComentario}>→</button>
         </div>
       </div>
     );
     if (step === "criterios_grupo") return (
       <div className="chat-input-area"><div className="chat-btns">
-        <button className="chat-btn" onClick={() => handleCriteriosGrupo("negocio")}>Negocio</button>
+        <button className="chat-btn" onClick={() => handleCriteriosGrupo("negocio")}>{t("cep.area_negocio")}</button>
         <button className="chat-btn" onClick={() => handleCriteriosGrupo("palantir")}>Palantir</button>
         <button className="chat-btn" onClick={() => handleCriteriosGrupo("middleoffice")}>Middle Office</button>
       </div></div>
@@ -2187,7 +2258,7 @@ function ChatEvalPersonal({ token, user, onComplete }) {
       </div></div>
     );
     if (step === "terminado") return (
-      <div className="chat-input-area"><span className="fine" style={{ color: "var(--muted)" }}>Evaluación completada ✅</span></div>
+      <div className="chat-input-area"><span className="fine" style={{ color: "var(--muted)" }}>{t("cep.completed")}</span></div>
     );
     return null;
   }
@@ -2235,7 +2306,7 @@ function HistorialEvaluacionesPage({ token, evaluado, evaluador, proyecto, onBac
   return (
     <main className="page">
       <nav className="nav">
-        <a className="brand" href="/"><img src="/src/logo.png" alt="igeneris" className="brand-logo" /></a>
+        <a className="brand" href="/"><img src={logoUrl} alt="igeneris" className="brand-logo" /></a>
         <NavBack onBack={onBack} />
       </nav>
       <div className="historial-page">
@@ -2319,7 +2390,7 @@ function DetalleEvaluacionRealizadaPage({ ev, proyecto, onBack }) {
   return (
     <main className="page">
       <nav className="nav">
-        <a className="brand" href="/"><img src="/src/logo.png" alt="igeneris" className="brand-logo" /></a>
+        <a className="brand" href="/"><img src={logoUrl} alt="igeneris" className="brand-logo" /></a>
         <NavBack onBack={onBack} />
       </nav>
       <div className="historial-page">
@@ -2566,6 +2637,7 @@ function Dashboard({ token, user, onLogout, onNavigate, onBackToRoleSelect = nul
   // Evaluaciones de proyecto RECIBIDAS y liberadas para la persona (solo top-to-bottom,
   // de alguien por encima en la jerarquía de empresa). Las bottom-to-top nunca llegan aquí.
   const [evalsRecibidas, setEvalsRecibidas] = useState(null);
+  const [recibidasOpen, setRecibidasOpen] = useState(false);
 
   useEffect(() => {
     if (isAdmin) { setEvalsRecibidas([]); return; }
@@ -2823,7 +2895,7 @@ function Dashboard({ token, user, onLogout, onNavigate, onBackToRoleSelect = nul
   return (
     <main className="page dash-page">
       <nav className="nav">
-        <a className="brand" href="/"><img src="/src/logo.png" alt="igeneris" className="brand-logo" /></a>
+        <a className="brand" href="/"><img src={logoUrl} alt="igeneris" className="brand-logo" /></a>
         <div style={{ display: "flex", alignItems: "center", gap: "24px" }}>
           {onBackToRoleSelect && (
             <button className="link-button" onClick={onBackToRoleSelect}>{t("common.back")}</button>
@@ -3194,8 +3266,13 @@ function Dashboard({ token, user, onLogout, onNavigate, onBackToRoleSelect = nul
             </div>
             {/* ── EVALUACIONES DE PROYECTO RECIBIDAS (solo top-to-bottom liberadas) ── */}
             {!isAdmin && (
-              <div>
-                <p className="eyebrow" style={{ margin: "0 0 6px", fontSize: "0.7rem" }}>{t("dash.received_evals")}</p>
+              <DashCollapsible
+                title={t("dash.received_evals")}
+                open={recibidasOpen}
+                onToggle={() => setRecibidasOpen((v) => !v)}
+                badge={evalsRecibidas?.length || null}
+                bodyMarginTop={6}
+              >
                 {evalsRecibidas === null ? (
                   <p className="fine">{t("common.loading")}</p>
                 ) : evalsRecibidas.length === 0 ? (
@@ -3219,7 +3296,7 @@ function Dashboard({ token, user, onLogout, onNavigate, onBackToRoleSelect = nul
                     ))}
                   </div>
                 )}
-              </div>
+              </DashCollapsible>
             )}
             {/* ── PROYECTOS TERMINADOS ── */}
             {!isAdmin && (
@@ -3419,7 +3496,7 @@ function SubirInformePage({ token, advisee, onBack }) {
   return (
     <main className="page">
       <nav className="nav">
-        <a className="brand" href="/"><img src="/src/logo.png" alt="igeneris" className="brand-logo" /></a>
+        <a className="brand" href="/"><img src={logoUrl} alt="igeneris" className="brand-logo" /></a>
         <NavBack onBack={onBack} />
       </nav>
       <div className="profile-wrap" style={{ flex: 1 }}>
@@ -3485,7 +3562,7 @@ function AdviseesList({ token, advisees, onBack, onNavigate }) {
   return (
     <main className="page">
       <nav className="nav">
-        <a className="brand" href="/"><img src="/src/logo.png" alt="igeneris" className="brand-logo" /></a>
+        <a className="brand" href="/"><img src={logoUrl} alt="igeneris" className="brand-logo" /></a>
         <NavBack onBack={onBack} />
       </nav>
       <div className="advisees-page-wrap">
@@ -3633,7 +3710,7 @@ function RegistroComentariosPage({ token, advisee, onBack }) {
   return (
     <main className="page">
       <nav className="nav">
-        <a className="brand" href="/"><img src="/src/logo.png" alt="igeneris" className="brand-logo" /></a>
+        <a className="brand" href="/"><img src={logoUrl} alt="igeneris" className="brand-logo" /></a>
         <NavBack onBack={onBack} />
       </nav>
       <div className="profile-wrap" style={{ flex: 1 }}>
@@ -3721,6 +3798,7 @@ function AdviseeDetail({ token, advisee, advisees, onBack, onNavigate }) {
   const [comentariosOpen, setComentariosOpen] = useState(false);
   const [cargo, setCargo] = useState(advisee.cargo || "");
   const [accesoIndividual, setAccesoIndividual] = useState(false);
+  const [hayInformeFinal, setHayInformeFinal] = useState(true); // hasta saberlo, no se bloquea el botón
   const [togglingAccesoIndividual, setTogglingAccesoIndividual] = useState(false);
   const [notas, setNotas] = useState(null);
   const [loadingNotas, setLoadingNotas] = useState(true);
@@ -3739,17 +3817,26 @@ function AdviseeDetail({ token, advisee, advisees, onBack, onNavigate }) {
   const [fuenteOk, setFuenteOk] = useState(false);
   const [tieneEvaluacionesExtra, setTieneEvaluacionesExtra] = useState(false);
   const [verInformeBusy, setVerInformeBusy] = useState(false);
-  const [sinInformeFinal, setSinInformeFinal] = useState(false); // no hay versión final en Notion
+  const [sinInformeFinal, setSinInformeFinal] = useState(false); // no hay ninguna versión en Notion
+  const [estadoVersion, setEstadoVersion] = useState(""); // "Final"|"Borrador" de lo último que se abrió
+  const [versionUrls, setVersionUrls] = useState(null); // { htmlUrl, docxUrl } de esa misma versión
 
-  // Abre la versión final del informe guardada en Notion; si no hay, muestra el aviso con enlace.
+  // Abre la versión actual del informe guardada en Notion: la publicada o, si el CA ha
+  // seguido editando desde entonces, el borrador en curso. Si no hay ninguna, muestra el
+  // aviso con enlace. Cuando lo abierto es un borrador se ofrece seguir editándolo.
+  //
+  // Abre la web (cómoda para repasar) y deja además el Word a mano: es el formato que el CA
+  // acaba usando para retocar antes de publicar, y tenerlo aquí le ahorra volver a generarlo.
   async function verVersionActualInforme() {
-    setVerInformeBusy(true); setSinInformeFinal(false);
+    setVerInformeBusy(true); setSinInformeFinal(false); setEstadoVersion(""); setVersionUrls(null);
     try {
-      const data = await apiRequest(`/api/informe-final?evaluado=${encodeURIComponent(advisee.nombre)}`, { token });
-      if (data.disponible && data.htmlUrl) {
-        openAuthedFile(data.htmlUrl, token);
-      } else if (data.disponible && data.docxUrl) {
-        openAuthedFile(data.docxUrl, token);
+      const data = await apiRequest(
+        `/api/informe-final?evaluado=${encodeURIComponent(advisee.nombre)}&incluir_borrador=1`, { token });
+      const url = data.disponible ? (data.htmlUrl || data.docxUrl) : "";
+      if (url) {
+        openAuthedFile(url, token);
+        setEstadoVersion(data.estado || "Final");
+        setVersionUrls({ htmlUrl: data.htmlUrl || "", docxUrl: data.docxUrl || "" });
       } else {
         setSinInformeFinal(true);
       }
@@ -3793,7 +3880,10 @@ function AdviseeDetail({ token, advisee, advisees, onBack, onNavigate }) {
   }
 
   useEffect(() => {
-    const apply = (data) => setAccesoIndividual(data.activo || false);
+    const apply = (data) => {
+      setAccesoIndividual(data.activo || false);
+      setHayInformeFinal(data.informeFinal !== false);
+    };
     apiRequestCached(`/api/acceso-advisee-individual?advisee=${encodeURIComponent(advisee.nombre)}`, { token }, apply)
       .then(apply)
       .catch(() => {});
@@ -3912,7 +4002,7 @@ function AdviseeDetail({ token, advisee, advisees, onBack, onNavigate }) {
   return (
     <main className="page">
       <nav className="nav">
-        <a className="brand" href="/"><img src="/src/logo.png" alt="igeneris" className="brand-logo" /></a>
+        <a className="brand" href="/"><img src={logoUrl} alt="igeneris" className="brand-logo" /></a>
         <button className="link-button" onClick={onBack}>{t("ad.back_advisees")}</button>
       </nav>
       <div className="profile-wrap" style={{ flex: 1 }}>
@@ -3984,12 +4074,39 @@ function AdviseeDetail({ token, advisee, advisees, onBack, onNavigate }) {
                         {t("ad.no_final_post")}
                       </p>
                     )}
+                    {versionUrls && (versionUrls.htmlUrl || versionUrls.docxUrl) && (
+                      <p className="fine" style={{ margin: "2px 0 6px", paddingLeft: 14 }}>
+                        {t("ad.current_open_again")}
+                        {versionUrls.htmlUrl && (
+                          <a href="#" onClick={(e) => { e.preventDefault(); openAuthedFile(versionUrls.htmlUrl, token); }}>
+                            {t("ad.current_open_web")}
+                          </a>
+                        )}
+                        {versionUrls.htmlUrl && versionUrls.docxUrl && " · "}
+                        {versionUrls.docxUrl && (
+                          <a href="#" onClick={(e) => { e.preventDefault(); openAuthedFile(versionUrls.docxUrl, token); }}>
+                            {t("ad.current_open_word")}
+                          </a>
+                        )}
+                      </p>
+                    )}
+                    {estadoVersion === "Borrador" && (
+                      <p className="fine" style={{ margin: "2px 0 6px", paddingLeft: 14 }}>
+                        {t("ad.current_is_draft_pre")}
+                        <a href="#" onClick={(e) => { e.preventDefault(); onNavigate({ type: "eval-anual", advisee, advisees, from: "advisee-detail", modo: "manual" }); }}>
+                          {t("ad.current_is_draft_link")}
+                        </a>
+                        {t("ad.current_is_draft_post")}
+                      </p>
+                    )}
+                    {/* Sin versión final publicada no se puede dar acceso (un borrador no cuenta),
+                        pero revocar un acceso ya activo siempre debe poder hacerse. */}
                     <div style={{ display: "flex", alignItems: "center", marginTop: 8 }}>
                       <span className="dash-dot" />
                       <button
                         className="secondary"
                         onClick={toggleAccesoIndividual}
-                        disabled={togglingAccesoIndividual}
+                        disabled={togglingAccesoIndividual || (!accesoIndividual && !hayInformeFinal)}
                         style={{ height: 30, minHeight: "auto", padding: "0 14px", fontSize: 12 }}
                       >
                         {togglingAccesoIndividual
@@ -3999,6 +4116,11 @@ function AdviseeDetail({ token, advisee, advisees, onBack, onNavigate }) {
                           : t("ad.give_access")}
                       </button>
                     </div>
+                    {!accesoIndividual && !hayInformeFinal && (
+                      <p className="fine" style={{ margin: "4px 0 0", paddingLeft: 14 }}>
+                        {t("ad.give_access_needs_final")}
+                      </p>
+                    )}
                   </div>
                 </AdviseeNavGroup>
 
@@ -4166,7 +4288,7 @@ function PlanAccionPage({ token, advisee, advisees, onBack, onNavigate }) {
   return (
     <main className="page">
       <nav className="nav">
-        <a className="brand" href="/"><img src="/src/logo.png" alt="igeneris" className="brand-logo" /></a>
+        <a className="brand" href="/"><img src={logoUrl} alt="igeneris" className="brand-logo" /></a>
         <NavBack onBack={onBack} />
       </nav>
       <div className="profile-wrap" style={{ flex: 1 }}>
@@ -4299,6 +4421,10 @@ function MisProyectosActivosPage({ token, user, onBack }) {
     }
   }
 
+  // El manager es la persona de la sesión: estos proyectos son justo los que ella activó.
+  const personaSesion = user?.persona || user?.username || "";
+  const esManager = (nombre) => normalizarNombre(nombre) === normalizarNombre(personaSesion);
+
   function cargarEstado(nombre) {
     apiRequest(`/api/estado-proyecto?proyecto=${encodeURIComponent(nombre)}`, { token })
       .then((d) => setEstadoMap((prev) => ({ ...prev, [nombre]: d.estado || [] })))
@@ -4348,7 +4474,7 @@ function MisProyectosActivosPage({ token, user, onBack }) {
   return (
     <main className="page">
       <nav className="nav">
-        <a className="brand" href="/"><img src="/src/logo.png" alt="igeneris" className="brand-logo" /></a>
+        <a className="brand" href="/"><img src={logoUrl} alt="igeneris" className="brand-logo" /></a>
         <NavBack onBack={onBack} />
       </nav>
 
@@ -4453,14 +4579,19 @@ function MisProyectosActivosPage({ token, user, onBack }) {
                                 </span>
                               </td>
                               <td>
-                                <button
-                                  className="mpa-remove"
-                                  onClick={() => modificarMiembro("eliminar", nombre, m.nombre)}
-                                  title={t("mpa.remove_member", { nombre: m.nombre })}
-                                >
-                                  <span className="mpa-remove-x" aria-hidden="true">✕</span>
-                                  {t("mpa.remove_short")}
-                                </button>
+                                {esManager(m.nombre) ? (
+                                  /* El manager no puede darse de baja: dejaría el proyecto sin quien lo gestione. */
+                                  <span className="badge badge-light" title={t("mpa.manager_hint")}>{t("mpa.manager")}</span>
+                                ) : (
+                                  <button
+                                    className="mpa-remove"
+                                    onClick={() => modificarMiembro("eliminar", nombre, m.nombre)}
+                                    title={t("mpa.remove_member", { nombre: m.nombre })}
+                                  >
+                                    <span className="mpa-remove-x" aria-hidden="true">✕</span>
+                                    {t("mpa.remove_short")}
+                                  </button>
+                                )}
                               </td>
                             </tr>
                           );
@@ -4594,7 +4725,7 @@ function ActivarEvaluacionesProyectoPage({ token, user, onBack, onActivado }) {
   return (
     <main className="page">
       <nav className="nav">
-        <a className="brand" href="/"><img src="/src/logo.png" alt="igeneris" className="brand-logo" /></a>
+        <a className="brand" href="/"><img src={logoUrl} alt="igeneris" className="brand-logo" /></a>
         <NavBack onBack={onBack} />
       </nav>
 
@@ -4893,7 +5024,7 @@ function EvaluacionesProyectoPage({ token, user, proyectos, onBack, onNavigate, 
   return (
     <main className="page">
       <nav className="nav">
-        <a className="brand" href="/"><img src="/src/logo.png" alt="igeneris" className="brand-logo" /></a>
+        <a className="brand" href="/"><img src={logoUrl} alt="igeneris" className="brand-logo" /></a>
         <NavBack onBack={onBack} />
       </nav>
 
@@ -5148,7 +5279,7 @@ function FormularioEvaluacionProyecto({ token, user, proyecto, tipo, manager, ev
     return (
       <main className="page">
         <nav className="nav">
-          <a className="brand" href="/"><img src="/src/logo.png" alt="igeneris" className="brand-logo" /></a>
+          <a className="brand" href="/"><img src={logoUrl} alt="igeneris" className="brand-logo" /></a>
           <NavBack onBack={onBack} />
         </nav>
         <div style={{ padding: "40px", maxWidth: 820, margin: "0 auto", width: "100%" }}>
@@ -5161,7 +5292,7 @@ function FormularioEvaluacionProyecto({ token, user, proyecto, tipo, manager, ev
   return (
     <main className="page">
       <nav className="nav">
-        <a className="brand" href="/"><img src="/src/logo.png" alt="igeneris" className="brand-logo" /></a>
+        <a className="brand" href="/"><img src={logoUrl} alt="igeneris" className="brand-logo" /></a>
         <NavBack onBack={onBack} />
       </nav>
       <section className="hero">
@@ -5433,7 +5564,7 @@ function SolicitarEvaluacionExtraPage({ token, user, onBack }) {
   return (
     <main className="page">
       <nav className="nav">
-        <a className="brand" href="/"><img src="/src/logo.png" alt="igeneris" className="brand-logo" /></a>
+        <a className="brand" href="/"><img src={logoUrl} alt="igeneris" className="brand-logo" /></a>
         <NavBack onBack={onBack} />
       </nav>
 
@@ -5569,7 +5700,7 @@ function FormularioEvaluacionExtra({ token, evaluado, contexto, solicitudPageId,
   return (
     <main className="page">
       <nav className="nav">
-        <a className="brand" href="/"><img src="/src/logo.png" alt="igeneris" className="brand-logo" /></a>
+        <a className="brand" href="/"><img src={logoUrl} alt="igeneris" className="brand-logo" /></a>
         <NavBack onBack={onBack} />
       </nav>
       <section className="hero">
@@ -5647,7 +5778,7 @@ function EvaluacionesSlackPage({ token, user, onBack, onNavigate, completadasApp
   return (
     <main className="page">
       <nav className="nav">
-        <a className="brand" href="/"><img src="/src/logo.png" alt="igeneris" className="brand-logo" /></a>
+        <a className="brand" href="/"><img src={logoUrl} alt="igeneris" className="brand-logo" /></a>
         <NavBack onBack={onBack} />
       </nav>
       <div style={{ paddingTop: "clamp(44px, 6vw, 68px)" }}>
@@ -6095,7 +6226,7 @@ function EvaluacionAnualWizard({ token, advisee, onBack, modo }) {
   const shell = (children) => (
     <main className="page">
       <nav className="nav">
-        <a className="brand" href="/"><img src="/src/logo.png" alt="igeneris" className="brand-logo" /></a>
+        <a className="brand" href="/"><img src={logoUrl} alt="igeneris" className="brand-logo" /></a>
         <NavBack onBack={onBack} />
       </nav>
       <div style={{ flex: 1, paddingTop: "clamp(44px, 6vw, 68px)", paddingBottom: 48, maxWidth: 820, margin: "0 auto", width: "100%" }}>
@@ -6653,6 +6784,11 @@ function App() {
   useEffect(() => {
     window.history.replaceState({ page: null, adminMode: null }, "");
   }, []);
+
+  // Al cambiar de pagina, empezar arriba del todo
+  useEffect(() => {
+    window.scrollTo(0, 0);
+  }, [page, adminMode]);
 
   // Escucha el botón de atrás del navegador
   useEffect(() => {

@@ -26,9 +26,11 @@ from datetime import datetime, timezone
 from . import config
 from .clients import anthropic_client
 from .excepciones import ErrorIA
+from .i18n import normalizar_idioma
 from .ia import MSG_NO_DISPONIBLE, turno_analisis_anual
 from .notion_service import (
     guardar_log_evaluacion_anual,
+    guardar_plan_accion_en_notion,
     buscar_empleado_y_cargo,
     obtener_borrador_estructurado,
     obtener_criterios_evaluacion,
@@ -248,7 +250,8 @@ def _asegurar_comentarios(slug: str, sesion: dict) -> dict:
         sesion["comentarios"] = fresca["comentarios"]
         return sesion["comentarios"]
     with turno_analisis_anual():
-        comentarios = sk.interpretar_evaluaciones_anual(sesion["emp_data"], cargo=sesion.get("cargo", ""))
+        comentarios = sk.interpretar_evaluaciones_anual(sesion["emp_data"], cargo=sesion.get("cargo", ""),
+                                                        idioma=normalizar_idioma(sesion.get("idioma", "es")))
     sesion["comentarios"] = comentarios
     _guardar(slug, sesion)
     return comentarios
@@ -443,8 +446,32 @@ def _criterios_nivel_panel(sesion: dict, area: dict) -> list[dict]:
 _TXT_NO_EVALUABLE = "No se ha podido evaluar este criterio por falta de información suficiente."
 
 
+# Los prompts de este módulo están escritos en español, así que en español no hace falta
+# decir nada. Para EN/PT se añade este bloque al final del system, igual que hace
+# sk.interpretar_evaluaciones_anual: el informe lo redacta el CA en SU idioma, y lo que
+# Claude proponga tiene que salir ya en ese idioma (los datos de Notion vienen en español).
+_INSTRUCCION_IDIOMA = {
+    "en": (
+        "\n\nLANGUAGE: Write your entire reply in English. The source data (evaluations, criteria, "
+        "objectives, the CA's own notes) may be in Spanish: translate the meaning, do not copy "
+        "Spanish text. Keep any JSON keys and citation tags like [E3] exactly as specified."
+    ),
+    "pt": (
+        "\n\nIDIOMA: Escreve toda a tua resposta em português europeu. Os dados de origem (avaliações, "
+        "critérios, objetivos, as notas do próprio CA) podem estar em espanhol: traduz o significado, "
+        "não copies texto em espanhol. Mantém as chaves do JSON e as etiquetas de citação como [E3] "
+        "exatamente como se indica."
+    ),
+}
+
+
+def _instruccion_idioma(idioma: str) -> str:
+    """Bloque para el system prompt que fija el idioma de redacción. Vacío en español."""
+    return _INSTRUCCION_IDIOMA.get(normalizar_idioma(idioma), "")
+
+
 def _generar_resumen_area(cargo: str, etiqueta: str, bullets: list[str], evidencia: list,
-                          conversacion: list, propuesta: str) -> list[dict]:
+                          conversacion: list, propuesta: str, idioma: str = "es") -> list[dict]:
     """Claude valora el área criterio a criterio (los MISMOS bullets del panel).
 
     Devuelve [{"criterio", "valoracion", "evaluable"}], una entrada por bullet y en el
@@ -471,6 +498,7 @@ def _generar_resumen_area(cargo: str, etiqueta: str, bullets: list[str], evidenc
         '"evaluable": true|false, "valoracion": "texto"}]} con EXACTAMENTE una entrada por criterio y en '
         'el mismo orden. Si "evaluable" es false, deja "valoracion" vacía o indica brevemente qué '
         "información faltaría."
+        + _instruccion_idioma(idioma)
         + config.INSTRUCCION_ANTIINYECCION
     )
     user = (f"CRITERIOS ({len(bullets)}):\n{lista}\n\nEVIDENCIA:\n{ev_txt}\n\n"
@@ -565,8 +593,13 @@ def _redactar_emp_data(emp_data: dict) -> dict:
 
 
 @_con_lock_sesion
-def iniciar_sesion(advisee: str, cargo: str = "") -> dict:
-    """Crea o recupera la sesión. Devuelve identidad + progreso. NO genera Claude todavía."""
+def iniciar_sesion(advisee: str, cargo: str = "", idioma: str = "es") -> dict:
+    """Crea o recupera la sesión. Devuelve identidad + progreso. NO genera Claude todavía.
+
+    `idioma` es el del CA que redacta: manda en todo lo que él ve y en el Word que sale
+    (la plantilla, la fecha y el idioma en que Claude propone los textos). Se fija al
+    crear la sesión y ya no cambia, para que el informe no salga a medias en dos idiomas.
+    """
     slug = slug_archivo(advisee)
     sesion = _leer(slug)
     if not cargo:
@@ -581,6 +614,7 @@ def iniciar_sesion(advisee: str, cargo: str = "") -> dict:
             "advisee": advisee,
             "ca": emp_data.get("ca", ""),
             "cargo": cargo,
+            "idioma": normalizar_idioma(idioma),
             "anio": datetime.now(timezone.utc).year - 1,
             "estado": "en_progreso",
             "identidad_confirmada": False,
@@ -597,12 +631,14 @@ def iniciar_sesion(advisee: str, cargo: str = "") -> dict:
     return _resumen_estado(sesion)
 
 
-def iniciar_manual(advisee: str, cargo: str = "") -> dict:
+def iniciar_manual(advisee: str, cargo: str = "", idioma: str = "es") -> dict:
     """Prepara el informe para rellenarlo MANUALMENTE en la web (sin Claude).
 
     Construye un borrador en blanco (comentarios vacíos, huecos del CA vacíos) listo para
     editar como un Word y guardar en Notion. Si ya hay una sesión (p. ej. asistida a medias),
-    reutiliza su borrador para no perder lo escrito. Devuelve {borrador}."""
+    reutiliza su borrador para no perder lo escrito. Devuelve {borrador}.
+
+    `idioma`: el del CA, igual que en `iniciar_sesion` (aquí manda en la plantilla y la fecha)."""
     slug = slug_archivo(advisee)
     sesion = _leer(slug)
     if not cargo:
@@ -617,6 +653,7 @@ def iniciar_manual(advisee: str, cargo: str = "") -> dict:
             "advisee": advisee,
             "ca": emp_data.get("ca", ""),
             "cargo": cargo,
+            "idioma": normalizar_idioma(idioma),
             "anio": datetime.now(timezone.utc).year - 1,
             "estado": "completada",         # habilita obtener_borrador/guardar sin pasar por áreas
             "identidad_confirmada": True,
@@ -707,7 +744,9 @@ def obtener_area(advisee: str, clave: str) -> dict:
 
     # Criterios del área (siempre, sin API). Se muestran ANTES de que el CA opine.
     if not area.get("criterios"):
-        area["criterios"] = _criterios_area(sesion.get("cargo", ""), clave, secciones[clave], nombre=sesion.get("advisee", ""))
+        area["criterios"] = _criterios_area(sesion.get("cargo", ""), clave, secciones[clave],
+                                            idioma=normalizar_idioma(sesion.get("idioma", "es")),
+                                            nombre=sesion.get("advisee", ""))
         if area["criterios"]:
             _guardar(slug, sesion)
 
@@ -733,7 +772,7 @@ def obtener_area(advisee: str, clave: str) -> dict:
 
 def _claude_conversa_area(etiqueta: str, evidencia: list, claude_bullets: str, conversacion: list,
                           criterios: list | None = None, diagnostico: str = "", cargo: str = "",
-                          siguiente_cid: str = "C1") -> dict:
+                          siguiente_cid: str = "C1", idioma: str = "es") -> dict:
     """Llama a Claude para reaccionar a los puntos del CA y proponer los bullets del área.
 
     Devuelve además `aportaciones`: lo que el CA ha aportado de su cosecha y la IA ha dado
@@ -801,6 +840,7 @@ def _claude_conversa_area(etiqueta: str, evidencia: list, claude_bullets: str, c
         # el mensaje en prosa y se deja el JSON. Entonces el CA no ve la respuesta, ve un error.
         "FORMATO (obligatorio): responde SOLO con el JSON. Tu primer carácter debe ser '{' y el último "
         "'}'. Lo que le dices al CA va DENTRO del campo \"mensaje\", nunca suelto fuera del JSON."
+        + _instruccion_idioma(idioma)
         + config.INSTRUCCION_ANTIINYECCION
     )
     # La evidencia, criterios, diagnóstico y tu valoración son ESTÁTICOS durante todo el debate del área
@@ -871,7 +911,9 @@ def responder_area(advisee: str, clave: str, texto: str) -> dict:
     area = sesion.setdefault("areas", {}).setdefault(
         clave, {"conversacion": [], "propuesta": "", "confirmada": False})
     if "criterios" not in area:
-        area["criterios"] = _criterios_area(sesion.get("cargo", ""), clave, secciones[clave], nombre=sesion.get("advisee", ""))
+        area["criterios"] = _criterios_area(sesion.get("cargo", ""), clave, secciones[clave],
+                                            idioma=normalizar_idioma(sesion.get("idioma", "es")),
+                                            nombre=sesion.get("advisee", ""))
     area["conversacion"].append({"rol": "ca", "texto": texto.strip()})
     # La conversación avanza → la sugerencia final generada antes queda obsoleta.
     # El CA la vuelve a pedir con el botón cuando dé el área por hablada.
@@ -882,7 +924,8 @@ def responder_area(advisee: str, clave: str, texto: str) -> dict:
     res = _claude_conversa_area(
         secciones[clave], evidencia, claude_bullets, area["conversacion"],
         criterios=area.get("criterios"), diagnostico=area.get("diagnostico", ""),
-        cargo=sesion.get("cargo", ""), siguiente_cid=f"C{n_libre}")
+        cargo=sesion.get("cargo", ""), siguiente_cid=f"C{n_libre}",
+        idioma=normalizar_idioma(sesion.get("idioma", "es")))
     # Lo que el CA ha aportado y la IA ha admitido pasa a ser fuente [C#] de la sesión: a
     # partir del turno siguiente entra en la evidencia y llega al informe con su cita.
     remapeo = _registrar_aportaciones(sesion, clave, res.get("aportaciones"))
@@ -917,6 +960,7 @@ def generar_resumen_area(advisee: str, clave: str) -> dict:
         raise ValueError("Primero conversa con la IA sobre esta área.")
     if not area.get("criterios"):
         area["criterios"] = _criterios_area(sesion.get("cargo", ""), clave, secciones[clave],
+                                            idioma=normalizar_idioma(sesion.get("idioma", "es")),
                                             nombre=sesion.get("advisee", ""))
     bullets = [b for c in _criterios_nivel_panel(sesion, area) for b in (c.get("criterios") or [])]
     if not bullets:
@@ -926,7 +970,8 @@ def generar_resumen_area(advisee: str, clave: str) -> dict:
     _, fuentes = _emp_y_fuentes(sesion)
     evidencia = _evidencia_area(sesion, comentarios, fuentes, clave)
     resumen = _generar_resumen_area(sesion.get("cargo", ""), secciones[clave], bullets,
-                                    evidencia, area.get("conversacion", []), area.get("propuesta", ""))
+                                    evidencia, area.get("conversacion", []), area.get("propuesta", ""),
+                                    idioma=normalizar_idioma(sesion.get("idioma", "es")))
     area["resumen_final"] = resumen
     _guardar(slug, sesion)
     return {"resumen": resumen}
@@ -958,9 +1003,16 @@ def estado_sesion(advisee: str) -> dict:
 
 # ── Plan de acción sugerido (paso final) ──────────────────────────────────────
 
-def _evidencia_y_criterios(sesion: dict) -> tuple[str, str]:
-    """Bloque de evidencia (evals acordadas o en bruto) + criterios del puesto y siguiente.
-    Compartido por la generación del plan y por el chat de dudas."""
+def _evidencia_y_criterios(sesion: dict, con_evals_en_bruto: bool = False) -> tuple[str, str]:
+    """Bloque de evidencia (evals acordadas y/o en bruto) + criterios del puesto y siguiente.
+    Compartido por la generación del plan y por el chat de dudas.
+
+    `con_evals_en_bruto` añade las evaluaciones originales AUNQUE ya haya valoraciones
+    acordadas por área. Lo usa el chat: para generar el plan basta el resumen acordado,
+    pero el CA que pregunta sobre un plan ya hecho quiere justamente lo que el resumen
+    dejó fuera ("¿de dónde sale este objetivo?"), y sin las evals en bruto el modelo no
+    tiene nada concreto que citar y contesta que le falta información.
+    """
     cargo = sesion.get("cargo", "")
     secciones = _secciones(cargo)
     areas = sesion.get("areas", {})
@@ -972,15 +1024,16 @@ def _evidencia_y_criterios(sesion: dict) -> tuple[str, str]:
         if final or diag:
             bloques.append(f"### {etiqueta}\nVALORACIÓN ACORDADA: {final or '—'}\nDIAGNÓSTICO/GAPS: {diag or '—'}")
 
+    partes = []
     if bloques:
-        evidencia = "EVALUACIÓN POR ÁREA (acordada con el CA):\n" + "\n\n".join(bloques)
-    else:
-        emp_data = sesion.get("emp_data") or {}
-        contexto, _ = sk._formatear_contexto(emp_data)
-        evidencia = "RESULTADOS DE TODAS LAS EVALUACIONES:\n" + (contexto or "(sin evaluaciones)")
+        partes.append("EVALUACIÓN POR ÁREA (acordada con el CA):\n" + "\n\n".join(bloques))
+    if con_evals_en_bruto or not bloques:
+        contexto, _ = sk._formatear_contexto(sesion.get("emp_data") or {})
+        partes.append("RESULTADOS DE TODAS LAS EVALUACIONES:\n" + (contexto or "(sin evaluaciones)"))
+    evidencia = "\n\n".join(partes)
 
     emp_nombre = (sesion.get("emp_data") or {}).get("empleado", "") or sesion.get("advisee", "")
-    criterios = sk._criterios_para_prompt(cargo, "es", emp_nombre)
+    criterios = sk._criterios_para_prompt(cargo, normalizar_idioma(sesion.get("idioma", "es")), emp_nombre)
     criterios_section = f"\n\nCRITERIOS DEL PUESTO Y DEL SIGUIENTE NIVEL:\n{criterios}" if criterios else ""
     return evidencia, criterios_section
 
@@ -996,7 +1049,13 @@ def chatear_plan(advisee: str, mensajes: list) -> dict:
     slug = slug_archivo(advisee)
     sesion = _leer(slug)
     if not sesion:
-        raise ValueError("No hay sesión iniciada. Crea antes un plan de acción.")
+        # Igual que obtener_plan_accion/guardar_plan_accion: el CA puede abrir esta pantalla
+        # sin haber pasado por el asistente. Sin esto, cada pregunta le salía como respuesta
+        # del bot un "No hay sesión iniciada" que no le dice nada.
+        iniciar_sesion(advisee)
+        sesion = _leer(slug)
+    if not sesion:
+        raise ValueError("No hay sesión iniciada.")
     msgs = [
         {"role": "assistant" if m.get("rol") == "assistant" else "user", "content": m.get("texto", "").strip()}
         for m in (mensajes or []) if m.get("texto", "").strip()
@@ -1004,19 +1063,23 @@ def chatear_plan(advisee: str, mensajes: list) -> dict:
     if not msgs:
         raise ValueError("Escribe una pregunta.")
     plan = sesion.get("plan_accion", "")
-    evidencia, criterios_section = _evidencia_y_criterios(sesion)
+    evidencia, criterios_section = _evidencia_y_criterios(sesion, con_evals_en_bruto=True)
     system_text = (
         "Eres un asistente de RRHH de IGENERIS. Ayudas al Career Advisor a entender y afinar el PLAN DE "
-        "ACCIÓN de su advisee para el año que viene. Responde SOLO con base en la evidencia proporcionada "
-        "(evaluaciones, criterios del puesto y el plan). Sé breve, concreto y directo. Si te falta "
-        "información para responder, dilo claramente en lugar de inventar."
+        "ACCIÓN de su advisee para el año que viene. Respondes con base en la evidencia proporcionada "
+        "(evaluaciones mensuales y de proyecto, seguimiento, criterios del puesto y el plan). Relaciona "
+        "el plan con la evidencia: si te preguntan de dónde sale un objetivo, busca en las evaluaciones "
+        "qué lo justifica y cítalo. Las evaluaciones son anónimas a propósito: habla de lo que dicen, no "
+        "de quién las escribió. Sé breve, concreto y directo. No inventes hechos que no estén en la "
+        "evidencia; si de verdad no está, dilo."
+        + _instruccion_idioma(sesion.get("idioma", "es"))
         + config.INSTRUCCION_ANTIINYECCION
         + f"\n\nCARGO: {sesion.get('cargo') or 'no especificado'}{criterios_section}\n\n{evidencia}"
         + f"\n\nPLAN DE ACCIÓN ACTUAL:\n{plan or '(todavía no hay plan generado)'}"
     )
     try:
         resp = anthropic_client.messages.create(
-            model="claude-haiku-4-5", max_tokens=700, temperature=0.3,
+            model="claude-haiku-4-5", max_tokens=1200, temperature=0.3,
             system=[{"type": "text", "text": system_text, "cache_control": {"type": "ephemeral"}}],
             messages=msgs,
         )
@@ -1048,6 +1111,7 @@ def _generar_plan_accion(sesion: dict, instruccion: str = "", plan_previo: str =
         "qué hacer / cómo lograrlo, atado a los gaps detectados y a la ruta de crecimiento (consolidar su "
         "nivel o subir al siguiente). Realista, específico y medible cuando se pueda. Es una SUGERENCIA para "
         "el CA. Devuelve texto plano como lista numerada (1., 2., …), sin preámbulos."
+        + _instruccion_idioma(sesion.get("idioma", "es"))
         + config.INSTRUCCION_ANTIINYECCION
     )
     user = f"CARGO: {cargo or 'no especificado'}{criterios_section}\n\n{evidencia}"
@@ -1128,7 +1192,19 @@ def guardar_plan_accion(advisee: str, texto: str) -> dict:
         raise ValueError("No hay sesión iniciada.")
     sesion["plan_accion"] = (texto or "").strip()
     _guardar(slug, sesion)
-    return {"ok": True}
+
+    # El plan vigente se publica en Notion (TO-SEE → Planes de acción → 'Plan de acción -
+    # {Nombre}') para que no dependa de la carpeta local. Solo aquí: lo que genera la IA
+    # (crear plan nuevo / pedir cambios) es borrador hasta que el CA pulsa Guardar.
+    # Si Notion falla no se pierde el guardado local, así que solo se avisa.
+    notion_url = ""
+    try:
+        notion_url = guardar_plan_accion_en_notion(
+            advisee, sesion["plan_accion"], ca_nombre=sesion.get("ca", "")
+        ).get("url", "")
+    except Exception:
+        logging.exception("No se pudo guardar el plan de acción en Notion para '%s'", advisee)
+    return {"ok": True, "notionUrl": notion_url}
 
 
 # ── Borrador editable del informe final (en la web) ───────────────────────────
@@ -1146,14 +1222,21 @@ def _construir_borrador(sesion: dict) -> dict:
 
     Los comentarios por dimensión van prellenados con lo acordado en la sesión; los
     campos reservados al CA (notas, retribución, promoción, salarios, deadlines) se
-    dejan VACÍOS, igual que en la plantilla. El CA los rellena en la web si quiere."""
+    dejan VACÍOS, igual que en la plantilla. El CA los rellena en la web si quiere.
+
+    Va en el idioma del CA (`sesion["idioma"]`), y ese idioma viaja DENTRO del borrador:
+    es lo que se guarda en Notion, así que cuando el advisee descarga su Word (que se
+    regenera desde Notion, sin sesión) sale igual que lo dejó el CA."""
     ahora = datetime.now(timezone.utc)
+    idioma = normalizar_idioma(sesion.get("idioma", "es"))
     areas = sesion.get("areas", {})
     dimensiones = []
     for clave, etiqueta in _dims_informe(sesion.get("cargo", "")):
         a = areas.get(clave, {})
         dimensiones.append({
-            "clave": clave, "etiqueta": etiqueta, "nota": "",
+            # `clave` es la que identifica la fila en todo el sistema; `etiqueta` es solo
+            # lo que se pinta, por eso puede traducirse sin romper nada guardado.
+            "clave": clave, "etiqueta": sk._dim_label(clave, etiqueta, idioma), "nota": "",
             "comentarios": a.get("texto_final") or a.get("propuesta") or "",
         })
     objetivos = [{"texto": (o.get("titulo") or o.get("descripcion") or "").strip(), "deadline": ""}
@@ -1162,9 +1245,10 @@ def _construir_borrador(sesion: dict) -> dict:
         objetivos.append({"texto": "", "deadline": ""})
     return {
         "empleado": sesion["advisee"],
+        "idioma": idioma,
         "anio": ahora.year - 1,
         "anioSiguiente": ahora.year,
-        "fecha": f"{sk._mes_label(ahora.month - 1, 'es')} {ahora.year}",
+        "fecha": f"{sk._mes_label(ahora.month - 1, idioma)} {ahora.year}",
         "caActual": sesion.get("ca", ""),
         "caSiguiente": "",
         "cargo": sesion.get("cargo", ""),
@@ -1235,6 +1319,17 @@ def guardar_borrador(advisee: str, data: dict) -> dict:
     return {"ok": True, "borrador": sesion["borrador"]}
 
 
+def _idioma_borrador(borrador: dict | None, sesion: dict | None = None) -> str:
+    """Idioma en el que se redactó el informe, mirando primero DENTRO del borrador.
+
+    Los informes guardados antes de que esto existiera no traen `idioma`: caen a la sesión
+    si la hay y, si no, al español, que es exactamente como se generaron en su día."""
+    for origen in (borrador, sesion):
+        if origen and origen.get("idioma"):
+            return normalizar_idioma(origen["idioma"])
+    return "es"
+
+
 def generar_docx_borrador(advisee: str, nombre_archivo: str) -> str:
     """Genera el .docx del informe final (plantilla oficial) desde el borrador editado.
 
@@ -1259,6 +1354,7 @@ def generar_docx_borrador(advisee: str, nombre_archivo: str) -> str:
         "objetivos": borrador.get("objetivos", []),
     }
     sk.guardar_informe_anual_word(sesion["emp_data"], comentarios, cargo=sesion.get("cargo", ""),
+                                  idioma=_idioma_borrador(borrador, sesion),
                                   valores_ca=valores_ca, nombre_archivo=nombre_archivo)
     return os.path.join(config.CARPETA_WEB, nombre_archivo)
 
@@ -1272,12 +1368,35 @@ def _restaurar_borrador_notion(advisee: str) -> dict | None:
         return None
 
 
-def word_desde_borrador(borrador: dict, nombre_archivo: str) -> str:
+def fuentes_para_revision(advisee: str) -> dict:
+    """Mapa de fuentes citables del advisee, para la copia de revisión del CA.
+
+    Primero mira la sesión local (gratis, y es el caso normal: el CA acaba de hacer la eval).
+    Si ya no está, las reconstruye desde Notion, que tarda unos segundos. Devuelve {} si no se
+    puede: el informe sale sin anexo, que es un degradado aceptable, nunca un error."""
+    try:
+        sesion = _leer(slug_archivo(advisee))
+        if sesion and sesion.get("emp_data"):
+            return _emp_y_fuentes(sesion)[1]
+        _, fuentes = sk._formatear_contexto(sk.obtener_datos_empleado_anual(advisee))
+        return fuentes
+    except Exception:
+        logging.exception("No se pudieron reunir las fuentes de '%s' para la revisión del CA", advisee)
+        return {}
+
+
+def word_desde_borrador(borrador: dict, nombre_archivo: str, fuentes: dict | None = None) -> str:
     """Genera el .docx oficial a partir de un borrador (dict), SIN depender de la sesión local.
 
     Se usa para regenerar el Word del advisee desde lo guardado en Notion (fuente de verdad).
-    Devuelve la ruta del archivo escrito en CARPETA_WEB."""
-    comentarios = {"_fuentes": {}}
+    Devuelve la ruta del archivo escrito en CARPETA_WEB.
+
+    `fuentes` SOLO se pasa para la copia de revisión del CA (`revision_informe_*`), que es la
+    única que lleva anexo de Fuentes/Evidencia. Por defecto va vacío: el documento del advisee
+    no puede llevarlo, porque las fuentes revelan quién dijo qué de él. El `incluir_fuentes`
+    de abajo es explícito (y no solo el dict vacío) para que siga siendo cierto si algún día el
+    borrador guardado en Notion llega a traer fuentes dentro."""
+    comentarios = {"_fuentes": fuentes or {}}
     for dim in borrador.get("dimensiones", []):
         comentarios[dim.get("clave", "")] = dim.get("comentarios", "")
     valores_ca = {
@@ -1290,7 +1409,9 @@ def word_desde_borrador(borrador: dict, nombre_archivo: str) -> str:
     }
     emp_data = {"empleado": borrador.get("empleado", ""), "ca": borrador.get("caActual", "")}
     sk.guardar_informe_anual_word(emp_data, comentarios, cargo=borrador.get("cargo", ""),
-                                  valores_ca=valores_ca, nombre_archivo=nombre_archivo)
+                                  idioma=_idioma_borrador(borrador),
+                                  valores_ca=valores_ca, nombre_archivo=nombre_archivo,
+                                  incluir_fuentes=bool(fuentes))
     return os.path.join(config.CARPETA_WEB, nombre_archivo)
 
 
@@ -1314,8 +1435,9 @@ def finalizar_sesion(advisee: str) -> dict:
 
     emp_data = sesion["emp_data"]
     cargo = sesion.get("cargo", "")
-    sk.guardar_informe_anual_word(emp_data, comentarios_final, cargo=cargo)
-    sk.guardar_informe_anual_html(emp_data, comentarios_final, cargo=cargo)
+    idioma = _idioma_borrador(None, sesion)
+    sk.guardar_informe_anual_word(emp_data, comentarios_final, cargo=cargo, idioma=idioma)
+    sk.guardar_informe_anual_html(emp_data, comentarios_final, cargo=cargo, idioma=idioma)
 
     # Borrador editable en la web: se (re)construye con lo recién acordado.
     # (Si el CA reabre áreas y vuelve a finalizar, el borrador se regenera.)

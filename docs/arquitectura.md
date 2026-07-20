@@ -148,7 +148,7 @@ Soporta la API nueva de **data sources** y la clásica de databases (`_usa_data_
 |---|---|
 | Empleados / perfiles | `obtener_registros_empleados` (caché 5 min), `obtener_perfil_empleado`, `buscar_empleado_y_cargo`, `obtener_slack_id_por_nombre`, `sugerir_empleados_parecidos`, `obtener_paises_disponibles`, `invalidar_cache_empleados` |
 | Evaluaciones mensuales/proyecto | `obtener_o_crear_bbdd_evaluado`, `guardar_en_notion`, `actualizar_en_notion`, `obtener_evaluaciones_por_evaluado`, `obtener_historial_mis_evaluaciones`, `guardar_barbecho_en_notion` |
-| Career Advisor / advisees | `obtener_advisees` (lee A1…An de Lista CA), `obtener_ca_de_empleado`, `obtener_opiniones_ca_por_advisee`, `ca_tiene_acceso_activo`, `toggle_acceso_advisees`, `advisee_tiene_acceso_individual`, `toggle_acceso_advisee_individual` |
+| Career Advisor / advisees | `obtener_advisees` (lee A1…An de Lista CA), `obtener_ca_de_empleado`, `obtener_opiniones_ca_por_advisee`, `advisee_tiene_acceso_individual`, `toggle_acceso_advisee_individual`, `existe_informe_final` |
 | Objetivos | `guardar_objetivo_persona`, `obtener_objetivos_persona(nombre, antiguos=False)`, `mover_objetivo_a_antiguos` (copia a `Objetivos antiguos - {nombre}` y archiva el original), `eliminar_objetivo_persona` |
 | Feedback confidencial | `excluir_feedback_confidencial`, `obtener_feedback_confidencial_por_evaluado`, `obtener_todo_el_feedback_confidencial` (anonimizado) |
 | Evaluación personal | `guardar_evaluacion_personal`, `obtener_comentarios_personales`, `evaluacion_personal_guardada_desde` |
@@ -305,7 +305,7 @@ compatibilidad (`from .api.app import app, iniciar_api_backend`). uvicorn escuch
 |---|---|---|
 | `auth` | `/api/login`, `/logout`, `/register(/verify)`, `/password-reset/*`, `/me`, `/set-idioma`, `/set-pais` | Sesión, alta, idioma/país |
 | `perfiles` | `/api/evaluados`, `/mis-advisees`, `/mi-perfil`, `/paises`, `/perfil-empleado`, `/todos-empleados` | Directorio y perfiles |
-| `ca` | `/api/opiniones-ca`, `/objetivos`, `/acceso-advisees(-individual)`, `/notas-ca`, `/resumen-evaluaciones-advisee`, `/historial-evaluaciones`, `/feedback-confidencial(-todos)`, `/criterios-evaluacion`, `/cumplimiento-evaluaciones(-detalle)` | Todo lo del CA + cumplimiento admin |
+| `ca` | `/api/opiniones-ca`, `/objetivos`, `/acceso-advisee-individual`, `/notas-ca`, `/resumen-evaluaciones-advisee`, `/historial-evaluaciones`, `/feedback-confidencial(-todos)`, `/criterios-evaluacion`, `/cumplimiento-evaluaciones(-detalle)` | Todo lo del CA + cumplimiento admin |
 | `project_evals` | `/api/evaluaciones-proyecto-*`, `/preguntas-evaluacion-proyecto`, `/equipo-proyecto`, `/activar-evaluaciones-proyecto`, `/modificar-equipo-proyecto`, `/recordatorio-proyecto`, `/guardar-evaluacion-proyecto`, `/borrador-*` | Evaluaciones estructuradas de equipo |
 | `evaluaciones_extra` | `/api/evaluaciones-extra-*`, `/solicitar-evaluacion-extra`, `/guardar-evaluacion-extra` | Evaluaciones fuera de proyecto |
 | `personal_slack` | `/api/tareas-slack`, `/estado-ciclo-slack`, `/buscar-empleado-slack`, `/guardar-evaluacion-slack`, `/actualizar-evaluacion-slack`, `/guardar-evaluacion-personal`, `/urgencia-personal` | Réplica web de los chats de Slack |
@@ -395,6 +395,11 @@ Asistente conversacional donde el CA recorre el informe **área por área** con 
 (`obtener_plan_accion`, `pedir_cambios_plan`, `chatear_plan` con Haiku) → `finalizar_sesion` (exige todas las áreas
 confirmadas; genera `.docx` + `.html` reusando la maquetación de `skill_informes_anual`; escribe log en Notion) →
 borrador web editable (`obtener_borrador`, `guardar_borrador`, `generar_docx_borrador`).
+
+`guardar_plan_accion` (el botón **Guardar** del plan) además lo publica en Notion: **TO-SEE → Planes de acción →
+BD `Plan de acción - {Nombre}`**, una fila por versión guardada (`guardar_plan_accion_en_notion`). Lo que genera
+la IA (`obtener_plan_accion` con `forzar`, `pedir_cambios_plan`) es borrador local hasta que el CA lo confirma.
+Notion es best-effort: si falla, el plan queda igualmente en el JSON de sesión.
 
 ### 8.5 Motores de salida
 

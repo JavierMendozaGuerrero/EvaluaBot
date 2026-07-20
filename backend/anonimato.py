@@ -1,12 +1,9 @@
 import json
 import os
-import re
+
+from .utils import normalizar_nombre
 
 _CONFIG_PATH = os.path.join(os.path.dirname(__file__), "dashboard_web", "anonimato.json")
-
-
-def _norm(s):
-    return " ".join(re.sub(r"[^a-z0-9]", " ", (s or "").strip().lower()).split())
 
 _DEFAULTS = {"global_anonimo": True, "advisees_revelados": []}
 
@@ -39,5 +36,5 @@ def evaluadores_visibles_para_advisee(nombre_advisee: str, cfg=None) -> bool:
         cfg = cargar_config()
     if not cfg.get("global_anonimo", True):
         return True
-    revelados_norm = {_norm(n) for n in (cfg.get("advisees_revelados") or [])}
-    return _norm(nombre_advisee) in revelados_norm
+    revelados_norm = {normalizar_nombre(n) for n in (cfg.get("advisees_revelados") or [])}
+    return normalizar_nombre(nombre_advisee) in revelados_norm

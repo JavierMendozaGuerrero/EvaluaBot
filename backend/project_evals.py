@@ -1017,8 +1017,11 @@ def _limpiar_registros_evaluacion_miembro(proyecto: str, empleado: str) -> None:
         logging.exception("Error limpiando registros de '%s' en proyecto '%s'", empleado, proyecto)
 
 
-def eliminar_miembro_proyecto(proyecto: str, empleado: str, idioma: str = "es") -> dict:
-    """Desactiva a un empleado de un proyecto (Activo=False) y limpia sus registros."""
+def eliminar_miembro_proyecto(proyecto: str, empleado: str, idioma: str = "es", manager: str = "") -> dict:
+    """Desactiva a un empleado de un proyecto (Activo=False) y limpia sus registros.
+
+    `manager` solo se usa para decirle en el DM a quién reclamar si es un error.
+    """
     db_id = _obtener_o_crear_bbdd_activaciones()
     if not db_id:
         return {"ok": False, "error": t("pe.err_db_access", idioma)}
@@ -1035,6 +1038,17 @@ def eliminar_miembro_proyecto(proyecto: str, empleado: str, idioma: str = "es") 
             return {"ok": False, "error": t("pe.err_member_not_found", idioma)}
         notion.pages.update(page_id=existing[0]["id"], properties={"Activo": {"checkbox": False}})
         threading.Thread(target=_limpiar_registros_evaluacion_miembro, args=(proyecto, empleado), daemon=True).start()
+        # La baja ya está hecha: que un fallo buscando el Slack ID no la reporte como error.
+        try:
+            slack_id = None
+            for r in obtener_registros_empleados():
+                if normalizar_nombre(r.get("nombre", "")) == normalizar_nombre(empleado):
+                    slack_id = r.get("id_usuario")
+                    break
+            if slack_id:
+                _notificar_eliminado_de_proyecto(empleado, proyecto, slack_id, manager)
+        except Exception:
+            logging.exception("No se pudo avisar a '%s' de su baja en '%s'", empleado, proyecto)
         _invalidar_cache_activaciones()
         _invalidar_cache_completadas(proyecto)
         return {"ok": True}
@@ -1337,7 +1351,10 @@ def obtener_evaluaciones_proyecto_por_evaluador(evaluador: str, desde_fecha: str
     salida = list(por_proyecto.values())
     for entrada in salida:
         entrada["evaluaciones"].sort(key=lambda x: x.get("fecha", ""), reverse=True)
-    salida.sort(key=lambda e: e["evaluaciones"][0]["fecha"] if e["evaluaciones"] else "", reverse=True)
+    # Fecha de la eval más reciente (desc). Como en un mismo día suele haber varias evals,
+    # desempatamos por nombre de proyecto (también desc: el prefijo de año deja los recientes
+    # arriba) para que el orden sea estable entre recargas y no dependa del orden de llegada.
+    salida.sort(key=lambda e: (e["evaluaciones"][0]["fecha"] if e["evaluaciones"] else "", e["nombre_proyecto"]), reverse=True)
     with _lock_evals_por_evaluador:
         _cache_evals_por_evaluador[clave_cache] = {"t": ahora, "rows": salida}
     return [dict(g, evaluaciones=list(g["evaluaciones"])) for g in salida]
@@ -1609,6 +1626,23 @@ def _notificar_evaluacion_activada(nombre_empleado: str, proyecto: str, slack_id
         logging.info("Notificación enviada a '%s' (Slack: %s)", nombre_empleado, slack_id)
     except Exception:
         logging.exception("Error enviando notificación Slack a '%s'", nombre_empleado)
+
+
+def _notificar_eliminado_de_proyecto(nombre_empleado: str, proyecto: str, slack_id: str, manager: str = ""):
+    """Avisa por DM a quien se ha sacado de un proyecto activo, para que no se quede
+    esperando unas evaluaciones que ya han desaparecido de su web."""
+    try:
+        dm = slack_app.client.conversations_open(users=[slack_id])
+        channel = dm["channel"]["id"]
+        # El idioma es el de QUIEN RECIBE el DM, no el de quien lo eliminó.
+        clave = "web.eval_proyecto_eliminado" if manager else "web.eval_proyecto_eliminado_sin_manager"
+        slack_app.client.chat_postMessage(
+            channel=channel,
+            text=t(clave, idioma_por_slack_id(slack_id), proyecto=proyecto, manager=manager),
+        )
+        logging.info("Notificación de baja enviada a '%s' (Slack: %s)", nombre_empleado, slack_id)
+    except Exception:
+        logging.exception("Error enviando notificación Slack de baja a '%s'", nombre_empleado)
 
 
 # ---------------------------------------------------------------------------

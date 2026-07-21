@@ -25,7 +25,6 @@
 - `PREFIJO_BBDD = "Opiniones - "` — prefijo del título de la BD de opiniones por advisee.
 - `_PALABRAS_NUMERO_CA` — mapa de palabras ("uno".."diez") a números 1–10, para resolver selección de advisee por número.
 - `_PROPS_CA` — esquema de propiedades de la BD de opiniones: `Name` (title), `Fecha` (date), `CA` (rich_text), `Opinion` (rich_text), `Resumen` (rich_text).
-- `_OPCIONES_MODIFICACION_CA` — mapea "1"/"advisee" → `advisee`, "2"/"opinion" → `opinion`.
 - `_RECORDATORIO_CA_SEGUNDOS = 7 * 24 * 60 * 60` — 1 semana.
 
 ---
@@ -125,13 +124,7 @@ Botones: `ca_confirmar` y `ca_modificar`.
 
 > 📷 **[Captura pendiente: tarjeta de confirmación con botones "Sí, guardar" y "Modificar"]**
 
-**8. Modificación** (opcional). Si se pulsa Modificar (`pedir_modificacion_ca`, [L861](../backend/ca_reviews.py#L861)):
-> *¿Qué respuesta quieres modificar?*
-> [Advisee] [Opinión]
-
-Botones: `mod_ca_1` (Advisee) y `mod_ca_2` (Opinión). Al elegir campo se pide el nuevo valor (`_texto_pregunta_ca_por_clave`): "¿Cuál es el nombre de tu advisee?" u "¿Qué opinas de las evaluaciones?". Tras introducir el nuevo valor se vuelve a la confirmación. Si se modifica el advisee y el nuevo nombre no existe o no está asociado al CA, se muestran mensajes de error con sugerencias / lista de advisees válidos.
-
-> 📷 **[Captura pendiente: menú "¿Qué respuesta quieres modificar?" con botones Advisee/Opinión]**
+**8. Modificación** (opcional). Si se pulsa Modificar (`pedir_valor_modificacion_ca`) se pide directamente la nueva opinión ("¿Qué opinas de las evaluaciones?"), con botón Atrás para volver a la confirmación sin cambiar nada. Lo único modificable es la opinión: el advisee sobre el que se ha opinado no se puede cambiar, por eso no hay menú de selección de campo. Tras escribir el nuevo texto se vuelve a la confirmación.
 
 **9. Guardado y siguiente advisee** (`guardar_y_preguntar_otro`, [L921](../backend/ca_reviews.py#L921)). Se revalida que el advisee esté asociado al CA en `Lista CA`; si no:
 > No puedo guardar esta opinión: *{advisee}* no aparece asociado a ti en `Lista CA`.
@@ -252,27 +245,11 @@ Y si vuelve a escribir tras terminar (`ya_terminado`):
 - **Devuelve:** `bool`.
 - **Se llama desde:** modo `confirmacion_ca` ([L650](../backend/ca_reviews.py#L650)).
 
-#### `_texto_menu_modificacion_ca()`
-- **Qué hace:** Devuelve el texto del menú de modificación ("¿Qué respuesta quieres modificar? 1. Advisee 2. Opinión…").
+#### `_texto_pregunta_modificacion_ca(idioma)`
+- **Qué hace:** Devuelve la pregunta de la opinión, que es lo único modificable ("¿Qué opinas de las evaluaciones?").
+- **Parámetros:** `idioma` — str.
 - **Devuelve:** str.
-- **Se llama desde:** `pedir_valor_modificacion_ca` como fallback ([L893](../backend/ca_reviews.py#L893)).
-
-#### `_bloques_menu_modificacion_ca()`
-- **Qué hace:** Construye los bloques Slack del menú de modificación con botones **Advisee** (`mod_ca_1`) y **Opinión** (`mod_ca_2`).
-- **Devuelve:** `list` — bloques Slack.
-- **Se llama desde:** acción `pedir_modificacion_ca` ([L865](../backend/ca_reviews.py#L865)).
-
-#### `_clave_modificacion_ca(texto)`
-- **Qué hace:** Traduce texto/número a la clave de campo (`advisee` / `opinion`) usando `_OPCIONES_MODIFICACION_CA`.
-- **Parámetros:** `texto` — str.
-- **Devuelve:** `str | None`.
-- **Se llama desde:** modo `seleccionando_modificacion_ca` ([L663](../backend/ca_reviews.py#L663)).
-
-#### `_texto_pregunta_ca_por_clave(clave)`
-- **Qué hace:** Devuelve la pregunta a mostrar según el campo a modificar ("¿Cuál es el nombre de tu advisee?" / "¿Qué opinas de las evaluaciones?" / genérica).
-- **Parámetros:** `clave` — str.
-- **Devuelve:** str.
-- **Se llama desde:** acción `pedir_valor_modificacion_ca` ([L893](../backend/ca_reviews.py#L893)).
+- **Se llama desde:** `_enviar_pregunta_valor_modificacion_ca`.
 
 #### `_mensaje_advisee_no_encontrado(nombre)`
 - **Qué hace:** Genera un mensaje de error para cuando el advisee no aparece en la lista de empleados, incluyendo sugerencias de nombres parecidos si las hay.
@@ -325,7 +302,7 @@ Y si vuelve a escribir tras terminar (`ya_terminado`):
 - **Parámetros:** `event` — dict — evento Slack (`user`, `thread_ts`, `channel`, `text`); `logger` — logger.
 - **Devuelve:** `None`.
 - **Efectos (Slack/Notion/Claude/estado):** múltiples `chat_postMessage`; llama a `generar_resumen_evaluacion` (Claude) en `llamar_claude`; `_guardar_opinion` (Notion) al confirmar; lee/escribe `conversaciones_ca` bajo `_lock`. Ignora usuarios no activos. Gestiona el atajo "SOS".
-  - **Modos:** `pre_inicial` → `esperando_advisee` → `esperando_permiso_claude` → `esperando_opinion` → `confirmacion_ca` → (`seleccionando_modificacion_ca` → `modificando_respuesta_ca`) → `esperando_otro` → `terminado`.
+  - **Modos:** `pre_inicial` → `esperando_advisee` → `esperando_permiso_claude` → `esperando_opinion` → `confirmacion_ca` → (`modificando_respuesta_ca`) → `esperando_otro` → `terminado`.
   - **Función anidada `reply(text)`:** publica un mensaje en el hilo.
   - **Función anidada `_reply_lista_advisees(prefijo="")`:** recalcula advisees pendientes (excluye `advisees_guardados`), guarda `lista_advisees`, y muestra la lista de botones o cierra si no quedan.
 - **Se llama desde:** `slack_bot.py` (mensajes de hilo) y los action handlers de este archivo (que reinyectan eventos sintéticos).
@@ -393,13 +370,6 @@ Y si vuelve a escribir tras terminar (`ya_terminado`):
 
 #### `_handle_ca_modificar(ack, body, logger)` — `@slack_app.action("ca_modificar")`
 - **Qué hace:** Handler del botón "✏️ Modificar": reinyecta `text="modificar"` a `manejar_mensaje_ca`.
-- **Parámetros:** `ack`, `body`, `logger`.
-- **Devuelve:** `None`.
-- **Efectos (Slack):** `ack()`, `manejar_mensaje_ca`.
-- **Se llama desde:** Slack.
-
-#### `_handle_mod_ca_opcion(ack, body, logger)` — `@slack_app.action(r"^mod_ca_\d+$")`
-- **Qué hace:** Handler de los botones del menú "¿Qué respuesta quieres modificar?": toma el `value` del botón (número de campo) y lo reinyecta a `manejar_mensaje_ca`.
 - **Parámetros:** `ack`, `body`, `logger`.
 - **Devuelve:** `None`.
 - **Efectos (Slack):** `ack()`, `manejar_mensaje_ca`.

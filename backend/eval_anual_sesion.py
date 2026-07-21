@@ -444,11 +444,19 @@ def _aportaciones(sesion: dict) -> list[dict]:
     return sesion.setdefault("emp_data", {}).setdefault("aportaciones_ca", [])
 
 
+# 'resultado' es la síntesis global del año, no una dimensión con evidencia propia: es un
+# resumen de lo ya dicho en las demás áreas. No debe tener su propio panel de evidencia
+# —si Claude cuela una cita en la síntesis, no queremos que arrastre esa fuente aquí—.
+_AREAS_SIN_EVIDENCIA = {"resultado"}
+
+
 def _evidencia_area(sesion: dict, comentarios: dict, fuentes: dict, clave: str) -> list[dict]:
     """Evidencia del área: lo que Claude citó + las aportaciones que el CA registró en ella.
 
     Las aportaciones no salen de _evidencia_de_area porque esa lee las citas de la
     valoración inicial de Claude, escrita antes de que el CA abriera la boca."""
+    if clave in _AREAS_SIN_EVIDENCIA:
+        return []
     items = _evidencia_de_area(comentarios, fuentes, clave)
     vistos = {e["cid"] for e in items}
     for ap in _aportaciones(sesion):
@@ -949,7 +957,8 @@ def obtener_area(advisee: str, clave: str) -> dict:
     comentarios = _asegurar_comentarios(slug, sesion)
     _, fuentes = _emp_y_fuentes(sesion)
     evidencia = _evidencia_area(sesion, comentarios, fuentes, clave)
-    no_citadas = _fuentes_no_citadas(fuentes, evidencia)
+    # En una síntesis no hay "fuentes que la IA no usó aquí": no evalúa fuentes, resume.
+    no_citadas = [] if clave in _AREAS_SIN_EVIDENCIA else _fuentes_no_citadas(fuentes, evidencia)
     area = sesion.setdefault("areas", {}).setdefault(
         clave, {"conversacion": [], "propuesta": "", "confirmada": False})
 

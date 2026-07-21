@@ -112,6 +112,10 @@ export const STRINGS = {
   "admin.reports": { es: "Informes", en: "Reports" },
   "admin.view_final_report": { es: "Ver informe final", en: "View final report" },
   "admin.download_word": { es: "Descargar Word", en: "Download Word" },
+  // Botones de la ficha de empleado del panel admin. No reutilizan admin.view_final_report /
+  // admin.download_word porque ahí el rótulo va explícito ("en web", "del informe final").
+  "admin.view_final_report_web": { es: "Ver informe final en web", en: "View final report on the web" },
+  "admin.download_word_final_report": { es: "Descargar Word del informe final", en: "Download final report as Word" },
   "admin.no_final_report": { es: "Sin informe final disponible.", en: "No final report available." },
   "admin.search_employee": { es: "Buscar empleado", en: "Search employee" },
   "admin.search_placeholder": { es: "Escribe un nombre...", en: "Type a name..." },
@@ -621,6 +625,11 @@ export const STRINGS = {
   "eaw.resetting": { es: "Eliminando…", en: "Deleting…" },
   "eaw.reset_confirm": { es: "¿Seguro que quieres eliminar todo el progreso de este informe (conversaciones y áreas confirmadas) y empezar de cero? Esta acción no se puede deshacer.", en: "Are you sure you want to delete all progress on this report (conversations and confirmed areas) and start over? This action cannot be undone." },
   "eaw.year_stat": { es: "Año {anio} · {done}/{total} áreas confirmadas", en: "Year {anio} · {done}/{total} areas confirmed" },
+  "eaw.area_label": { es: "Área: {area}", en: "Area: {area}" },
+  "eaw.template_changed": { es: "Los criterios de evaluación han cambiado en Notion desde que empezaste este informe. Sigues trabajando con la plantilla original; puedes pasarte a la nueva cuando quieras.", en: "The evaluation criteria have changed in Notion since you started this report. You are still working with the original template; you can switch to the new one whenever you want." },
+  "eaw.template_update": { es: "Actualizar plantilla", en: "Update template" },
+  "eaw.template_updating": { es: "Actualizando…", en: "Updating…" },
+  "eaw.template_confirm": { es: "Se aplicarán los criterios que hay ahora en Notion. Las áreas que sigan existiendo conservan lo que ya has escrito; las que se hayan quitado dejarán de mostrarse. Si hay áreas nuevas se rehará el análisis del año (tarda ~1 min). ¿Continuar?", en: "The criteria currently in Notion will be applied. Areas that still exist keep what you have written; removed ones will no longer be shown. If there are new areas, the yearly analysis will be redone (~1 min). Continue?" },
   "eaw.err_start": { es: "No se pudo iniciar la evaluación.", en: "The evaluation could not be started." },
   "eaw.confirm_identity_q": { es: "¿Es esta la persona que vas a evaluar?", en: "Is this the person you’re going to evaluate?" },
   "eaw.year_projects": { es: "Proyectos del año: {list}", en: "Projects this year: {list}" },

@@ -114,6 +114,14 @@ def eval_anual_eliminar(datos: dict = Body(default={}), session=Depends(require_
     return eval_sesion.eliminar_sesion(evaluado)
 
 
+@router.post("/api/eval-anual/actualizar-plantilla")
+def eval_anual_actualizar_plantilla(datos: dict = Body(default={}), session=Depends(require_session)):
+    evaluado = _requiere_evaluado(datos.get("evaluado", ""), session)
+    if evaluado is None:
+        return JSONResponse({"error": "Falta el campo evaluado."}, status_code=400)
+    return eval_sesion.actualizar_plantilla(evaluado)
+
+
 @router.post("/api/eval-anual/responder-area")
 def eval_anual_responder_area(datos: dict = Body(default={}), session=Depends(require_session)):
     evaluado = _requiere_evaluado(datos.get("evaluado", ""), session)

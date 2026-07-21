@@ -48,8 +48,11 @@ def test_idioma_desconocido_cae_a_espanol():
     assert _borrador("klingon")["idioma"] == "es"
 
 
+# En español la etiqueta es la de la dimensión tal cual (la de Notion, o la fija si
+# Notion no responde); en los demás idiomas se traduce por slug. Ya no existe la
+# variante corta "Gestión proyecto": el título del criterio en Notion es el único.
 @pytest.mark.parametrize("idioma,fecha_mes,dimension", [
-    ("es", "Julio", "Gestión proyecto"),
+    ("es", "Julio", "Gestión del proyecto"),
     ("en", "July", "Project management"),
     ("pt", "Julho", "Gestão de projeto"),
 ])

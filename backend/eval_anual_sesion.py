@@ -14,7 +14,9 @@ Flujo:
 Persistencia: JSON local junto al informe (`sesion_anual_{slug}.json`).
 """
 
+import contextlib
 import functools
+import hashlib
 import json
 import logging
 import os
@@ -34,6 +36,8 @@ from .notion_service import (
     buscar_empleado_y_cargo,
     obtener_borrador_estructurado,
     obtener_criterios_evaluacion,
+    obtener_criterios_por_clave,
+    slug_criterio,
 )
 from .utils import slug_archivo
 from . import skill_informes_anual as sk
@@ -41,14 +45,132 @@ from . import skill_informes_anual as sk
 
 # ── Secciones del recorrido ───────────────────────────────────────────────────
 
-def _secciones(cargo: str) -> list[tuple[str, str]]:
-    """Áreas por las que pasa el CA, en orden. Todas."""
-    secs = list(sk._DIMS_PROYECTOS)
-    if any(c in cargo.strip().lower() for c in sk._REQUIERE_LIDERAZGO):
-        secs += list(sk._DIMS_LIDERAZGO)
+def _migrar_areas_legacy(sesion: dict, dims: list[dict]) -> None:
+    """Reencaja las áreas guardadas con claves antiguas sobre las claves nuevas.
+
+    Las dimensiones se identificaban por un slug fijo en el código; ahora la clave es el
+    id de la página de Notion. Sin esto, una sesión empezada antes del cambio perdería
+    todo lo que el CA ya hubiera escrito: `areas.get(clave)` no encontraría nada y las
+    áreas volverían a salir en blanco y sin confirmar.
+    """
+    areas = sesion.get("areas") or {}
+    for d in dims:
+        antigua = sk._SLUG_A_LEGACY.get(d["slug"], d["slug"])
+        if d["clave"] not in areas and antigua in areas:
+            areas[d["clave"]] = areas.pop(antigua)
+            logging.info("[sesion anual] área '%s' migrada a la clave de Notion", antigua)
+
+
+@contextlib.contextmanager
+def _cronometro(etiqueta: str, umbral_s: float = 0.5):
+    """Mide una fase y la registra si tarda. Para saber DÓNDE se va el tiempo, en vez de
+    deducirlo: el log dice `[perf] <fase>: Ns`, con lo que se ve de un vistazo si la
+    espera es Notion, la cola de IA o la llamada a Claude."""
+    t0 = time.time()
+    try:
+        yield
+    finally:
+        dt = time.time() - t0
+        if dt >= umbral_s:
+            logging.warning("[perf] %s: %.1fs", etiqueta, dt)
+
+
+def _area_sesion(sesion: dict) -> str:
+    """Área del empleado (Negocio/Palantir/MiddleOffice), resuelta una vez y guardada.
+
+    Decide qué criterios y qué apartados le tocan, y se consulta en cada refresco del
+    estado: si se releyera de Notion cada vez, la pantalla del CA dependería de que
+    Notion responda para algo que no cambia durante la sesión.
+    """
+    area = sesion.get("area")
+    if area is None:
+        try:
+            area = sk._grupo_empleado(sesion.get("advisee", ""), sesion.get("cargo", ""))
+        except Exception:
+            logging.exception("[sesion anual] no se pudo resolver el área de '%s'", sesion.get("advisee", ""))
+            area = ""
+        sesion["area"] = area
+    return area
+
+
+def _huella_plantilla(sesion: dict, dims: list[dict]) -> str:
+    """Firma de la plantilla de la sesión: estructura Y contenido de los criterios.
+
+    No basta con las dimensiones. Retocar la redacción de un bullet en Notion es mucho
+    más frecuente que añadir o quitar un área entera, y el CA estaría valorando contra un
+    texto que ya no es el vigente: los bullets se congelan por área la primera vez que la
+    abre y no se refrescan nunca. Metiendo el contenido aquí, ese caso también avisa.
+    """
+    try:
+        criterios = obtener_criterios_evaluacion(
+            _area_sesion(sesion), normalizar_idioma(sesion.get("idioma", "es"))) or {}
+    except Exception:
+        logging.exception("[sesion anual] no se pudieron leer los criterios para la huella")
+        criterios = {}
+    base = sk.huella_dimensiones(dims) + "|" + json.dumps(criterios, ensure_ascii=False, sort_keys=True)
+    return hashlib.sha256(base.encode()).hexdigest()
+
+
+def _plantilla(sesion: dict) -> list[dict]:
+    """Dimensiones de esta sesión, congeladas al iniciarla.
+
+    No se refrescan solas a propósito: si los criterios cambian en Notion a mitad de
+    campaña, el CA termina con la plantilla con la que empezó y la web le avisa de que
+    hay una versión más nueva (ver estado_plantilla / actualizar_plantilla). Cambiarla
+    por debajo le haría aparecer o desaparecer áreas mientras trabaja.
+    """
+    dims = sesion.get("dimensiones")
+    if not dims:
+        dims = sk.dimensiones_informe(sesion.get("advisee", ""), sesion.get("cargo", ""),
+                                      grupo=_area_sesion(sesion))
+        _migrar_areas_legacy(sesion, dims)
+        sesion["dimensiones"] = dims
+        sesion["huella_plantilla"] = _huella_plantilla(sesion, dims)
+    return dims
+
+
+def _secciones(sesion: dict) -> list[tuple[str, str]]:
+    """Áreas por las que pasa el CA, en orden. Todas.
+
+    La etiqueta se queda en español (la de Notion): es la que se usa para buscar los
+    criterios y para redactar la pregunta del área. Traducir es cosa del borrador.
+    """
+    secs = [(d["clave"], d["etiqueta"]) for d in _plantilla(sesion)]
     secs.append(("contribution_to_firm", "Contribution to the firm"))
     secs.append(("resultado", "Resultado global"))
     return secs
+
+
+def estado_plantilla(sesion: dict) -> dict:
+    """¿Han cambiado los criterios en Notion desde que se abrió la sesión?
+
+    Solo lee la marca ya calculada. Antes comparaba contra Notion aquí mismo, y como esto
+    entra en cada refresco del estado, una web que debería ser instantánea se quedaba
+    esperando a Notion. La comparación se hace en `_revisar_plantilla`, desde los sitios
+    que ya están leyendo Notion de todas formas.
+    """
+    return {"cambiada": bool(sesion.get("plantilla_desactualizada"))}
+
+
+def _revisar_plantilla(sesion: dict) -> bool:
+    """Compara la plantilla congelada con la de Notion y deja la marca en la sesión.
+
+    Se llama desde donde ya se está pagando una lectura de Notion (abrir un área, iniciar
+    la sesión), nunca desde el refresco del estado.
+    """
+    congelada = sesion.get("huella_plantilla") or ""
+    if not congelada:
+        return False
+    try:
+        actual = _huella_plantilla(
+            sesion,
+            sk.dimensiones_informe(sesion.get("advisee", ""), sesion.get("cargo", ""),
+                                   grupo=_area_sesion(sesion)))
+    except Exception:
+        logging.exception("[sesion anual] no se pudo comprobar la plantilla actual")
+        return bool(sesion.get("plantilla_desactualizada"))
+    sesion["plantilla_desactualizada"] = congelada != actual
+    return sesion["plantilla_desactualizada"]
 
 
 # ── Persistencia (JSON local) ─────────────────────────────────────────────────
@@ -249,9 +371,19 @@ def _asegurar_comentarios(slug: str, sesion: dict) -> dict:
     if fresca and fresca.get("comentarios"):
         sesion["comentarios"] = fresca["comentarios"]
         return sesion["comentarios"]
-    with turno_analisis_anual():
-        comentarios = sk.interpretar_evaluaciones_anual(sesion["emp_data"], cargo=sesion.get("cargo", ""),
-                                                        idioma=normalizar_idioma(sesion.get("idioma", "es")))
+    with _cronometro("esperando turno en la cola de analisis"):
+        cm = turno_analisis_anual()
+        cm.__enter__()
+    try:
+        with _cronometro("analisis del año con Claude"):
+            # Con la plantilla congelada de la sesión, no con la que haya ahora en Notion: si
+            # hubieran cambiado los criterios, el análisis vendría tecleado por unas claves y
+            # las áreas por las que pasa el CA por otras, y no encontraría ninguna evidencia.
+            comentarios = sk.interpretar_evaluaciones_anual(sesion["emp_data"], cargo=sesion.get("cargo", ""),
+                                                            idioma=normalizar_idioma(sesion.get("idioma", "es")),
+                                                            dims=_plantilla(sesion))
+    finally:
+        cm.__exit__(None, None, None)
     sesion["comentarios"] = comentarios
     _guardar(slug, sesion)
     return comentarios
@@ -425,11 +557,27 @@ def _criterios_area(cargo: str, clave: str, etiqueta: str, idioma: str = "es", n
         sel = presentes[max(0, idx - 1):] if idx >= 0 else presentes
         return [{"nivel": por_canon[c][0], "criterios": por_canon[c][1]} for c in sel]
 
-    dim_label = _match_dim_label(etiqueta, crit_notion) if crit_notion else None
-    if dim_label:
-        return _seleccionar(crit_notion[dim_label])
-    # Fallback al diccionario hardcodeado (por clave)
-    dim_crit = sk._CRITERIOS_DTI.get(clave, {})
+    # Por clave primero: es un id de página de Notion, así que sigue valiendo aunque el
+    # criterio se haya renombrado después de congelar la plantilla de esta sesión.
+    try:
+        por_clave = obtener_criterios_por_clave(grupo, idioma) or {}
+    except Exception:
+        por_clave = {}
+    if clave in por_clave:
+        return _seleccionar(por_clave[clave])
+
+    # Por título, para las sesiones congeladas antes de que la clave fuera el id, y el
+    # emparejamiento difuso como última red antes del diccionario hardcodeado.
+    if crit_notion:
+        if etiqueta in crit_notion:
+            return _seleccionar(crit_notion[etiqueta])
+        dim_label = _match_dim_label(etiqueta, crit_notion)
+        if dim_label:
+            logging.info("[sesion anual] '%s' emparejado por aproximación con '%s'", etiqueta, dim_label)
+            return _seleccionar(crit_notion[dim_label])
+    # Fallback al diccionario hardcodeado, que sigue tecleado por la clave histórica.
+    slug = slug_criterio(etiqueta)
+    dim_crit = sk._CRITERIOS_DTI.get(sk._SLUG_A_LEGACY.get(slug, slug), {})
     return _seleccionar(dim_crit) if dim_crit else []
 
 
@@ -623,9 +771,15 @@ def iniciar_sesion(advisee: str, cargo: str = "", idioma: str = "es") -> dict:
             "comentarios": None,
             "creada_en": _ahora(),
         }
+        _plantilla(sesion)   # congela las dimensiones con las que trabajará este CA
         _guardar(slug, sesion)
-    elif cargo and cargo != sesion.get("cargo"):
-        sesion["cargo"] = cargo
+    else:
+        if cargo and cargo != sesion.get("cargo"):
+            sesion["cargo"] = cargo
+        # Aquí sí, una vez por entrada al informe: es el único punto de este flujo que
+        # mira si los criterios han cambiado en Notion. Los refrescos de estado leen la
+        # marca ya guardada y no tocan la red.
+        _revisar_plantilla(sesion)
         _guardar(slug, sesion)
 
     return _resumen_estado(sesion)
@@ -665,14 +819,22 @@ def iniciar_manual(advisee: str, cargo: str = "", idioma: str = "es") -> dict:
         }
     elif cargo and cargo != sesion.get("cargo"):
         sesion["cargo"] = cargo
+    _plantilla(sesion)
     if not sesion.get("borrador"):
         sesion["borrador"] = _restaurar_borrador_notion(advisee) or _construir_borrador(sesion)
+        # El de Notion es una copia de cuando se guardó: puede traer dimensiones viejas.
+        _reconciliar_dimensiones(sesion, sesion["borrador"])
+    elif _reconciliar_dimensiones(sesion, sesion["borrador"]):
+        logging.info("[sesion anual] dimensiones del borrador de '%s' puestas al día", advisee)
+    _revisar_plantilla(sesion)
     _guardar(slug, sesion)
-    return {"borrador": sesion["borrador"]}
+    # El estado va también aquí: es lo que lleva el área del advisee y el aviso de que
+    # los criterios han cambiado en Notion. Sin él, el modo manual no podría enseñarlos.
+    return {"borrador": sesion["borrador"], "estado": _resumen_estado(sesion)}
 
 
 def _resumen_estado(sesion: dict) -> dict:
-    secciones = _secciones(sesion.get("cargo", ""))
+    secciones = _secciones(sesion)
     areas = sesion.get("areas", {})
     confirmadas = sum(1 for c, _ in secciones if areas.get(c, {}).get("confirmada"))
     return {
@@ -687,7 +849,56 @@ def _resumen_estado(sesion: dict) -> dict:
                       for c, e in secciones],
         "totalSecciones": len(secciones),
         "seccionesConfirmadas": confirmadas,
+        # El área manda en qué criterios y qué apartados le tocan a esta persona: el CA
+        # necesita verla para saber con qué plantilla está trabajando.
+        # Solo lo ya guardado: resolverla aquí metería una lectura de Notion en cada
+        # refresco del estado. La fija _area_sesion desde los caminos que sí escriben.
+        "area": sesion.get("area", ""),
+        # Aviso, no cambio automático: si los criterios cambiaron en Notion después de
+        # abrir la sesión, el CA decide si sigue con la suya o se pasa a la nueva.
+        "plantillaDesactualizada": estado_plantilla(sesion).get("cambiada", False),
     }
+
+
+@_con_lock_sesion
+def actualizar_plantilla(advisee: str) -> dict:
+    """Adopta las dimensiones que hay ahora en Notion, conservando lo ya escrito.
+
+    Las áreas que siguen existiendo mantienen su conversación y su texto (van por clave,
+    que no cambia al renombrar). Las que se hayan quitado en Notion se conservan en el
+    JSON pero dejan de mostrarse; las nuevas salen vacías y sin confirmar.
+    """
+    slug = slug_archivo(advisee)
+    sesion = _leer(slug)
+    if not sesion:
+        raise ValueError("No hay sesión iniciada.")
+    dims = sk.dimensiones_informe(sesion.get("advisee", ""), sesion.get("cargo", ""),
+                                  grupo=_area_sesion(sesion))
+    _migrar_areas_legacy(sesion, dims)
+    antes = sesion.get("huella_plantilla") or ""
+    sesion["dimensiones"] = dims
+    sesion["huella_plantilla"] = _huella_plantilla(sesion, dims)
+    cambiada = antes != sesion["huella_plantilla"]
+    # Los bullets que ve el CA se congelan por área al abrirla y no se refrescan solos.
+    # Vaciarlos aquí es lo que hace que el botón cumpla lo que promete: se releen de
+    # Notion la próxima vez que entre en cada área. No cuesta IA, solo una lectura.
+    for area in (sesion.get("areas") or {}).values():
+        area.pop("criterios", None)
+    sesion["plantilla_desactualizada"] = False
+    if cambiada:
+        # El análisis cacheado repartió la evidencia según los criterios ANTERIORES. Qué
+        # evaluación pertenece a qué dimensión depende de lo que esos criterios dicen, así
+        # que si cambian —aunque solo sea el texto de un bullet— el reparto viejo ya no
+        # vale: si no, un criterio recién vaciado se sigue quedando con las evaluaciones
+        # que tenía. Se tira y se rehace. Es la única parte que vuelve a costar IA.
+        logging.info("[sesion anual] la plantilla cambió: se rehará el análisis de '%s'", advisee)
+        sesion["comentarios"] = None
+        for area in (sesion.get("areas") or {}).values():
+            area.pop("resumen_final", None)
+    if sesion.get("borrador"):
+        _reconciliar_dimensiones(sesion, sesion["borrador"])
+    _guardar(slug, sesion)
+    return {**_resumen_estado(sesion), "borrador": sesion.get("borrador")}
 
 
 @_con_lock_sesion
@@ -732,7 +943,7 @@ def obtener_area(advisee: str, clave: str) -> dict:
     sesion = _leer(slug)
     if not sesion:
         raise ValueError("No hay sesión iniciada.")
-    secciones = dict(_secciones(sesion.get("cargo", "")))
+    secciones = dict(_secciones(sesion))
     if clave not in secciones:
         raise ValueError(f"Sección desconocida: {clave}")
     comentarios = _asegurar_comentarios(slug, sesion)
@@ -897,7 +1108,7 @@ def responder_area(advisee: str, clave: str, texto: str) -> dict:
     sesion = _leer(slug)
     if not sesion:
         raise ValueError("No hay sesión iniciada.")
-    secciones = dict(_secciones(sesion.get("cargo", "")))
+    secciones = dict(_secciones(sesion))
     if clave not in secciones:
         raise ValueError(f"Sección desconocida: {clave}")
     if not (texto or "").strip():
@@ -952,7 +1163,7 @@ def generar_resumen_area(advisee: str, clave: str) -> dict:
     sesion = _leer(slug)
     if not sesion:
         raise ValueError("No hay sesión iniciada.")
-    secciones = dict(_secciones(sesion.get("cargo", "")))
+    secciones = dict(_secciones(sesion))
     if clave not in secciones:
         raise ValueError(f"Sección desconocida: {clave}")
     area = sesion.get("areas", {}).get(clave)
@@ -1014,7 +1225,7 @@ def _evidencia_y_criterios(sesion: dict, con_evals_en_bruto: bool = False) -> tu
     tiene nada concreto que citar y contesta que le falta información.
     """
     cargo = sesion.get("cargo", "")
-    secciones = _secciones(cargo)
+    secciones = _secciones(sesion)
     areas = sesion.get("areas", {})
     bloques = []
     for clave, etiqueta in secciones:
@@ -1209,12 +1420,38 @@ def guardar_plan_accion(advisee: str, texto: str) -> dict:
 
 # ── Borrador editable del informe final (en la web) ───────────────────────────
 
-def _dims_informe(cargo: str) -> list[tuple[str, str]]:
-    """Dimensiones de la tabla CALIFICACIÓN de la plantilla oficial (proyecto + liderazgo si aplica)."""
-    dims = list(sk._DIMS_PDF)
-    if any(c in (cargo or "").strip().lower() for c in sk._REQUIERE_LIDERAZGO):
-        dims += list(sk._DIMS_LIDERAZGO)
-    return dims
+def _dims_informe(sesion: dict) -> list[dict]:
+    """Dimensiones de la tabla CALIFICACIÓN, las mismas por las que ha pasado el CA."""
+    return _plantilla(sesion)
+
+
+def _reconciliar_dimensiones(sesion: dict, borr: dict) -> bool:
+    """Encaja las filas del borrador con la plantilla. Devuelve True si algo cambió.
+
+    Las filas van por `clave`, que no cambia al renombrar el criterio en Notion, así que
+    las que siguen existiendo conservan su nota y sus comentarios y solo se les actualiza
+    la etiqueta. Las que se hayan quitado desaparecen y las nuevas salen vacías.
+
+    Rehacer el borrador entero sería más corto, pero se llevaría por delante las notas y
+    los retoques que el CA haya escrito a mano encima de lo que propuso Claude.
+    """
+    idioma = normalizar_idioma(borr.get("idioma") or sesion.get("idioma", "es"))
+    previas = {d.get("clave"): d for d in (borr.get("dimensiones") or [])}
+    areas = sesion.get("areas", {})
+    filas = []
+    for d in _plantilla(sesion):
+        vieja = previas.get(d["clave"], {})
+        a = areas.get(d["clave"], {})
+        filas.append({
+            "clave": d["clave"],
+            "etiqueta": sk._dim_label(d["slug"], d["etiqueta"], idioma),
+            "nota": vieja.get("nota", ""),
+            "comentarios": vieja.get("comentarios") or a.get("texto_final") or a.get("propuesta") or "",
+        })
+    if filas == (borr.get("dimensiones") or []):
+        return False
+    borr["dimensiones"] = filas
+    return True
 
 
 def _construir_borrador(sesion: dict) -> dict:
@@ -1231,12 +1468,13 @@ def _construir_borrador(sesion: dict) -> dict:
     idioma = normalizar_idioma(sesion.get("idioma", "es"))
     areas = sesion.get("areas", {})
     dimensiones = []
-    for clave, etiqueta in _dims_informe(sesion.get("cargo", "")):
-        a = areas.get(clave, {})
+    for d in _dims_informe(sesion):
+        a = areas.get(d["clave"], {})
         dimensiones.append({
             # `clave` es la que identifica la fila en todo el sistema; `etiqueta` es solo
             # lo que se pinta, por eso puede traducirse sin romper nada guardado.
-            "clave": clave, "etiqueta": sk._dim_label(clave, etiqueta, idioma), "nota": "",
+            "clave": d["clave"], "etiqueta": sk._dim_label(d["slug"], d["etiqueta"], idioma),
+            "nota": "",
             "comentarios": a.get("texto_final") or a.get("propuesta") or "",
         })
     objetivos = [{"texto": (o.get("titulo") or o.get("descripcion") or "").strip(), "deadline": ""}
@@ -1422,7 +1660,7 @@ def finalizar_sesion(advisee: str) -> dict:
     sesion = _leer(slug)
     if not sesion:
         raise ValueError("No hay sesión iniciada.")
-    secciones = _secciones(sesion.get("cargo", ""))
+    secciones = _secciones(sesion)
     areas = sesion.get("areas", {})
     faltan = [e for c, e in secciones if not areas.get(c, {}).get("confirmada")]
     if faltan:

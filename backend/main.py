@@ -1,6 +1,8 @@
 import logging
+import os
 import sys
 import threading
+from logging.handlers import RotatingFileHandler
 
 from . import config
 from .api_server import iniciar_api_backend
@@ -24,8 +26,31 @@ def validar_configuracion():
     return True
 
 
+def _configurar_logging():
+    """Consola como siempre, más un fichero rotativo en dashboard_web/evaluabot.log.
+
+    Sin esto los logs solo viven en la consola del proceso: cuando algo va lento o falla
+    en el NAS no queda ni rastro que mirar después, y las líneas [perf] que miden dónde
+    se va el tiempo se pierden en cuanto se cierra la terminal.
+    """
+    raiz = logging.getLogger()
+    raiz.setLevel(logging.INFO)
+    raiz.addHandler(logging.StreamHandler())
+    try:
+        os.makedirs(config.CARPETA_WEB, exist_ok=True)
+        fichero = RotatingFileHandler(
+            os.path.join(config.CARPETA_WEB, "evaluabot.log"),
+            maxBytes=5_000_000, backupCount=3, encoding="utf-8",
+        )
+        fichero.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(message)s"))
+        raiz.addHandler(fichero)
+    except Exception:
+        # Un log que no se puede escribir no debe impedir arrancar el bot.
+        logging.exception("No se pudo abrir el fichero de log; se sigue solo con la consola")
+
+
 def main():
-    logging.basicConfig(level=logging.INFO)
+    _configurar_logging()
     if not validar_configuracion():
         sys.exit(1)
 

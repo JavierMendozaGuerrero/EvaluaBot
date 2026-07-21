@@ -784,12 +784,12 @@ function AdminPanel({ token, onBack }) {
                 <>
                   {informeFinal.htmlUrl && (
                     <button onClick={() => openFile(informeFinal.htmlUrl, "informe_final.html")}>
-                      {t("admin.view_final_report")}
+                      {t("admin.view_final_report_web")}
                     </button>
                   )}
                   {informeFinal.docxUrl && (
                     <button className="secondary" onClick={() => openFile(informeFinal.docxUrl, "informe_final.docx")}>
-                      {t("admin.download_word")}
+                      {t("admin.download_word_final_report")}
                     </button>
                   )}
                 </>
@@ -834,28 +834,6 @@ function AdminPanel({ token, onBack }) {
                 </div>
               )}
               <div style={{ marginTop: 20 }}>
-                <p className="kicker">{t("admin.confidential_feedback_title")}</p>
-                <p className="fine">{t("admin.confidential_feedback_note")}</p>
-                {feedbackConfidencial === null ? (
-                  <p className="fine">{t("common.loading")}</p>
-                ) : feedbackConfidencial.length === 0 ? (
-                  <p className="fine">{t("admin.confidential_feedback_empty")}</p>
-                ) : (
-                  <div className="objetivos-list">
-                    {feedbackConfidencial.map((f, i) => (
-                      <article key={i} className="objetivo-item">
-                        <p className="opinion-fecha fine">
-                          {f.fecha ? f.fecha.slice(0, 10) : t("common.no_date")}
-                          {f.proyecto ? ` · ${f.proyecto}` : ""}
-                        </p>
-                        {f.q1 && <p className="objetivo-texto"><strong>{f.q1}</strong></p>}
-                        {f.q2 && <p className="objetivo-texto">{f.q2}</p>}
-                      </article>
-                    ))}
-                  </div>
-                )}
-              </div>
-              <div style={{ marginTop: 20 }}>
                 <p className="kicker">{t("admin.eval_compliance_title")}</p>
                 <p className="fine">{t("admin.eval_compliance_note")}</p>
                 {detalleCumplimiento === null ? (
@@ -887,6 +865,28 @@ function AdminPanel({ token, onBack }) {
                             ))}
                           </div>
                         ))}
+                      </article>
+                    ))}
+                  </div>
+                )}
+              </div>
+              <div style={{ marginTop: 20 }}>
+                <p className="kicker">{t("admin.confidential_feedback_title")}</p>
+                <p className="fine">{t("admin.confidential_feedback_note")}</p>
+                {feedbackConfidencial === null ? (
+                  <p className="fine">{t("common.loading")}</p>
+                ) : feedbackConfidencial.length === 0 ? (
+                  <p className="fine">{t("admin.confidential_feedback_empty")}</p>
+                ) : (
+                  <div className="objetivos-list">
+                    {feedbackConfidencial.map((f, i) => (
+                      <article key={i} className="objetivo-item">
+                        <p className="opinion-fecha fine">
+                          {f.fecha ? f.fecha.slice(0, 10) : t("common.no_date")}
+                          {f.proyecto ? ` · ${f.proyecto}` : ""}
+                        </p>
+                        {f.q1 && <p className="objetivo-texto"><strong>{f.q1}</strong></p>}
+                        {f.q2 && <p className="objetivo-texto">{f.q2}</p>}
                       </article>
                     ))}
                   </div>
@@ -5969,6 +5969,8 @@ function EvaluacionAnualWizard({ token, advisee, onBack, modo }) {
   const [citaSel, setCitaSel] = useState(null);  // cid de la cita abierta en el chat
   const [resumenBusy, setResumenBusy] = useState(false); // sugerencia final del área
   const [resetting, setResetting] = useState(false);
+  const [plantillaBusy, setPlantillaBusy] = useState(false);
+  const [areaNonce, setAreaNonce] = useState(0);
   const [reloadNonce, setReloadNonce] = useState(0);
   const [plan, setPlan] = useState(null);        // plan de acción sugerido (texto)
   const [planInstr, setPlanInstr] = useState("");
@@ -6024,7 +6026,7 @@ function EvaluacionAnualWizard({ token, advisee, onBack, modo }) {
     // Flujo manual: se salta la conversación por áreas y abre el Word editable en blanco.
     if (esManual) {
       apiRequest("/api/eval-anual/iniciar-manual", { token, method: "POST", body: { evaluado: nombre } })
-        .then((r) => { if (!alive) return; setBorr(r.borrador); setStep("borrador"); })
+        .then((r) => { if (!alive) return; setBorr(r.borrador); setEst(r.estado || null); setStep("borrador"); })
         .catch((e) => { if (alive) { setError(e.message); setStep("error"); } });
       return () => { alive = false; };
     }
@@ -6045,13 +6047,18 @@ function EvaluacionAnualWizard({ token, advisee, onBack, modo }) {
   // actualiza `est` para reflejar que un área quedó desconfirmada, este efecto no
   // se relanza y no pisa la conversación recién recibida con un refetch de más.
   const claveActual = est?.secciones?.[secIdx]?.clave;
+  // `areaNonce` fuerza la recarga cuando hay que volver a pedir la MISMA área. Pasa al
+  // actualizar la plantilla: renombrar un criterio en Notion no cambia su clave (es el id
+  // de página), así que sin el nonce las dependencias quedaban igual, el efecto no se
+  // relanzaba y la pantalla se quedaba con `area` en null enseñando la barra de espera
+  // para siempre, sin haber pedido nada al servidor.
   useEffect(() => {
     if (step !== "loop" || !claveActual) return;
     setArea(null); setInput(""); setEvidOpen(true); setError(""); setCitaSel(null);
     apiRequest(`/api/eval-anual/area?evaluado=${encodeURIComponent(nombre)}&clave=${encodeURIComponent(claveActual)}`, { token })
       .then(setArea)
       .catch((e) => setError(e.message));
-  }, [step, claveActual, token, nombre]);
+  }, [step, claveActual, token, nombre, areaNonce]);
 
   async function confirmarIdentidad() {
     setBusy(true); setError("");
@@ -6195,6 +6202,32 @@ function EvaluacionAnualWizard({ token, advisee, onBack, modo }) {
     }
   }
 
+  // Adopta las dimensiones que hay ahora en Notion. No se hace solo a propósito: si los
+  // criterios cambian a mitad de campaña, el CA decide si termina con la plantilla con la
+  // que empezó o se pasa a la nueva (las áreas que sigan existiendo conservan su texto).
+  async function actualizarPlantilla() {
+    if (!window.confirm(t("eaw.template_confirm"))) return;
+    setPlantillaBusy(true); setError("");
+    try {
+      const data = await apiRequest("/api/eval-anual/actualizar-plantilla", {
+        token, method: "POST", body: { evaluado: nombre },
+      });
+      setEst(data);
+      // En manual, lo que se está editando es el borrador: viene rehecho con las
+      // dimensiones nuevas, así que hay que reemplazarlo o se seguirían viendo las viejas.
+      if (data.borrador) setBorr(data.borrador);
+      // El área abierta puede haber dejado de existir: se vuelve a la primera sin confirmar.
+      const i = data.secciones.findIndex((s) => !s.confirmada);
+      setSecIdx(i < 0 ? 0 : i);
+      // Y se pide de nuevo aunque sea la misma clave: su contenido ha cambiado.
+      setAreaNonce((n) => n + 1);
+    } catch (e) {
+      setError(e.message);
+    } finally {
+      setPlantillaBusy(false);
+    }
+  }
+
   // Descarga un PDF con TODA la información recibida por la persona (las 4 fuentes juntas).
   async function descargarInfoCompleta() {
     setDescInfo(true);
@@ -6250,7 +6283,25 @@ function EvaluacionAnualWizard({ token, advisee, onBack, modo }) {
             )}
           </div>
         </div>
-        {est && <p className="fine" style={{ marginBottom: 24 }}>{t("eaw.year_stat", { anio: est.anio, done: est.seccionesConfirmadas, total: est.totalSecciones })}</p>}
+        {est && (
+          <p className="fine" style={{ marginBottom: est.plantillaDesactualizada ? 12 : 24 }}>
+            {t("eaw.year_stat", { anio: est.anio, done: est.seccionesConfirmadas, total: est.totalSecciones })}
+            {/* El área decide qué criterios y qué apartados le tocan a esta persona. */}
+            {est.area && <> · {t("eaw.area_label", { area: est.area })}</>}
+          </p>
+        )}
+        {est?.plantillaDesactualizada && (
+          <div
+            className="panel"
+            style={{ marginBottom: 24, padding: "12px 16px", borderColor: "#f59e0b", background: "#fffbeb",
+                     display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}
+          >
+            <span style={{ flex: "1 1 320px" }}>{t("eaw.template_changed")}</span>
+            <button className="secondary" onClick={actualizarPlantilla} disabled={plantillaBusy}>
+              {plantillaBusy ? t("eaw.template_updating") : t("eaw.template_update")}
+            </button>
+          </div>
+        )}
         {error && <p className="form-error">{error}</p>}
         {children}
       </div>

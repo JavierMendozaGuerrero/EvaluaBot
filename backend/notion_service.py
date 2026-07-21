@@ -1928,7 +1928,10 @@ def _obtener_db_criterios(grupo: str) -> str | None:
     global _criterios_db_ids, _criterios_db_ids_ts
     ahora = time.time()
     with _lock_criterios:
-        if _criterios_db_ids and (ahora - _criterios_db_ids_ts) < _CRITERIOS_CACHE_TTL:
+        # Ojo con el `_criterios_db_ids_ts > 0`: antes esto miraba si el dict tenía algo, y
+        # un dict vacío es falsy, así que cuando el descubrimiento no encontraba nada se
+        # repetía el escaneo entero de páginas MÁS una búsqueda global en cada llamada.
+        if _criterios_db_ids_ts > 0 and (ahora - _criterios_db_ids_ts) < _CRITERIOS_CACHE_TTL:
             return _criterios_db_ids.get(grupo)
 
     try:
@@ -1946,6 +1949,8 @@ def _obtener_db_criterios(grupo: str) -> str | None:
             criterios_page_id = _buscar_objeto_notion_por_nombre(_NOMBRE_PAGINA_CRITERIOS)
         if not criterios_page_id:
             logging.warning("[criterios] No se encontró la página '%s'", _NOMBRE_PAGINA_CRITERIOS)
+            with _lock_criterios:   # cachear también el "no está": si no, se reintenta en cada petición
+                _criterios_db_ids, _criterios_db_ids_ts = {}, time.time()
             return None
         ids: dict[str, str] = {}
         for bloque in _iter_blocks(criterios_page_id):
@@ -1980,34 +1985,52 @@ def _obtener_db_criterios(grupo: str) -> str | None:
         return ids.get(grupo)
     except Exception:
         logging.exception("Error buscando BD de criterios para grupo '%s'", grupo)
+        with _lock_criterios:   # y el fallo también: reintentar en bucle bloquea la web
+            _criterios_db_ids, _criterios_db_ids_ts = {}, time.time()
         return None
 
 
-def obtener_criterios_evaluacion(grupo: str, idioma: str = "es") -> dict:
+_NIVELES_CRITERIOS = ["Trainee", "Analista", "Asociado", "Asociado Sr", "Manager"]
+
+# Filas que NO son dimensiones del informe: el bloque de liderazgo se añade aparte,
+# condicionado al cargo, así que rellenarlo en Notion no debe crear un área duplicada.
+_SLUGS_NO_DIMENSION = {"liderazgo"}
+
+
+def slug_criterio(texto: str) -> str:
+    """Slug estable a partir del título del criterio, sin tildes ni signos.
+
+    No es la clave persistida (esa es el id de página, que sobrevive a renombrados):
+    sirve para emparejar con las tablas de traducción de etiquetas y con el fallback
+    hardcodeado de criterios.
     """
-    Devuelve {dimension_label: {nivel: [textos]}} para el grupo indicado, en el idioma dado.
-    Lee de 'Criterios de evaluaciones/{grupo}' en Notion. Cachea 5 min.
-    Filtra por la columna 'Idioma' (ES/EN); el nombre del Criterio es la clave estable
-    (no se traduce) y se cae a ES cuando un criterio no tiene fila EN.
+    base = unicodedata.normalize("NFKD", texto or "").encode("ascii", "ignore").decode()
+    return re.sub(r"[^a-z0-9]+", "_", base.lower()).strip("_")
+
+
+def _leer_filas_criterios(grupo: str) -> list[dict]:
+    """Filas de la BD de criterios del grupo, parseadas y en el orden de Notion.
+
+    Una única lectura alimenta tanto los criterios por idioma como las dimensiones que
+    estructuran el informe, así que las dos comparten esta caché y leer la estructura
+    no añade ni una llamada a Notion.
     """
-    idioma = idioma if idioma in IDIOMAS_SOPORTADOS else "es"
     ahora = time.time()
-    cache_key = f"{grupo}|{idioma}"
     with _lock_criterios:
-        cached = _cache_criterios.get(cache_key)
+        cached = _cache_criterios.get(f"filas|{grupo}")
         if cached and (ahora - cached[1]) < _CRITERIOS_CACHE_TTL:
             return cached[0]
 
     db_id = _obtener_db_criterios(grupo)
     if not db_id:
-        return {}
-
-    _NIVELES = ["Trainee", "Analista", "Asociado", "Asociado Sr", "Manager"]
+        with _lock_criterios:   # cachear el vacío: si no, cada petición reintenta la lectura
+            _cache_criterios[f"filas|{grupo}"] = ([], time.time())
+        return []
 
     def _rt(prop):
         return "".join(t.get("plain_text", "") for t in (prop or {}).get("rich_text", [])).strip()
 
-    mapas: dict = {}  # idioma -> {criterio: niveles}
+    filas: list[dict] = []
     try:
         cursor = None
         while True:
@@ -2015,14 +2038,13 @@ def obtener_criterios_evaluacion(grupo: str, idioma: str = "es") -> dict:
             if cursor:
                 kwargs["start_cursor"] = cursor
             resp = _query_bbdd(db_id, **kwargs)
-            rows = resp.get("results", [])
-            for row in rows:
+            for row in resp.get("results", []):
                 props = row.get("properties", {})
                 criterio = "".join(t.get("plain_text", "") for t in (props.get("Criterio") or {}).get("title", [])).strip()
                 if not criterio:
                     continue
                 niveles: dict = {}
-                for nivel in _NIVELES:
+                for nivel in _NIVELES_CRITERIOS:
                     texto = _rt(props.get(nivel))
                     if texto:
                         lineas = [
@@ -2033,23 +2055,97 @@ def obtener_criterios_evaluacion(grupo: str, idioma: str = "es") -> dict:
                         if lineas:
                             niveles[nivel] = lineas
                 if not niveles:
+                    # Fila a medio rellenar: ni aporta criterios ni debe crear un área.
+                    logging.info("[criterios] '%s' (%s) sin contenido en ningún nivel: se ignora", criterio, grupo)
                     continue
-                _lang = _normalizar_idioma(_texto_propiedad(props, "Idioma"))
-                mapas.setdefault(_lang, {})[criterio] = niveles
+                filas.append({
+                    "page_id": row.get("id", ""),
+                    "criterio": criterio,
+                    "slug": slug_criterio(criterio),
+                    "niveles": niveles,
+                    "idioma": _normalizar_idioma(_texto_propiedad(props, "Idioma")),
+                })
             if not resp.get("has_more"):
                 break
             cursor = resp.get("next_cursor")
     except Exception:
         logging.exception("Error leyendo criterios para grupo '%s'", grupo)
-        return {}
+        with _lock_criterios:
+            _cache_criterios[f"filas|{grupo}"] = ([], time.time())
+        return []
+
+    with _lock_criterios:
+        _cache_criterios[f"filas|{grupo}"] = (filas, time.time())
+    return filas
+
+
+def obtener_criterios_evaluacion(grupo: str, idioma: str = "es") -> dict:
+    """
+    Devuelve {dimension_label: {nivel: [textos]}} para el grupo indicado, en el idioma dado.
+    Lee de 'Criterios de evaluaciones/{grupo}' en Notion. Cachea 5 min.
+    Filtra por la columna 'Idioma' (ES/EN); el nombre del Criterio es la clave estable
+    (no se traduce) y se cae a ES cuando un criterio no tiene fila EN.
+    """
+    idioma = idioma if idioma in IDIOMAS_SOPORTADOS else "es"
+    mapas: dict = {}  # idioma -> {criterio: niveles}
+    for fila in _leer_filas_criterios(grupo):
+        mapas.setdefault(fila["idioma"], {})[fila["criterio"]] = fila["niveles"]
 
     es_res = mapas.get("es", {})
     base = mapas.get(idioma, {})
-    resultado = {c: (base.get(c) or es_res.get(c)) for c in (list(es_res) + [k for k in base if k not in es_res])}
+    return {c: (base.get(c) or es_res.get(c)) for c in (list(es_res) + [k for k in base if k not in es_res])}
 
-    with _lock_criterios:
-        _cache_criterios[cache_key] = (resultado, time.time())
-    return resultado
+
+def obtener_criterios_por_clave(grupo: str, idioma: str = "es") -> dict:
+    """{id_de_la_fila_ES: {nivel: [textos]}} para el grupo, en el idioma pedido.
+
+    Es lo mismo que `obtener_criterios_evaluacion` pero tecleado por la clave estable en
+    vez de por el título. Buscar los criterios por nombre después de haber elegido el id
+    de página como clave era contradictorio: bastaba renombrar el criterio en Notion para
+    que el CA se quedara sin bullets (o con los del diccionario hardcodeado).
+
+    La traducción se une por título, que es lo único que enlaza la fila española con su
+    versión PT/EN; si esa fila no existe, se cae a los bullets en español.
+    """
+    idioma = idioma if idioma in IDIOMAS_SOPORTADOS else "es"
+    filas = _leer_filas_criterios(grupo)
+    traducidas = {f["criterio"]: f["niveles"] for f in filas if f["idioma"] == idioma}
+    return {f["page_id"]: (traducidas.get(f["criterio"]) or f["niveles"])
+            for f in filas if f["idioma"] == "es"}
+
+
+def obtener_dimensiones_evaluacion(grupo: str) -> list[dict]:
+    """Dimensiones que estructuran el informe de ese grupo, en el orden de Notion.
+
+    Devuelve [{"clave": <id de página>, "slug": ..., "etiqueta": <título ES>}, ...].
+
+    La estructura sale SIEMPRE de las filas en español, nunca del idioma que se esté
+    pintando: el CA y su advisee pueden tener idiomas distintos (la sesión usa el del CA
+    y el informe automático el del advisee) y las traducciones son filas aparte con su
+    propio id, así que dejar que el idioma decidiera la clave daría dos juegos de claves
+    para la misma persona. El idioma solo cambia el texto, nunca qué áreas existen.
+    """
+    filas = _leer_filas_criterios(grupo)
+    dims: list[dict] = []
+    vistos: set = set()
+    for fila in filas:
+        if fila["idioma"] != "es" or fila["slug"] in _SLUGS_NO_DIMENSION:
+            continue
+        if fila["slug"] in vistos:
+            logging.warning("[criterios] '%s' duplicado en %s: se usa la primera fila", fila["criterio"], grupo)
+            continue
+        vistos.add(fila["slug"])
+        dims.append({"clave": fila["page_id"], "slug": fila["slug"], "etiqueta": fila["criterio"]})
+
+    # Una dimensión que solo exista traducida no aparecería en ningún sitio. Avisar en
+    # vez de perderla en silencio, que es como se han colado los demás desajustes.
+    for fila in filas:
+        if fila["idioma"] != "es" and fila["slug"] not in vistos and fila["slug"] not in _SLUGS_NO_DIMENSION:
+            logging.warning(
+                "[criterios] '%s' existe en %s pero no en español (%s): no saldrá en el informe",
+                fila["criterio"], fila["idioma"], grupo,
+            )
+    return dims
 
 
 # ---------------------------------------------------------------------------
@@ -2558,12 +2654,29 @@ def listar_bbdd_evaluados():
     parent = obtener_parent_bbdd_evaluados()
     if parent is None:
         return []
-    resultado = notion.search(query=config.PREFIJO_BBDD_EVALUADO, filter={"value": _tipo_objeto_busqueda_bbdd(), "property": "object"}, page_size=100)
+    # Hay que paginar: el search de Notion devuelve como mucho 100 resultados por
+    # página y mezcla mucho ruido (páginas y BDs que solo se le parecen), así que las
+    # tablas "Evaluaciones - X" caen repartidas entre varias páginas. Leyendo solo la
+    # primera aparecían 7 de 29 y las 22 restantes daban "No se encontró una tabla de
+    # evaluaciones para X" en PDFs, informes anuales y feedback confidencial.
     bases = []
-    for bbdd in resultado.get("results", []):
-        titulo = _extraer_titulo_bbdd(bbdd)
-        if titulo.startswith(config.PREFIJO_BBDD_EVALUADO) and _coincide_parent_bbdd(bbdd, parent):
-            bases.append({"id": _data_source_id(bbdd), "evaluado": titulo.removeprefix(config.PREFIJO_BBDD_EVALUADO)})
+    cursor = None
+    while True:
+        kwargs = {
+            "query": config.PREFIJO_BBDD_EVALUADO,
+            "filter": {"value": _tipo_objeto_busqueda_bbdd(), "property": "object"},
+            "page_size": 100,
+        }
+        if cursor:
+            kwargs["start_cursor"] = cursor
+        resultado = notion.search(**kwargs)
+        for bbdd in resultado.get("results", []):
+            titulo = _extraer_titulo_bbdd(bbdd)
+            if titulo.startswith(config.PREFIJO_BBDD_EVALUADO) and _coincide_parent_bbdd(bbdd, parent):
+                bases.append({"id": _data_source_id(bbdd), "evaluado": titulo.removeprefix(config.PREFIJO_BBDD_EVALUADO)})
+        if not resultado.get("has_more"):
+            break
+        cursor = resultado.get("next_cursor")
     with _lock_bbdd_evaluados:
         _bbdd_evaluados_cache = bases
         _bbdd_evaluados_cache_ts = _time.time()
@@ -2659,10 +2772,25 @@ def obtener_evaluaciones():
 def obtener_evaluaciones_por_evaluado(evaluado):
     if not evaluado:
         raise RuntimeError("Selecciona una persona evaluada.")
-    for bbdd in listar_bbdd_evaluados():
-        if bbdd["evaluado"] == evaluado:
+    # Comparar normalizado, como el resto del módulo: el nombre del evaluado llega
+    # unas veces con tildes y otras plegado, y un '==' crudo no casaría.
+    objetivo = normalizar_nombre(evaluado)
+    bases = listar_bbdd_evaluados()
+    for bbdd in bases:
+        if normalizar_nombre(bbdd["evaluado"]) == objetivo:
             return obtener_evaluaciones_de_bbdd(bbdd["id"], bbdd["evaluado"])
-    raise RuntimeError(f"No se encontró una tabla de evaluaciones para {evaluado}.")
+    if not bases:
+        # Ni una sola tabla en todo el workspace: no es que falte la de esta persona,
+        # es que la búsqueda está mal configurada (NOTION_PARENT_PAGE_ID apuntando a
+        # otra página, o el token sin acceso). Debe verse, no degradarse a PDF vacío.
+        raise RuntimeError(
+            "No se encontró ninguna tabla de evaluaciones en Notion. Revisa "
+            "NOTION_PARENT_PAGE_ID y que la integración tenga acceso a esas páginas."
+        )
+    # Que una persona concreta no tenga tabla sí es normal (recién incorporada, o
+    # evaluada solo por proyecto): se deja la sección vacía en vez de tumbar el PDF.
+    logging.warning("Sin tabla de evaluaciones mensuales para '%s' (%d bases encontradas).", evaluado, len(bases))
+    return []
 
 
 def excluir_feedback_confidencial(evaluaciones: list[dict]) -> list[dict]:

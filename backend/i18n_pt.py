@@ -8,6 +8,10 @@ TEXTOS_PT = {
     "anual.comments_up": "COMENTÁRIOS",
     "anual.corp_objectives": "Consecução Objetivos corp.",
     "anual.current_position": "Posição atual",
+    "anual.area": "Área",
+    "anual.unclassified": "Informação sem classificar",
+    "anual.unclassified_hint": "Evidência com conteúdo avaliável que não encaixa nos critérios de nenhuma dimensão. "
+                               "Se aparecer aqui algo importante, pode faltar um critério no Notion.",
     "anual.current_salary": "Salário atual",
     "anual.date": "Data",
     "anual.deadline": "Deadline",

@@ -391,6 +391,14 @@ TEXTOS: dict[str, dict[str, str]] = {
     "anual.employee": {"es": "Empleado", "en": "Employee"},
     "anual.date": {"es": "Fecha", "en": "Date"},
     "anual.current_position": {"es": "Posición actual", "en": "Current position"},
+    "anual.area": {"es": "Área", "en": "Area"},
+    "anual.unclassified": {"es": "Información sin clasificar", "en": "Unclassified information"},
+    "anual.unclassified_hint": {
+        "es": "Evidencia con contenido evaluable que no encaja con los criterios de ninguna dimensión. "
+              "Si aquí hay algo importante, puede que falte un criterio en Notion.",
+        "en": "Evidence with assessable content that does not match the criteria of any dimension. "
+              "If something important shows up here, a criterion may be missing in Notion.",
+    },
     "anual.current_salary": {"es": "Salario actual", "en": "Current salary"},
     "anual.projects": {"es": "PROYECTOS", "en": "PROJECTS"},
     "anual.score_up": {"es": "NOTA", "en": "SCORE"},

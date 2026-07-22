@@ -87,7 +87,6 @@ RUTAS_GET = [
     "/api/proyectos-manager",
     "/api/evaluaciones-extra-pendientes",
     "/api/evaluaciones-extra-recibidas?evaluado={evaluado}",
-    "/api/estado-ciclo-slack",
     "/api/resumen-evaluaciones-advisee?advisee={evaluado}",
     "/api/criterios-evaluacion?grupo=negocio",
     "/api/eval-anual/estado?evaluado={evaluado}",

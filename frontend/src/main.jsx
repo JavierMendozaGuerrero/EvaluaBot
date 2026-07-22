@@ -603,6 +603,13 @@ function AdminPanel({ token, onBack }) {
   const [buscarGlobalConfidencial, setBuscarGlobalConfidencial] = useState("");
   const [cumplimiento, setCumplimiento] = useState({});
   const [detalleCumplimiento, setDetalleCumplimiento] = useState(null);
+  const [mostrarRegistro, setMostrarRegistro] = useState(false);
+  const [cas, setCas] = useState([]);
+  const regInicial = { nombre: "", correo: "", id_usuario: "", nombre_slack: "", cargo: "", area: "", idioma: "es", pais: "", foto: "", ca: "", enviar_bienvenida: true };
+  const [regForm, setRegForm] = useState(regInicial);
+  const [regGuardando, setRegGuardando] = useState(false);
+  const [regResult, setRegResult] = useState(null);
+  const [regError, setRegError] = useState("");
 
   useEffect(() => {
     let vivo = true;
@@ -755,9 +762,117 @@ function AdminPanel({ token, onBack }) {
     }
   }
 
+  useEffect(() => {
+    if (!mostrarRegistro || cas.length) return;
+    apiRequest("/api/admin/cas", { token })
+      .then((data) => setCas(data.cas || []))
+      .catch(() => setCas([]));
+  }, [token, mostrarRegistro]);
+
+  async function registrarEmpleado(e) {
+    e.preventDefault();
+    if (regGuardando) return;
+    setRegError("");
+    setRegResult(null);
+    if (!regForm.nombre.trim()) {
+      setRegError("El nombre es obligatorio.");
+      return;
+    }
+    setRegGuardando(true);
+    try {
+      const data = await apiRequest("/api/admin/registrar-empleado", { token, method: "POST", body: regForm });
+      setRegResult(data);
+      setRegForm(regInicial);
+    } catch (err) {
+      setRegError(err.message);
+    } finally {
+      setRegGuardando(false);
+    }
+  }
+
   const filtrados = evaluados.filter((e) =>
     e.label.toLowerCase().includes(search.toLowerCase())
   );
+
+  if (mostrarRegistro) {
+    const setCampo = (campo) => (ev) => setRegForm((f) => ({ ...f, [campo]: ev.target.value }));
+    return (
+      <main className="page">
+        <nav className="nav">
+          <a className="brand" href="/"><img src={logoUrl} alt="igeneris" className="brand-logo" /></a>
+          <button className="link-button" onClick={() => { setMostrarRegistro(false); setRegResult(null); setRegError(""); }} style={{ marginLeft: "auto" }}>{t("common.back")}</button>
+        </nav>
+        <div className="admin-search-wrap">
+          <p className="kicker">{t("role.admin_title")}</p>
+          <h2>Registrar empleado</h2>
+          <p className="fine">Crea la ficha en la Lista de empleados, su cuenta de acceso a la web y, si lo indicas, lo asigna a un Career Advisor. Con el Slack ID puesto, le llega un mensaje de bienvenida con sus credenciales.</p>
+
+          {regResult ? (
+            <div className="objetivo-item" style={{ marginTop: 20 }}>
+              <p className="objetivo-titulo"><strong>✓ {regResult.nombre} dado de alta</strong></p>
+              {regResult.username && <p className="objetivo-texto">Usuario: <strong>{regResult.username}</strong></p>}
+              {regResult.password_temporal
+                ? <p className="objetivo-texto">Contraseña temporal: <strong>{regResult.password_temporal}</strong> (pídele que la cambie con «He olvidado mi contraseña»)</p>
+                : <p className="fine">Ya tenía cuenta: no se ha cambiado su contraseña.</p>}
+              {regResult.ca_asignado && <p className="objetivo-texto">Career Advisor: <strong>{regResult.ca_asignado}</strong></p>}
+              {regResult.bienvenida_enviada === true && <p className="fine">✓ Bienvenida enviada por Slack.</p>}
+              {(regResult.avisos || []).map((a, i) => <p key={i} className="fine" style={{ color: "var(--accent)" }}>⚠ {a}</p>)}
+              <button style={{ marginTop: 12 }} onClick={() => setRegResult(null)}>Registrar otro</button>
+            </div>
+          ) : (
+            <form onSubmit={registrarEmpleado} className="registro-empleado-form" style={{ marginTop: 20, display: "flex", flexDirection: "column", gap: 12 }}>
+              <label className="fine">Nombre completo *
+                <span style={{ display: "block", opacity: 0.7, fontWeight: 400 }}>Sin tildes, solo nombre y primer apellido.</span>
+                <input type="text" value={regForm.nombre} onChange={setCampo("nombre")} placeholder="Ej. Ana Garcia" required />
+              </label>
+              <label className="fine">Correo
+                <input type="email" value={regForm.correo} onChange={setCampo("correo")} placeholder="ana@igeneris.com" />
+              </label>
+              <label className="fine">Slack ID (ID_usuario)
+                <input type="text" value={regForm.id_usuario} onChange={setCampo("id_usuario")} placeholder="U01ABC..." />
+              </label>
+              <label className="fine">Nombre en Slack
+                <input type="text" value={regForm.nombre_slack} onChange={setCampo("nombre_slack")} placeholder="ana.garcia" />
+              </label>
+              <label className="fine">Cargo
+                <input type="text" value={regForm.cargo} onChange={setCampo("cargo")} placeholder="Analista" />
+              </label>
+              <label className="fine">Área
+                <input type="text" value={regForm.area} onChange={setCampo("area")} placeholder="Negocio / Palantir / MiddleOffice" />
+              </label>
+              <label className="fine">Idioma
+                <select value={regForm.idioma} onChange={setCampo("idioma")}>
+                  <option value="es">Español</option>
+                  <option value="en">English</option>
+                  <option value="pt">Português</option>
+                </select>
+              </label>
+              <label className="fine">País
+                <input type="text" value={regForm.pais} onChange={setCampo("pais")} placeholder="España" />
+              </label>
+              <label className="fine">Foto (URL)
+                <span style={{ display: "block", opacity: 0.7, fontWeight: 400 }}>Enlace a la imagen (se guarda en la ficha de Notion).</span>
+                <input type="url" value={regForm.foto} onChange={setCampo("foto")} placeholder="https://..." />
+              </label>
+              <label className="fine">Career Advisor
+                <select value={regForm.ca} onChange={setCampo("ca")}>
+                  <option value="">— Sin asignar —</option>
+                  {cas.map((c) => <option key={c} value={c}>{c}</option>)}
+                </select>
+              </label>
+              <label className="fine" style={{ display: "flex", alignItems: "center", gap: 8, flexDirection: "row" }}>
+                <input type="checkbox" checked={regForm.enviar_bienvenida} onChange={(ev) => setRegForm((f) => ({ ...f, enviar_bienvenida: ev.target.checked }))} style={{ width: "auto" }} />
+                Enviar mensaje de bienvenida por Slack (con usuario y contraseña)
+              </label>
+              {regError && <p className="fine error">{regError}</p>}
+              <button type="submit" disabled={regGuardando}>{regGuardando ? "Dando de alta…" : "Dar de alta"}</button>
+            </form>
+          )}
+        </div>
+        <Footer />
+      </main>
+    );
+  }
 
   if (selected) {
     return (
@@ -957,7 +1072,7 @@ function AdminPanel({ token, onBack }) {
             disabled={anonLoading}
             onClick={toggleGlobalAnonimo}
             style={{ color: "var(--accent)" }}
-            onMouseEnter={(e) => e.currentTarget.style.color = "#0a0a0a"}
+            onMouseEnter={(e) => e.currentTarget.style.color = "#c42e0e"}
             onMouseLeave={(e) => e.currentTarget.style.color = "var(--accent)"}
           >
             › {anonimato.global_anonimo ? "Revelar todos los evaluadores" : "Ocultar todos los evaluadores"}
@@ -967,7 +1082,7 @@ function AdminPanel({ token, onBack }) {
           className="link-button"
           onClick={() => setVistaGlobalConfidencial(true)}
           style={{ color: "var(--accent)" }}
-          onMouseEnter={(e) => e.currentTarget.style.color = "#0a0a0a"}
+          onMouseEnter={(e) => e.currentTarget.style.color = "#c42e0e"}
           onMouseLeave={(e) => e.currentTarget.style.color = "var(--accent)"}
         >
           › {t("admin.confidential_feedback_all_btn")}
@@ -977,6 +1092,16 @@ function AdminPanel({ token, onBack }) {
       <div className="admin-search-wrap">
         <p className="kicker">{t("role.admin_title")}</p>
         <h2>{t("admin.search_employee")}</h2>
+        <div style={{ display: "flex", justifyContent: "center", marginBottom: 16 }}>
+          <button
+            onClick={() => { setMostrarRegistro(true); setRegResult(null); setRegError(""); }}
+            style={{ background: "#fff", color: "#0a0a0a", border: "2px solid var(--accent)" }}
+            onMouseEnter={(e) => { e.currentTarget.style.background = "var(--accent)"; e.currentTarget.style.color = "#fff"; }}
+            onMouseLeave={(e) => { e.currentTarget.style.background = "#fff"; e.currentTarget.style.color = "#0a0a0a"; }}
+          >
+            + Registrar empleado
+          </button>
+        </div>
         <div className="admin-search-field">
           <input
             type="text"

@@ -1861,6 +1861,98 @@ def invalidar_cache_empleados() -> None:
     invalidar_cache_bbdd_evaluados()
 
 
+def subir_archivo_a_notion(nombre_archivo, contenido, content_type="application/octet-stream") -> str:
+    """Sube un archivo (bytes) a Notion y devuelve su file_upload_id, listo para
+    adjuntarlo a una propiedad 'files'. Flujo single-part de la File Upload API."""
+    nombre_archivo = (nombre_archivo or "archivo").strip() or "archivo"
+    creado = notion.file_uploads.create(
+        mode="single_part",
+        filename=nombre_archivo,
+        content_type=content_type or "application/octet-stream",
+    )
+    file_upload_id = creado.get("id")
+    if not file_upload_id:
+        raise RuntimeError("Notion no devolvió un id de subida.")
+    notion.file_uploads.send(
+        file_upload_id=file_upload_id,
+        file=(nombre_archivo, contenido, content_type or "application/octet-stream"),
+    )
+    return file_upload_id
+
+
+def crear_empleado_en_notion(nombre, correo="", id_usuario="", nombre_slack="",
+                             cargo="", area="", idioma="", pais="", foto="", foto_upload_id="") -> dict:
+    """Crea una fila nueva en 'Lista de empleados'. Idempotente por nombre normalizado.
+
+    La 'Lista de empleados' la mantienen a mano, así que no asumimos nombres ni tipos
+    de columna: leemos el esquema real y escribimos solo en las columnas que existan,
+    con el tipo que declara Notion (email/rich_text/select). Devuelve
+    {"creado": bool, "nombre": str}: si ya hay un empleado con ese nombre no duplica.
+    """
+    nombre = (nombre or "").strip()
+    if not nombre:
+        raise ValueError("El nombre del empleado es obligatorio.")
+    nombre_norm = normalizar_nombre(nombre)
+    for r in _obtener_registros_empleados():
+        if normalizar_nombre(r.get("nombre", "")) == nombre_norm:
+            return {"creado": False, "nombre": r.get("nombre", nombre)}
+
+    db_id, resultado = _retrieve_bbdd(config.NOTION_EMPLOYEES_DATABASE_ID)
+    esquema = resultado.get("properties", {})
+
+    col_titulo = next((c for c, cfg in esquema.items() if cfg.get("type") == "title"), "Nombre")
+    valores = {col_titulo: {"title": [{"text": {"content": nombre}}]}}
+
+    # (columnas candidatas por orden de preferencia, valor) — mismas variantes que lee el lector.
+    campos = [
+        (("Correo", "Email", "Mail", "Correo electronico", "Correo electrónico", "E-mail"), correo),
+        (("ID_usuario", "ID usuario", "Slack ID"), id_usuario),
+        (("Nombre_Slack", "Nombre Slack", "Usuario Slack", "Slack", "Alias"), nombre_slack),
+        (("Cargo", "Puesto", "Rol", "Role"), cargo),
+        (("Area", "Área", "Departamento", "Department"), area),
+        (("Idioma", "Language", "Lang"), idioma),
+        (("Pais", "País", "Country"), pais),
+        (("Foto", "Photo", "Avatar"), foto),
+    ]
+    for candidatas, valor in campos:
+        valor = (valor or "").strip()
+        if not valor:
+            continue
+        for col in candidatas:
+            cfg = esquema.get(col)
+            if not cfg:
+                continue
+            tipo = cfg.get("type")
+            if tipo == "email":
+                valores[col] = {"email": valor}
+            elif tipo == "rich_text":
+                valores[col] = {"rich_text": [{"text": {"content": valor}}]}
+            elif tipo == "select":
+                valores[col] = {"select": {"name": valor}}
+            elif tipo == "url":
+                valores[col] = {"url": valor}
+            elif tipo == "files":
+                # La foto se guarda como archivo externo (una URL); es como la lee el bot.
+                valores[col] = {"files": [{"name": "foto", "type": "external", "external": {"url": valor}}]}
+            else:
+                # Tipo que no sabemos escribir de forma sencilla: lo saltamos.
+                continue
+            break
+
+    # Foto subida como archivo (tiene prioridad sobre la URL externa del bucle).
+    if (foto_upload_id or "").strip():
+        col_foto = next((c for c in ("Foto", "Photo", "Avatar")
+                         if (esquema.get(c) or {}).get("type") == "files"), None)
+        if col_foto:
+            valores[col_foto] = {"files": [{"name": "foto", "type": "file_upload",
+                                            "file_upload": {"id": foto_upload_id.strip()}}]}
+
+    _crear_pagina_en_bbdd(db_id, valores)
+    invalidar_cache_empleados()
+    logging.info("Empleado '%s' creado en Lista de empleados", nombre)
+    return {"creado": True, "nombre": nombre}
+
+
 def obtener_registros_empleados() -> list[dict]:
     """Lee empleados con nombre, email y aliases desde Notion."""
     return _obtener_registros_empleados()
@@ -3567,6 +3659,97 @@ def obtener_ca_de_empleado(empleado_nombre: str) -> str | None:
     except Exception:
         logging.exception("Error buscando CA de '%s'", empleado_nombre)
     return None
+
+
+def obtener_lista_cas() -> list[str]:
+    """Nombres de los CA de 'Lista de CAs' (columna título 'CA'), ordenados y sin vacíos."""
+    db_id = _obtener_db_id_lista_ca()
+    if not db_id:
+        return []
+    nombres: list[str] = []
+    try:
+        cursor = None
+        while True:
+            kwargs: dict = {"page_size": 100}
+            if cursor:
+                kwargs["start_cursor"] = cursor
+            resp = _query_bbdd(db_id, **kwargs)
+            for fila in resp.get("results", []):
+                prop_ca = fila.get("properties", {}).get("CA", {})
+                nombre = "".join(
+                    p.get("plain_text", "")
+                    for p in (prop_ca.get("title") or prop_ca.get("rich_text") or [])
+                ).strip()
+                if nombre:
+                    nombres.append(nombre)
+            if not resp.get("has_more"):
+                break
+            cursor = resp.get("next_cursor")
+    except Exception:
+        logging.exception("Error listando CAs")
+    return sorted(nombres, key=normalizar_nombre)
+
+
+def _asegurar_columna_lista_ca(db_id: str, col_name: str) -> None:
+    """Crea la columna de texto `col_name` en 'Lista de CAs' si aún no existe."""
+    props_nueva = {col_name: {"rich_text": {}}}
+    if _usa_data_sources():
+        bbdd = notion.data_sources.retrieve(data_source_id=db_id)
+        if col_name not in bbdd.get("properties", {}):
+            notion.data_sources.update(data_source_id=db_id, properties=props_nueva)
+        return
+    bbdd = notion.databases.retrieve(database_id=db_id)
+    if col_name not in bbdd.get("properties", {}):
+        notion.databases.update(database_id=db_id, properties=props_nueva)
+
+
+def asignar_advisee_a_ca(ca_nombre, advisee_nombre) -> dict:
+    """Añade `advisee_nombre` en la primera columna A# libre de la fila del CA.
+
+    Idempotente: si ya está asignado a ese CA no hace nada. Devuelve
+    {"ok": bool, "motivo": str}. No mueve al advisee si ya estaba con otro CA.
+    """
+    ca_nombre = (ca_nombre or "").strip()
+    advisee_nombre = (advisee_nombre or "").strip()
+    if not ca_nombre or not advisee_nombre:
+        return {"ok": False, "motivo": "Faltan datos de CA o empleado."}
+    db_id = _obtener_db_id_lista_ca()
+    if not db_id:
+        return {"ok": False, "motivo": "No se encontró 'Lista de CAs'."}
+    fila = _ca_fila_por_nombre(db_id, {normalizar_nombre(ca_nombre)})
+    if not fila:
+        return {"ok": False, "motivo": f"No existe el CA '{ca_nombre}' en la lista."}
+
+    props = fila.get("properties", {})
+    advisee_norm = normalizar_nombre(advisee_nombre)
+    cols_a = sorted((c for c in props if re.match(r"^A\d+$", c)), key=lambda c: int(c[1:]))
+    primer_libre = None
+    for col in cols_a:
+        prop_val = props.get(col, {})
+        actual = "".join(
+            p.get("plain_text", "")
+            for p in (prop_val.get("rich_text") or prop_val.get("title") or [])
+        ).strip()
+        if normalizar_nombre(actual) == advisee_norm:
+            return {"ok": True, "motivo": "Ya estaba asignado a este CA."}
+        if not actual and primer_libre is None:
+            primer_libre = col
+    if primer_libre is None:
+        # Todas las A# ocupadas: creamos la siguiente (A9, A10, ...) en la tabla.
+        # La lectura de advisees ya reconoce cualquier A\d+, así que no hay tope real.
+        siguiente = max((int(c[1:]) for c in cols_a), default=0) + 1
+        primer_libre = f"A{siguiente}"
+        try:
+            _asegurar_columna_lista_ca(db_id, primer_libre)
+        except Exception:
+            logging.exception("No se pudo crear la columna '%s' en 'Lista de CAs'", primer_libre)
+            return {"ok": False, "motivo": f"El CA '{ca_nombre}' tenía las columnas llenas y no se pudo crear una nueva."}
+    notion.pages.update(
+        page_id=fila.get("id"),
+        properties={primer_libre: {"rich_text": [{"text": {"content": advisee_nombre}}]}},
+    )
+    logging.info("Advisee '%s' asignado a CA '%s' en %s", advisee_nombre, ca_nombre, primer_libre)
+    return {"ok": True, "motivo": f"Asignado en {primer_libre}."}
 
 
 def _norm_ca(nombre: str) -> str:

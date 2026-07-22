@@ -515,9 +515,21 @@ def _aplicar_remapeo(texto: str, remapeo: dict) -> str:
     return _CID_APORTACION_RE.sub(lambda m: f"[{remapeo.get(m.group(1), m.group(1))}]", texto)
 
 
-def _pregunta_area(etiqueta: str) -> str:
-    return (f"¿Qué puntos principales quieres que salgan en el informe sobre «{etiqueta}»? "
-            f"Cuéntame tu opinión y qué destacarías.")
+# La pregunta que se le hace al CA por cada área. Sale en SU idioma (el de la sesión),
+# igual que el resto del informe anual; el español es el fallback.
+_PREGUNTA_AREA = {
+    "es": ("¿Qué puntos principales quieres que salgan en el informe sobre «{etiqueta}»? "
+           "Cuéntame tu opinión y qué destacarías."),
+    "en": ("What are the main points you'd like the report on «{etiqueta}» to cover? "
+           "Tell me your opinion and what you'd highlight."),
+    "pt": ("Que pontos principais queres que apareçam no relatório sobre «{etiqueta}»? "
+           "Conta-me a tua opinião e o que destacarias."),
+}
+
+
+def _pregunta_area(etiqueta: str, idioma: str = "es") -> str:
+    plantilla = _PREGUNTA_AREA.get(normalizar_idioma(idioma), _PREGUNTA_AREA["es"])
+    return plantilla.format(etiqueta=etiqueta)
 
 
 _STOP = {"de", "del", "la", "el", "con", "al", "a", "los", "las", "y", "the", "of", "to"}
@@ -981,7 +993,7 @@ def obtener_area(advisee: str, clave: str) -> dict:
         # En el panel solo se muestran los criterios del cargo actual; el rango completo
         # (area["criterios"]) se conserva para la comparación posterior.
         "criterios": _criterios_nivel_panel(sesion, area),
-        "pregunta": _pregunta_area(secciones[clave]),
+        "pregunta": _pregunta_area(secciones[clave], normalizar_idioma(sesion.get("idioma", "es"))),
         "conversacion": area.get("conversacion", []),
         "propuesta": area.get("propuesta", ""),
         "confirmada": area.get("confirmada", False),

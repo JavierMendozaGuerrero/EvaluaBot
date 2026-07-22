@@ -4904,15 +4904,29 @@ _cache_frecuencias_val: dict = {"ts": 0.0, "data": None}
 _FREC_TTL = 300
 _frecuencias_sembradas: set = set()
 
+# Nombre de la columna numérica. Se llamó 'Frecuencia' hasta el 22/07/2026; ahora
+# 'Frecuencia (días)'. Se lee cualquiera de los dos para no romper workspaces sin renombrar.
+_PROP_FRECUENCIA = "Frecuencia (días)"
+_PROPS_FRECUENCIA_LEGACY = ("Frecuencia",)
+
 _PROPS_FRECUENCIAS = {
     "Tipo": {"title": {}},
-    "Frecuencia": {"number": {}},
+    _PROP_FRECUENCIA: {"number": {}},
 }
 # Frecuencia (días) con la que se siembra la BD la primera vez. Editable en Notion después.
 _FRECUENCIAS_DEFAULT = {"mensual": 30, "personal": 14, "ca": 30, "proyecto": 14, "extra": 14}
 
 _TITULO_FRECUENCIAS = "Deadlines evaluaciones"
 _TITULOS_FRECUENCIAS_LEGACY = ("Frecuencia evaluaciones",)
+
+
+def _leer_num_frecuencia(props: dict):
+    """Número de la columna de frecuencia, aceptando el nombre nuevo y el legacy."""
+    for nombre in (_PROP_FRECUENCIA, *_PROPS_FRECUENCIA_LEGACY):
+        num = (props.get(nombre) or {}).get("number")
+        if num is not None:
+            return num
+    return None
 
 
 def _asegurar_filas_frecuencias(db_id: str) -> None:
@@ -4934,7 +4948,7 @@ def _asegurar_filas_frecuencias(db_id: str) -> None:
                 continue
             _crear_pagina_en_bbdd(db_id, {
                 "Tipo": {"title": [{"type": "text", "text": {"content": tipo}}]},
-                "Frecuencia": {"number": dias},
+                _PROP_FRECUENCIA: {"number": dias},
             })
     except Exception:
         logging.exception("Error sembrando '%s'", _TITULO_FRECUENCIAS)
@@ -5015,7 +5029,7 @@ def obtener_frecuencias_evaluaciones() -> dict:
                 tipo = "".join(
                     p.get("plain_text", "") for p in props.get("Tipo", {}).get("title", [])
                 ).strip().lower()
-                num = (props.get("Frecuencia") or {}).get("number")
+                num = _leer_num_frecuencia(props)
                 if tipo in _FRECUENCIAS_DEFAULT and isinstance(num, (int, float)) and num > 0:
                     data[tipo] = int(num)
         except Exception:

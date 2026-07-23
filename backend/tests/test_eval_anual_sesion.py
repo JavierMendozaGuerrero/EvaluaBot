@@ -17,7 +17,7 @@ def entorno_aislado(tmp_path, monkeypatch):
         "obtener_datos_empleado_anual",
         lambda advisee: {"ca": "CA Test", "opiniones_ca": [{"texto": "opinión de prueba"}]},
     )
-    monkeypatch.setattr(ea.sk, "interpretar_evaluaciones_anual", lambda emp_data, **kw: {})
+    monkeypatch.setattr(ea.sk, "interpretar_evaluaciones_anual", lambda emp_data, cargo="": {})
     monkeypatch.setattr(ea.sk, "_formatear_contexto", lambda emp_data: ("", {}))
     monkeypatch.setattr(ea, "_cargo_de", lambda advisee: "Manager")
     monkeypatch.setattr(ea, "_criterios_area", lambda *a, **k: [])

@@ -70,11 +70,6 @@ fecha) y no borrarla; endurecer el `except: pass`.
 
 ## Caso 2 — "Acceso CA"
 
-> **Obsoleto:** el acceso global por CA se eliminó de la web (solo queda el acceso
-> individual por advisee), y con él `_obtener_o_crear_bbdd_acceso_ca`, `_acceso_ca_fila`,
-> `ca_tiene_acceso_activo` y `toggle_acceso_advisees`. Ya no se crea la BD "Acceso CA".
-> Se conserva este caso como registro del diagnóstico.
-
 **Quién la crea:** `_obtener_o_crear_bbdd_acceso_ca`
 ([notion_service.py:3426](../backend/notion_service.py#L3426)).
 
@@ -180,7 +175,7 @@ a ciegas. Getters modificados:
 
 | Getter | Archivo | Cambio |
 |---|---|---|
-| `_obtener_o_crear_bbdd_acceso_ca` | notion_service.py | escaneo de "Activaciones de permisos" + lock dedicado (función ya eliminada, ver Caso 2) |
+| `_obtener_o_crear_bbdd_acceso_ca` | notion_service.py | escaneo de "Activaciones de permisos" + lock dedicado |
 | `_obtener_o_crear_bbdd_acceso_individual` | notion_service.py | escaneo de "Activaciones de permisos" y raíz + lock |
 | `_obtener_o_crear_bbdd_informes_finales` | notion_service.py | escaneo de la raíz + lock |
 | `_obtener_o_crear_bbdd_sesiones_anual` | notion_service.py | escaneo de la raíz + lock dedicado |

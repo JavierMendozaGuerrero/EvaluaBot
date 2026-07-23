@@ -37,22 +37,7 @@
 /* Reset */
 *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
-html {
-  color-scheme: light only;
-  /* Evita que iOS reescale el texto al girar el movil (descuadra el layout) */
-  -webkit-text-size-adjust: 100%;
-  text-size-adjust: 100%;
-}
-
-/* Ningun contenido puede desbordar a lo ancho: si lo hace, el movil se abre
-   con zoom "desencuadrado" y hay que pellizcar la pantalla para ajustarlo.
-   Se usa clip (no hidden) para no crear un contenedor de scroll que romperia
-   el position:sticky del header. */
-html, body {
-  width: 100%;
-  max-width: 100%;
-  overflow-x: clip;
-}
+html { color-scheme: light only; }
 
 body {
   font-family: var(--font-sans);

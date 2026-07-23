@@ -55,23 +55,6 @@ _PROPS = {
 
 _SEMANAS_CICLO = 4
 
-# Las evaluaciones que se piden por Slack son opcionales; las de cerrar proyecto son
-# obligatorias. No hay columna en Notion que lo diga: la distinción es exactamente
-# esta división por tipo, y de ella salen las dos categorías del panel de cumplimiento.
-_SLACK_TIPOS = ("mensual", "personal", "ca")
-
-# Orden de presentación dentro de cada categoría. Un tipo que no esté aquí no se pierde:
-# se pinta detrás, ordenado alfabéticamente.
-_ORDEN_TIPOS = ("personal", "mensual", "ca", "proyecto", "extra")
-
-# Primero las opcionales de Slack y luego las obligatorias de proyecto.
-_ORDEN_CATEGORIAS = ("slack", "proyecto")
-
-
-def _categoria_de_tipo(tipo: str) -> str:
-    return "slack" if tipo in _SLACK_TIPOS else "proyecto"
-
-
 # ---------------------------------------------------------------------------
 # Caché de la BD
 # ---------------------------------------------------------------------------
@@ -449,67 +432,38 @@ def resumen_ciclo_actual() -> dict:
     return resumen
 
 
-def _orden_tipo(tipo: str):
-    """Los tipos conocidos van en el orden de _ORDEN_TIPOS; el resto detrás, alfabéticos."""
-    return (_ORDEN_TIPOS.index(tipo), "") if tipo in _ORDEN_TIPOS else (len(_ORDEN_TIPOS), tipo)
-
-
 def detalle_por_persona(nombre: str) -> list:
-    """Devuelve el desglose por año > mes > categoría > tipo para una persona.
+    """Devuelve el desglose por ciclo y tipo para una persona.
 
-    [{"anio": 2026, "meses": [
-        {"mes": 1, "categorias": [
-            {"categoria": "slack", "tipos": [
-                {"tipo": "personal", "enviadas": 2, "realizadas": 1}, ...]}, ...]}, ...]}, ...]
-    Ordenado de más reciente a más antiguo (años y meses descendentes).
-
-    Se agrupa por `Fecha_envio`, no por `Ciclo`: un ciclo es una ventana de 4 semanas
-    anclada a una fecha de Notion (ver clave_ciclo_actual), así que cruza meses y no
-    sirve para agrupar por mes natural. `Ciclo` queda como reserva por si alguna fila
-    antigua no tuviera fecha de envío.
+    [{"ciclo": "YYYY-MM-DD",
+      "tipos": {"mensual": {"enviadas": 1, "realizadas": 1}, ...}}]
+    Ordenado por ciclo descendente (más reciente primero).
     """
     db_id = _obtener_o_crear_bbdd()
     if not db_id or not nombre:
         return []
     objetivo = normalizar_nombre(nombre)
-    # {anio: {mes: {categoria: {tipo: {"enviadas": n, "realizadas": n}}}}}
-    arbol: dict = {}
+    por_ciclo: dict = {}
     try:
         for fila in _iter_filas(db_id):
             props = fila.get("properties", {})
             if normalizar_nombre(_titulo(props, "Persona")) != objetivo:
                 continue
-            dia = _dia(props, "Fecha_envio") or _rich(props, "Ciclo")
-            try:
-                anio, mes = int(dia[:4]), int(dia[5:7])
-            except ValueError:
-                # registrar_envio siempre escribe ambas, así que esto no debería pasar.
-                logging.warning("Fila de cumplimiento de '%s' sin fecha usable (%r); se omite", nombre, dia)
-                continue
+            ciclo = _rich(props, "Ciclo") or "—"
             tipo = _select(props, "Tipo") or "otro"
-            entrada = (
-                arbol.setdefault(anio, {}).setdefault(mes, {})
-                .setdefault(_categoria_de_tipo(tipo), {})
-                .setdefault(tipo, {"enviadas": 0, "realizadas": 0})
-            )
+            tipos = por_ciclo.setdefault(ciclo, {})
+            entrada = tipos.setdefault(tipo, {"enviadas": 0, "realizadas": 0})
             entrada["enviadas"] += 1
             if _checkbox(props, "Completada"):
                 entrada["realizadas"] += 1
     except Exception:
         logging.exception("Error leyendo el detalle de cumplimiento de '%s'", nombre)
-    return [
-        {"anio": anio, "meses": [
-            {"mes": mes, "categorias": [
-                {"categoria": cat, "tipos": [
-                    {"tipo": tp, **contadores}
-                    for tp, contadores in sorted(tipos.items(), key=lambda kv: _orden_tipo(kv[0]))
-                ]}
-                for cat, tipos in sorted(cats.items(), key=lambda kv: _ORDEN_CATEGORIAS.index(kv[0]))
-            ]}
-            for mes, cats in sorted(meses.items(), reverse=True)
-        ]}
-        for anio, meses in sorted(arbol.items(), reverse=True)
-    ]
+    resultado = [{"ciclo": c, "tipos": t} for c, t in por_ciclo.items()]
+    resultado.sort(key=lambda x: x["ciclo"], reverse=True)
+    return resultado
+
+
+_SLACK_TIPOS = ("mensual", "personal", "ca")
 
 
 def pendientes_slack_de_persona(persona: str) -> list:

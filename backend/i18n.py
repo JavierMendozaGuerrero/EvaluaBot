@@ -237,8 +237,6 @@ TEXTOS: dict[str, dict[str, str]] = {
     "web.reminder_extra": {"es": "⏰ Recuerda que tienes una evaluación extra pendiente. Complétala en la web de evaluaciones cuando puedas.", "en": "⏰ Remember you have a pending extra evaluation. Complete it on the evaluations website when you can."},
     "web.eval_proyecto_activada": {"es": "📋 *Evaluaciones de proyecto activas* para el proyecto *{proyecto}*.\nRecuerda completarlas en la web de evaluaciones.", "en": "📋 *Project evaluations are now active* for project *{proyecto}*.\nRemember to complete them on the evaluations website."},
     "web.eval_proyecto_completada": {"es": "✅ Todos los miembros de tu equipo han terminado las evaluaciones del proyecto *{proyecto}*. Se cerrará el apartado en la web relacionado con este proyecto.", "en": "✅ All your team members have completed the evaluations for project *{proyecto}*. The section for this project will be closed on the website."},
-    "web.eval_proyecto_eliminado": {"es": "📤 Se te ha eliminado del proyecto *{proyecto}*, así que ya no tienes que completar sus evaluaciones.\nSi crees que es un error, contacta con *{manager}*, responsable del proyecto.", "en": "📤 You have been removed from project *{proyecto}*, so you no longer need to complete its evaluations.\nIf you think this is a mistake, contact *{manager}*, the project owner."},
-    "web.eval_proyecto_eliminado_sin_manager": {"es": "📤 Se te ha eliminado del proyecto *{proyecto}*, así que ya no tienes que completar sus evaluaciones.\nSi crees que es un error, contacta con el responsable del proyecto.", "en": "📤 You have been removed from project *{proyecto}*, so you no longer need to complete its evaluations.\nIf you think this is a mistake, contact the project owner."},
 
     # --- Bot Slack: revision del CA sobre sus advisees (ca_reviews.py) ---
     "bc.informe_final_disponible": {"es": "🎉 Ya tienes disponible tu informe final. Puedes verlo en la web.", "en": "🎉 Your final report is now available. You can view it on the web."},
@@ -318,7 +316,6 @@ TEXTOS: dict[str, dict[str, str]] = {
     "pe.err_db_access": {"es": "No se pudo acceder a la BD de activaciones.", "en": "Could not access the activations database."},
     "pe.err_add_member": {"es": "Error interno al añadir miembro.", "en": "Internal error while adding member."},
     "pe.err_member_not_found": {"es": "No se encontró ese miembro en el proyecto.", "en": "That member was not found in the project."},
-    "pe.err_remove_self": {"es": "No puedes eliminarte a ti mismo: eres el manager del proyecto.", "en": "You can't remove yourself: you're the project manager."},
     "pe.err_remove_member": {"es": "Error interno al eliminar miembro.", "en": "Internal error while removing member."},
 
     # --- Evaluaciones extra (fuera de proyecto) (evaluaciones_extra.py) ---
@@ -378,7 +375,7 @@ TEXTOS: dict[str, dict[str, str]] = {
     "anual.rev_sub": {"es": "Este bloque solo aparece en el borrador. Revísalo y edítalo antes de publicar el informe final.", "en": "This block only appears in the draft. Review and edit it before publishing the final report."},
     "anual.sources_evidence": {"es": "FUENTES / EVIDENCIA", "en": "SOURCES / EVIDENCE"},
     "anual.sources_intro_web": {"es": "Cada cita [X#] del informe enlaza aquí. Esta es la evidencia en bruto (proyecto, evaluador, fecha y texto) para que puedas contrastar cada afirmación.", "en": "Each citation [X#] in the report links here. This is the raw evidence (project, evaluator, date and text) so you can check every statement."},
-    "anual.sources_intro_docx": {"es": "Cada cita [X#] del informe enlaza a su ficha aquí: la evidencia en bruto para contrastar. Esta sección NO le saldrá a tu advisee.", "en": "Each citation [X#] in the report links to its entry here: the raw evidence to check against. This section will NOT appear for your advisee."},
+    "anual.sources_intro_docx": {"es": "Cada cita [X#] del informe enlaza a su ficha aquí: la evidencia en bruto para contrastar.", "en": "Each citation [X#] in the report links to its entry here: the raw evidence to check against."},
     "anual.src_opinion": {"es": "Opinión CA", "en": "CA opinion"},
     "anual.src_evaluacion": {"es": "Evaluación mensual", "en": "Monthly evaluation"},
     "anual.src_proyecto": {"es": "Evaluación de proyecto", "en": "Project evaluation"},
@@ -391,14 +388,6 @@ TEXTOS: dict[str, dict[str, str]] = {
     "anual.employee": {"es": "Empleado", "en": "Employee"},
     "anual.date": {"es": "Fecha", "en": "Date"},
     "anual.current_position": {"es": "Posición actual", "en": "Current position"},
-    "anual.area": {"es": "Área", "en": "Area"},
-    "anual.unclassified": {"es": "Información sin clasificar", "en": "Unclassified information"},
-    "anual.unclassified_hint": {
-        "es": "Evidencia con contenido evaluable que no encaja con los criterios de ninguna dimensión. "
-              "Si aquí hay algo importante, puede que falte un criterio en Notion.",
-        "en": "Evidence with assessable content that does not match the criteria of any dimension. "
-              "If something important shows up here, a criterion may be missing in Notion.",
-    },
     "anual.current_salary": {"es": "Salario actual", "en": "Current salary"},
     "anual.projects": {"es": "PROYECTOS", "en": "PROJECTS"},
     "anual.score_up": {"es": "NOTA", "en": "SCORE"},
@@ -415,7 +404,6 @@ TEXTOS: dict[str, dict[str, str]] = {
     "anual.position_next": {"es": "POSICIÓN {yy}", "en": "POSITION {yy}"},
     "anual.new_fixed_salary": {"es": "Nuevo salario fijo =", "en": "New fixed salary ="},
     "anual.improvement_objectives": {"es": "OPORTUNIDADES DE MEJORA / OBJETIVOS {yy}", "en": "IMPROVEMENT OPPORTUNITIES / OBJECTIVES {yy}"},
-    "anual.deadline": {"es": "Deadline", "en": "Deadline"},
     # Instruccion de idioma para el prompt de Claude (informe principal)
     "report.prompt": {
         "es": (

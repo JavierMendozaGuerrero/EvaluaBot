@@ -24,7 +24,7 @@ from .notion_service import (
     obtener_evaluaciones_por_evaluado,
     obtener_opiniones_ca_por_advisee,
 )
-from .project_evals import LABELS_TIPOS, obtener_evaluaciones_proyecto_por_evaluado
+from .project_evals import obtener_evaluaciones_proyecto_por_evaluado
 from .evaluaciones_extra import obtener_evaluaciones_extra_por_evaluado
 # Reutiliza la maquetación de marca del PDF de opiniones
 from .skill_opiniones_ca import _registrar_fuentes, _LOGO_PATH, _REPORTLAB_OK, _MESES
@@ -53,10 +53,7 @@ _L = {
            "nota_ca": "Nota del CA", "resumen": "Resumen", "opinion_ca": "Opinión CA",
            "sin_datos_fuente": "Sin datos para esta fuente.", "sin_datos": "Sin datos.",
            "fuente_no_disponible": "No hay información disponible de esta fuente.",
-           "generado_el": "Generado el", "sin_proyecto": "Sin proyecto", "sin_fecha": "Sin fecha",
-           "tipo_autoevaluacion": "Autoevaluación", "tipo_manager_a_miembros": "Recibida del manager",
-           "tipo_miembros_a_manager": "Recibida del equipo", "tipo_mismos_miembros": "Recibida de compañeros",
-           "tipo_otro": "Otras evaluaciones"},
+           "generado_el": "Generado el", "sin_proyecto": "Sin proyecto", "sin_fecha": "Sin fecha"},
     "en": {"t_proyecto": "Project evaluations", "t_seguimiento": "Personal tracking",
            "t_mensuales": "Monthly evaluations", "t_completo": "Full information received",
            "t_evals_extra": "Extra evaluations (outside project)",
@@ -65,10 +62,7 @@ _L = {
            "nota_ca": "CA note", "resumen": "Summary", "opinion_ca": "CA opinion",
            "sin_datos_fuente": "No data for this source.", "sin_datos": "No data.",
            "fuente_no_disponible": "No information available from this source.",
-           "generado_el": "Generated on", "sin_proyecto": "No project", "sin_fecha": "No date",
-           "tipo_autoevaluacion": "Self-evaluation", "tipo_manager_a_miembros": "Received from manager",
-           "tipo_miembros_a_manager": "Received from the team", "tipo_mismos_miembros": "Received from peers",
-           "tipo_otro": "Other evaluations"},
+           "generado_el": "Generated on", "sin_proyecto": "No project", "sin_fecha": "No date"},
     "pt": {"t_proyecto": "Avaliações de projeto", "t_seguimiento": "Acompanhamento pessoal",
            "t_mensuales": "Avaliações mensais", "t_completo": "Informação completa recebida",
            "t_evals_extra": "Avaliações extra (fora do projeto)",
@@ -77,10 +71,7 @@ _L = {
            "nota_ca": "Nota do CA", "resumen": "Resumo", "opinion_ca": "Opinião CA",
            "sin_datos_fuente": "Sem dados para esta fonte.", "sin_datos": "Sem dados.",
            "fuente_no_disponible": "Não há informação disponível desta fonte.",
-           "generado_el": "Gerado a", "sin_proyecto": "Sem projeto", "sin_fecha": "Sem data",
-           "tipo_autoevaluacion": "Autoavaliação", "tipo_manager_a_miembros": "Recebida do manager",
-           "tipo_miembros_a_manager": "Recebida da equipa", "tipo_mismos_miembros": "Recebida de colegas",
-           "tipo_otro": "Outras avaliações"},
+           "generado_el": "Gerado a", "sin_proyecto": "Sem projeto", "sin_fecha": "Sem data"},
 }
 _MESES_ABBR = {
     "es": _MESES,
@@ -119,27 +110,6 @@ def _esc(t) -> str:
     return html_lib.escape(str(t or "")).replace("\n", "<br/>")
 
 
-def _render_entradas(story, entradas, est):
-    """Vuelca una lista plana de entradas emitiendo encabezados cuando cambia 'grupo' o
-    'subgrupo'. Las entradas sin esas claves se pintan como antes (lista simple)."""
-    grupo_actual = subgrupo_actual = None
-    for e in entradas:
-        if e.get("grupo") and e["grupo"] != grupo_actual:
-            grupo_actual, subgrupo_actual = e["grupo"], None
-            story.append(Paragraph(_esc(grupo_actual), est["grupo"]))
-        if e.get("subgrupo") and e["subgrupo"] != subgrupo_actual:
-            subgrupo_actual = e["subgrupo"]
-            story.append(Paragraph(_esc(subgrupo_actual), est["subgrupo"]))
-        bloque = [Paragraph(_esc(e.get("header", "")), est["header"])]
-        if e.get("meta"):
-            bloque.append(Paragraph(_esc(e["meta"]), est["submeta"]))
-        if e.get("cuerpo"):
-            bloque.append(Paragraph(_esc(e["cuerpo"]), est["cuerpo"]))
-        bloque.append(HRFlowable(width="100%", thickness=0.5, color=colors.HexColor('#DBDBDE'),
-                                 spaceBefore=est["sep"], spaceAfter=est["sep"]))
-        story.append(KeepTogether(bloque))
-
-
 def _construir_pdf(titulo: str, advisee: str, ca: str, entradas: list[dict], nombre_archivo: str, idioma: str = "es") -> str:
     """Construye un PDF de marca con una lista de entradas {header, meta, cuerpo}.
 
@@ -158,8 +128,6 @@ def _construir_pdf(titulo: str, advisee: str, ca: str, entradas: list[dict], nom
     s_header  = ParagraphStyle('hdr',    fontSize=11, fontName=F_MED,   textColor=_BLACK, leading=15, spaceAfter=1)
     s_submeta = ParagraphStyle('sub',    fontSize=8,  fontName=F_REG,   textColor=MUTED,  leading=12, spaceAfter=4)
     s_cuerpo  = ParagraphStyle('cpo',    fontSize=9.5, fontName=F_LIGHT, textColor=_BLACK, leading=15, spaceAfter=2)
-    s_grupo   = ParagraphStyle('grp',    fontSize=12.5, fontName=F_MED,  textColor=_ORANGE, leading=16, spaceBefore=14, spaceAfter=2)
-    s_subgrp  = ParagraphStyle('sgrp',   fontSize=9.5, fontName=F_MED,  textColor=MUTED,  leading=13, spaceBefore=8, spaceAfter=3)
 
     os.makedirs(config.CARPETA_WEB, exist_ok=True)
     ruta = os.path.join(config.CARPETA_WEB, nombre_archivo)
@@ -193,10 +161,15 @@ def _construir_pdf(titulo: str, advisee: str, ca: str, entradas: list[dict], nom
 
     if not entradas:
         story.append(Paragraph(_t(idioma, "sin_datos_fuente"), s_cuerpo))
-    _render_entradas(story, entradas, {
-        "grupo": s_grupo, "subgrupo": s_subgrp, "header": s_header,
-        "submeta": s_submeta, "cuerpo": s_cuerpo, "sep": 8,
-    })
+    for e in entradas:
+        bloque = [Paragraph(_esc(e.get("header", "")), s_header)]
+        if e.get("meta"):
+            bloque.append(Paragraph(_esc(e["meta"]), s_submeta))
+        if e.get("cuerpo"):
+            bloque.append(Paragraph(_esc(e["cuerpo"]), s_cuerpo))
+        bloque.append(HRFlowable(width="100%", thickness=0.5, color=colors.HexColor('#DBDBDE'),
+                                 spaceBefore=8, spaceAfter=8))
+        story.append(KeepTogether(bloque))
 
     doc.build(story)
     logging.info("PDF '%s' generado: %s", titulo, ruta)
@@ -215,40 +188,17 @@ def _ca_de(advisee: str) -> str:
 # combinado acabó revelando nombres que el individual ocultaba). Una sola función por
 # fuente = una sola regla de privacidad que auditar.
 
-# Orden fijo de los tipos dentro de cada proyecto: primero lo que dice la propia persona,
-# después lo que le llega de arriba, del equipo y de sus iguales.
-_ORDEN_TIPOS = ["autoevaluacion", "manager_a_miembros", "miembros_a_manager", "mismos_miembros"]
-
-
-def _clave_tipo(tipo_label: str) -> str:
-    """Etiqueta de Notion ('Evaluación de managers a...') -> clave interna."""
-    for clave, label in LABELS_TIPOS.items():
-        if label == tipo_label:
-            return clave
-    return "otro"
-
-
 def _entradas_evals_proyecto(advisee, anonimo, idioma="es"):
-    """Evaluaciones de proyecto: se ven las dos direcciones (top-down y bottom-up),
-    agrupadas por proyecto y, dentro de cada proyecto, por tipo de evaluación
-    (autoevaluación, recibida del manager, del equipo...). El nombre del evaluador sigue
-    sin salir salvo para admin (anonimo=False).
-
-    Ojo: mostrar el tipo revierte la regla del 15/07/2026 que lo ocultaba porque delata el
-    nivel del evaluador. Se hace a petición de negocio (20/07/2026) para que el CA pueda
-    leer el bloque de cada proyecto entendiendo de dónde viene cada cosa.
-    """
-    datos = obtener_evaluaciones_proyecto_por_evaluado(advisee)
-    datos = sorted(datos, key=lambda d: (
-        d.get("proyecto") or _t(idioma, "sin_proyecto"),
-        _ORDEN_TIPOS.index(_clave_tipo(d.get("tipo", ""))) if _clave_tipo(d.get("tipo", "")) in _ORDEN_TIPOS else len(_ORDEN_TIPOS),
-        d.get("fecha", ""),
-    ))
+    """Evaluaciones de proyecto: se ven las dos direcciones (top-down y bottom-up) y de
+    qué proyecto vienen, pero ni el nombre del evaluador ni el 'tipo' —que decía si venía
+    de un manager o de un miembro del equipo y por tanto delataba su nivel—."""
+    datos = sorted(obtener_evaluaciones_proyecto_por_evaluado(advisee), key=lambda x: x.get("fecha", ""))
     return [{
-        "grupo": d.get("proyecto") or _t(idioma, "sin_proyecto"),
-        "subgrupo": _t(idioma, f"tipo_{_clave_tipo(d.get('tipo', ''))}"),
-        "header": _fecha_es(d.get("fecha", ""), idioma),
-        "meta": "" if anonimo else (d.get("evaluador") or ""),
+        "header": d.get("proyecto") or _t(idioma, "sin_proyecto"),
+        "meta": " · ".join(p for p in [
+            None if anonimo else d.get("evaluador"),
+            _fecha_es(d.get("fecha", ""), idioma),
+        ] if p),
         "cuerpo": d.get("respuestas", ""),
     } for d in datos]
 
@@ -368,8 +318,6 @@ def _construir_pdf_secciones(titulo, advisee, ca, secciones, nombre_archivo, idi
     s_header  = ParagraphStyle('h2',    fontSize=11, fontName=F_MED,   textColor=_BLACK, leading=15, spaceAfter=1)
     s_submeta = ParagraphStyle('sm2',   fontSize=8,  fontName=F_REG,   textColor=MUTED,  leading=12, spaceAfter=4)
     s_cuerpo  = ParagraphStyle('c2',    fontSize=9.5, fontName=F_LIGHT, textColor=_BLACK, leading=15, spaceAfter=2)
-    s_grupo   = ParagraphStyle('g2',    fontSize=12, fontName=F_MED,   textColor=_ORANGE, leading=16, spaceBefore=12, spaceAfter=2)
-    s_subgrp  = ParagraphStyle('sg2',   fontSize=9.5, fontName=F_MED,  textColor=MUTED,  leading=13, spaceBefore=7, spaceAfter=3)
 
     os.makedirs(config.CARPETA_WEB, exist_ok=True)
     ruta = os.path.join(config.CARPETA_WEB, nombre_archivo)
@@ -393,10 +341,15 @@ def _construir_pdf_secciones(titulo, advisee, ca, secciones, nombre_archivo, idi
         story.append(Paragraph(f"{_esc(sec_tit)}  ({len(entradas)})", s_sec))
         if not entradas:
             story.append(Paragraph(_t(idioma, "sin_datos"), s_cuerpo))
-        _render_entradas(story, entradas, {
-            "grupo": s_grupo, "subgrupo": s_subgrp, "header": s_header,
-            "submeta": s_submeta, "cuerpo": s_cuerpo, "sep": 6,
-        })
+        for e in entradas:
+            bloque = [Paragraph(_esc(e.get("header", "")), s_header)]
+            if e.get("meta"):
+                bloque.append(Paragraph(_esc(e["meta"]), s_submeta))
+            if e.get("cuerpo"):
+                bloque.append(Paragraph(_esc(e["cuerpo"]), s_cuerpo))
+            bloque.append(HRFlowable(width="100%", thickness=0.5, color=colors.HexColor('#DBDBDE'),
+                                     spaceBefore=6, spaceAfter=6))
+            story.append(KeepTogether(bloque))
     doc.build(story)
     logging.info("PDF completo generado: %s", ruta)
     return ruta

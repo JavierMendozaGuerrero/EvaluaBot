@@ -4,10 +4,6 @@ import "./styles/globals.css";
 import "./styles/components.css";
 import "./styles.css";
 import { t, tieneClave, setLang, setLangManual, getLang, subscribeLang, nombreMes } from "./i18n";
-// El logo se importa (no se escribe la ruta a mano) para que Vite lo copie a dist/
-// y reescriba la URL en el build. Una ruta literal "/src/logo.png" solo funciona
-// con el servidor de desarrollo y da 404 en produccion.
-import logoUrl from "./logo.png";
 
 // El texto de cada documento legal se carga bajo demanda (import dinámico) al abrir
 // la página, para no arrastrar el markdown en el bundle inicial.
@@ -153,36 +149,6 @@ function stopLoading() {
   _emitLoading();
 }
 
-// Las fotos van en <img src> y las descarga el navegador por su cuenta, fuera de
-// apiRequest: la barra llegaba al 100% con la rejilla todavía sin caras, y las fotos
-// aparecían después de que dijera "listo". Precargarlas contándolas en la tanda hace
-// que la barra no termine hasta que están de verdad.
-//
-// Quien llama debe tener ya un hueco pedido en la tanda (startLoading) para que el
-// contador no baje a 0 entre el JSON y esta precarga: si llegara a 0, la tanda se
-// cerraría y las fotos abrirían otra, con la barra reapareciendo desde cero.
-function precargarImagenes(urls, { timeoutMs = 8000 } = {}) {
-  const pendientes = [...new Set(urls.filter(Boolean))];
-  return Promise.all(pendientes.map((url) => new Promise((resolve) => {
-    startLoading();
-    let acabado = false;
-    // Una foto rota (onerror) o una URL de Notion que no responde no puede dejar la
-    // barra clavada: pase lo que pase se libera el hueco una sola vez.
-    const acabar = () => {
-      if (acabado) return;
-      acabado = true;
-      clearTimeout(temporizador);
-      stopLoading();
-      resolve();
-    };
-    const temporizador = setTimeout(acabar, timeoutMs);
-    const img = new Image();
-    img.onload = acabar;
-    img.onerror = acabar;
-    img.src = url;
-  })));
-}
-
 // Traduce el error que devuelve el backend. El backend manda `error` (texto en español,
 // ya escrito para el usuario) y, cuando sabe qué ha pasado, un `code` estable: si ese
 // código está traducido lo pintamos en el idioma del usuario, y si no cae al texto del
@@ -191,14 +157,6 @@ function mensajeDeError(data) {
   const clave = data && data.code ? `err.${data.code}` : "";
   if (clave && tieneClave(clave)) return t(clave);
   return (data && data.error) || t("common.err_generic");
-}
-
-// Equivalente en JS de `normalizar_nombre` del backend (backend/utils.py): pliega
-// tildes y espacios para que "Pedrós" y "Pedros" comparen igual. Los nombres vienen
-// de Notion y no siempre llegan escritos igual en cada sitio.
-function normalizarNombre(valor) {
-  return (valor || "").trim().toLowerCase().split(/\s+/).join(" ")
-    .normalize("NFD").replace(/\p{Mn}/gu, "");
 }
 
 async function apiRequest(path, { token, method = "GET", body } = {}) {
@@ -541,7 +499,7 @@ function LegalPage({ doc, onBack }) {
   return (
     <main className="page">
       <nav className="nav">
-        <a className="brand" href="/"><img src={logoUrl} alt="igeneris" className="brand-logo" /></a>
+        <a className="brand" href="/"><img src="/src/logo.png" alt="igeneris" className="brand-logo" /></a>
         <NavBack onBack={onBack} />
       </nav>
       <div className="legal-wrap">
@@ -559,7 +517,7 @@ function AdminRoleSelect({ user, onChoose, onLogout }) {
   return (
     <main className="page auth-page">
       <nav className="nav">
-        <a className="brand" href="/"><img src={logoUrl} alt="igeneris" className="brand-logo" /></a>
+        <a className="brand" href="/"><img src="/src/logo.png" alt="igeneris" className="brand-logo" /></a>
         <div className="nav-user">
           <div className="nav-user-info">
             <span className="nav-user-name">{persona}</span>
@@ -603,40 +561,18 @@ function AdminPanel({ token, onBack }) {
   const [buscarGlobalConfidencial, setBuscarGlobalConfidencial] = useState("");
   const [cumplimiento, setCumplimiento] = useState({});
   const [detalleCumplimiento, setDetalleCumplimiento] = useState(null);
-  const [mostrarRegistro, setMostrarRegistro] = useState(false);
-  const [cas, setCas] = useState([]);
-  const regInicial = { nombre: "", correo: "", id_usuario: "", nombre_slack: "", cargo: "", area: "", idioma: "es", pais: "", foto: "", ca: "", enviar_bienvenida: true };
-  const [regForm, setRegForm] = useState(regInicial);
-  const [regGuardando, setRegGuardando] = useState(false);
-  const [regResult, setRegResult] = useState(null);
-  const [regError, setRegError] = useState("");
 
   useEffect(() => {
-    let vivo = true;
-    // Hueco reservado en la tanda hasta tener las fotos: la lista se pinta en cuanto
-    // llega el JSON (los nombres se ven ya), pero la barra sigue viva mientras bajan
-    // las caras, en vez de decir "listo" y que luego aparezcan.
-    startLoading();
     apiRequest("/api/evaluados", { token })
-      .then(async (data) => {
-        const lista = data.evaluados || [];
-        if (!vivo) return;
-        setEvaluados(lista);
-        setCargandoEvaluados(false);
-        await precargarImagenes(lista.map((e) => e.foto));
-      })
+      .then((data) => setEvaluados(data.evaluados || []))
       .catch(() => {})
-      .finally(() => {
-        stopLoading();
-        if (vivo) setCargandoEvaluados(false);
-      });
+      .finally(() => setCargandoEvaluados(false));
     apiRequest("/api/anonimato-evaluadores", { token })
       .then((data) => setAnonimato(data))
       .catch(() => {});
     apiRequest("/api/cumplimiento-evaluaciones", { token })
       .then((data) => setCumplimiento(data.cumplimiento || {}))
       .catch(() => {});
-    return () => { vivo = false; };
   }, [token]);
 
   useEffect(() => {
@@ -678,9 +614,8 @@ function AdminPanel({ token, onBack }) {
     setAnonLoading(true);
     try {
       const revelados = anonimato.advisees_revelados || [];
-      const objetivo = normalizarNombre(nombre);
-      const nuevos = revelados.some((n) => normalizarNombre(n) === objetivo)
-        ? revelados.filter((n) => normalizarNombre(n) !== objetivo)
+      const nuevos = revelados.includes(nombre)
+        ? revelados.filter((n) => n !== nombre)
         : [...revelados, nombre];
       const data = await apiRequest("/api/anonimato-evaluadores", {
         token, method: "POST", body: { advisees_revelados: nuevos },
@@ -762,123 +697,15 @@ function AdminPanel({ token, onBack }) {
     }
   }
 
-  useEffect(() => {
-    if (!mostrarRegistro || cas.length) return;
-    apiRequest("/api/admin/cas", { token })
-      .then((data) => setCas(data.cas || []))
-      .catch(() => setCas([]));
-  }, [token, mostrarRegistro]);
-
-  async function registrarEmpleado(e) {
-    e.preventDefault();
-    if (regGuardando) return;
-    setRegError("");
-    setRegResult(null);
-    if (!regForm.nombre.trim()) {
-      setRegError("El nombre es obligatorio.");
-      return;
-    }
-    setRegGuardando(true);
-    try {
-      const data = await apiRequest("/api/admin/registrar-empleado", { token, method: "POST", body: regForm });
-      setRegResult(data);
-      setRegForm(regInicial);
-    } catch (err) {
-      setRegError(err.message);
-    } finally {
-      setRegGuardando(false);
-    }
-  }
-
   const filtrados = evaluados.filter((e) =>
     e.label.toLowerCase().includes(search.toLowerCase())
   );
-
-  if (mostrarRegistro) {
-    const setCampo = (campo) => (ev) => setRegForm((f) => ({ ...f, [campo]: ev.target.value }));
-    return (
-      <main className="page">
-        <nav className="nav">
-          <a className="brand" href="/"><img src={logoUrl} alt="igeneris" className="brand-logo" /></a>
-          <button className="link-button" onClick={() => { setMostrarRegistro(false); setRegResult(null); setRegError(""); }} style={{ marginLeft: "auto" }}>{t("common.back")}</button>
-        </nav>
-        <div className="admin-search-wrap">
-          <p className="kicker">{t("role.admin_title")}</p>
-          <h2>Registrar empleado</h2>
-          <p className="fine">Crea la ficha en la Lista de empleados, su cuenta de acceso a la web y, si lo indicas, lo asigna a un Career Advisor. Con el Slack ID puesto, le llega un mensaje de bienvenida con sus credenciales.</p>
-
-          {regResult ? (
-            <div className="objetivo-item" style={{ marginTop: 20 }}>
-              <p className="objetivo-titulo"><strong>✓ {regResult.nombre} dado de alta</strong></p>
-              {regResult.username && <p className="objetivo-texto">Usuario: <strong>{regResult.username}</strong></p>}
-              {regResult.password_temporal
-                ? <p className="objetivo-texto">Contraseña temporal: <strong>{regResult.password_temporal}</strong> (pídele que la cambie con «He olvidado mi contraseña»)</p>
-                : <p className="fine">Ya tenía cuenta: no se ha cambiado su contraseña.</p>}
-              {regResult.ca_asignado && <p className="objetivo-texto">Career Advisor: <strong>{regResult.ca_asignado}</strong></p>}
-              {regResult.bienvenida_enviada === true && <p className="fine">✓ Bienvenida enviada por Slack.</p>}
-              {(regResult.avisos || []).map((a, i) => <p key={i} className="fine" style={{ color: "var(--accent)" }}>⚠ {a}</p>)}
-              <button style={{ marginTop: 12 }} onClick={() => setRegResult(null)}>Registrar otro</button>
-            </div>
-          ) : (
-            <form onSubmit={registrarEmpleado} className="registro-empleado-form" style={{ marginTop: 20, display: "flex", flexDirection: "column", gap: 12 }}>
-              <label className="fine">Nombre completo *
-                <span style={{ display: "block", opacity: 0.7, fontWeight: 400 }}>Sin tildes, solo nombre y primer apellido.</span>
-                <input type="text" value={regForm.nombre} onChange={setCampo("nombre")} placeholder="Ej. Ana Garcia" required />
-              </label>
-              <label className="fine">Correo
-                <input type="email" value={regForm.correo} onChange={setCampo("correo")} placeholder="ana@igeneris.com" />
-              </label>
-              <label className="fine">Slack ID (ID_usuario)
-                <input type="text" value={regForm.id_usuario} onChange={setCampo("id_usuario")} placeholder="U01ABC..." />
-              </label>
-              <label className="fine">Nombre en Slack
-                <input type="text" value={regForm.nombre_slack} onChange={setCampo("nombre_slack")} placeholder="ana.garcia" />
-              </label>
-              <label className="fine">Cargo
-                <input type="text" value={regForm.cargo} onChange={setCampo("cargo")} placeholder="Analista" />
-              </label>
-              <label className="fine">Área
-                <input type="text" value={regForm.area} onChange={setCampo("area")} placeholder="Negocio / Palantir / MiddleOffice" />
-              </label>
-              <label className="fine">Idioma
-                <select value={regForm.idioma} onChange={setCampo("idioma")}>
-                  <option value="es">Español</option>
-                  <option value="en">English</option>
-                  <option value="pt">Português</option>
-                </select>
-              </label>
-              <label className="fine">País
-                <input type="text" value={regForm.pais} onChange={setCampo("pais")} placeholder="España" />
-              </label>
-              <label className="fine">Foto (URL)
-                <span style={{ display: "block", opacity: 0.7, fontWeight: 400 }}>Enlace a la imagen (se guarda en la ficha de Notion).</span>
-                <input type="url" value={regForm.foto} onChange={setCampo("foto")} placeholder="https://..." />
-              </label>
-              <label className="fine">Career Advisor
-                <select value={regForm.ca} onChange={setCampo("ca")}>
-                  <option value="">— Sin asignar —</option>
-                  {cas.map((c) => <option key={c} value={c}>{c}</option>)}
-                </select>
-              </label>
-              <label className="fine" style={{ display: "flex", alignItems: "center", gap: 8, flexDirection: "row" }}>
-                <input type="checkbox" checked={regForm.enviar_bienvenida} onChange={(ev) => setRegForm((f) => ({ ...f, enviar_bienvenida: ev.target.checked }))} style={{ width: "auto" }} />
-                Enviar mensaje de bienvenida por Slack (con usuario y contraseña)
-              </label>
-              {regError && <p className="fine error">{regError}</p>}
-              <button type="submit" disabled={regGuardando}>{regGuardando ? "Dando de alta…" : "Dar de alta"}</button>
-            </form>
-          )}
-        </div>
-        <Footer />
-      </main>
-    );
-  }
 
   if (selected) {
     return (
       <main className="page">
         <nav className="nav">
-          <a className="brand" href="/"><img src={logoUrl} alt="igeneris" className="brand-logo" /></a>
+          <a className="brand" href="/"><img src="/src/logo.png" alt="igeneris" className="brand-logo" /></a>
           <button className="link-button" onClick={() => { setSelected(null); setInformeFinal(null); setStatusMsg(""); setFuenteError(""); }}>{t("common.back")}</button>
         </nav>
         <div className="admin-employee-wrap">
@@ -899,12 +726,12 @@ function AdminPanel({ token, onBack }) {
                 <>
                   {informeFinal.htmlUrl && (
                     <button onClick={() => openFile(informeFinal.htmlUrl, "informe_final.html")}>
-                      {t("admin.view_final_report_web")}
+                      {t("admin.view_final_report")}
                     </button>
                   )}
                   {informeFinal.docxUrl && (
                     <button className="secondary" onClick={() => openFile(informeFinal.docxUrl, "informe_final.docx")}>
-                      {t("admin.download_word_final_report")}
+                      {t("admin.download_word")}
                     </button>
                   )}
                 </>
@@ -932,8 +759,7 @@ function AdminPanel({ token, onBack }) {
                   <p className="kicker">Evaluadores</p>
                   {(() => {
                     const globalRevelado = !anonimato.global_anonimo;
-                    const individualRevelado = (anonimato.advisees_revelados || [])
-                      .some((n) => normalizarNombre(n) === normalizarNombre(selected.nombre));
+                    const individualRevelado = (anonimato.advisees_revelados || []).includes(selected.nombre);
                     const visible = globalRevelado || individualRevelado;
                     return (
                       <button
@@ -948,43 +774,6 @@ function AdminPanel({ token, onBack }) {
                   })()}
                 </div>
               )}
-              <div style={{ marginTop: 20 }}>
-                <p className="kicker">{t("admin.eval_compliance_title")}</p>
-                <p className="fine">{t("admin.eval_compliance_note")}</p>
-                {detalleCumplimiento === null ? (
-                  <p className="fine">{t("common.loading")}</p>
-                ) : detalleCumplimiento.length === 0 ? (
-                  <p className="fine">{t("admin.eval_compliance_empty")}</p>
-                ) : (
-                  <div className="objetivos-list">
-                    {detalleCumplimiento.map((anio) => (
-                      <article key={anio.anio} className="objetivo-item">
-                        <p className="kicker">{t("admin.eval_year")} {anio.anio}</p>
-                        {anio.meses.map((mes) => (
-                          <div key={mes.mes} className="eval-compliance-mes">
-                            <p className="eval-compliance-mes-nombre">{nombreMes(mes.mes - 1)}</p>
-                            {mes.categorias.map((cat) => (
-                              <div key={cat.categoria} className="eval-compliance-cat">
-                                <p className="fine">{t(`admin.eval_cat_${cat.categoria}`)}</p>
-                                <div className="eval-compliance-rows">
-                                  {cat.tipos.map((tp) => (
-                                    <div key={tp.tipo} className="eval-compliance-row">
-                                      {/* Un tipo nuevo en Notion que aún no esté traducido se pinta
-                                          con su clave cruda antes que con "admin.eval_type_loquesea". */}
-                                      <span><span className="dash-dot" />{tieneClave(`admin.eval_type_${tp.tipo}`) ? t(`admin.eval_type_${tp.tipo}`) : tp.tipo}</span>
-                                      <span className="eval-compliance-ratio">{tp.realizadas}/{tp.enviadas}</span>
-                                    </div>
-                                  ))}
-                                </div>
-                              </div>
-                            ))}
-                          </div>
-                        ))}
-                      </article>
-                    ))}
-                  </div>
-                )}
-              </div>
               <div style={{ marginTop: 20 }}>
                 <p className="kicker">{t("admin.confidential_feedback_title")}</p>
                 <p className="fine">{t("admin.confidential_feedback_note")}</p>
@@ -1007,6 +796,35 @@ function AdminPanel({ token, onBack }) {
                   </div>
                 )}
               </div>
+              <div style={{ marginTop: 20 }}>
+                <p className="kicker">{t("admin.eval_compliance_title")}</p>
+                <p className="fine">{t("admin.eval_compliance_note")}</p>
+                {detalleCumplimiento === null ? (
+                  <p className="fine">{t("common.loading")}</p>
+                ) : detalleCumplimiento.length === 0 ? (
+                  <p className="fine">{t("admin.eval_compliance_empty")}</p>
+                ) : (
+                  <div className="objetivos-list">
+                    {detalleCumplimiento.map((ciclo, i) => (
+                      <article key={i} className="objetivo-item">
+                        <p className="opinion-fecha fine">{t("admin.eval_cycle")} {ciclo.ciclo}</p>
+                        <div className="eval-compliance-rows">
+                          {["mensual", "personal", "ca", "proyecto", "extra"]
+                            .filter((tp) => ciclo.tipos[tp])
+                            .map((tp) => (
+                              <div key={tp} className="eval-compliance-row">
+                                <span>{t(`admin.eval_type_${tp}`)}</span>
+                                <span className="eval-compliance-ratio">
+                                  {ciclo.tipos[tp].realizadas}/{ciclo.tipos[tp].enviadas}
+                                </span>
+                              </div>
+                            ))}
+                        </div>
+                      </article>
+                    ))}
+                  </div>
+                )}
+              </div>
               {statusMsg && (
                 <p className="fine error">{statusMsg}</p>
               )}
@@ -1022,7 +840,7 @@ function AdminPanel({ token, onBack }) {
     return (
       <main className="page">
         <nav className="nav">
-          <a className="brand" href="/"><img src={logoUrl} alt="igeneris" className="brand-logo" /></a>
+          <a className="brand" href="/"><img src="/src/logo.png" alt="igeneris" className="brand-logo" /></a>
           <button className="link-button" onClick={() => setVistaGlobalConfidencial(false)} style={{ marginLeft: "auto" }}>{t("common.back")}</button>
         </nav>
         <div className="admin-search-wrap">
@@ -1065,14 +883,14 @@ function AdminPanel({ token, onBack }) {
   return (
     <main className="page">
       <nav className="nav">
-        <a className="brand" href="/"><img src={logoUrl} alt="igeneris" className="brand-logo" /></a>
+        <a className="brand" href="/"><img src="/src/logo.png" alt="igeneris" className="brand-logo" /></a>
         {anonimato && (
           <button
             className="link-button"
             disabled={anonLoading}
             onClick={toggleGlobalAnonimo}
             style={{ color: "var(--accent)" }}
-            onMouseEnter={(e) => e.currentTarget.style.color = "#c42e0e"}
+            onMouseEnter={(e) => e.currentTarget.style.color = "#0a0a0a"}
             onMouseLeave={(e) => e.currentTarget.style.color = "var(--accent)"}
           >
             › {anonimato.global_anonimo ? "Revelar todos los evaluadores" : "Ocultar todos los evaluadores"}
@@ -1082,7 +900,7 @@ function AdminPanel({ token, onBack }) {
           className="link-button"
           onClick={() => setVistaGlobalConfidencial(true)}
           style={{ color: "var(--accent)" }}
-          onMouseEnter={(e) => e.currentTarget.style.color = "#c42e0e"}
+          onMouseEnter={(e) => e.currentTarget.style.color = "#0a0a0a"}
           onMouseLeave={(e) => e.currentTarget.style.color = "var(--accent)"}
         >
           › {t("admin.confidential_feedback_all_btn")}
@@ -1092,16 +910,6 @@ function AdminPanel({ token, onBack }) {
       <div className="admin-search-wrap">
         <p className="kicker">{t("role.admin_title")}</p>
         <h2>{t("admin.search_employee")}</h2>
-        <div style={{ display: "flex", justifyContent: "center", marginBottom: 16 }}>
-          <button
-            onClick={() => { setMostrarRegistro(true); setRegResult(null); setRegError(""); }}
-            style={{ background: "#fff", color: "#0a0a0a", border: "2px solid var(--accent)" }}
-            onMouseEnter={(e) => { e.currentTarget.style.background = "var(--accent)"; e.currentTarget.style.color = "#fff"; }}
-            onMouseLeave={(e) => { e.currentTarget.style.background = "#fff"; e.currentTarget.style.color = "#0a0a0a"; }}
-          >
-            + Registrar empleado
-          </button>
-        </div>
         <div className="admin-search-field">
           <input
             type="text"
@@ -1210,7 +1018,7 @@ function MisObjetivosPage({ token, persona, onBack }) {
   return (
     <main className="page">
       <nav className="nav">
-        <a className="brand" href="/"><img src={logoUrl} alt="igeneris" className="brand-logo" /></a>
+        <a className="brand" href="/"><img src="/src/logo.png" alt="igeneris" className="brand-logo" /></a>
         <NavBack onBack={onBack} />
       </nav>
       <section className="hero dashboard-hero">
@@ -1353,7 +1161,7 @@ function ObjetivosPage({ token, advisee, caName, onBack, vista = "form", onCambi
   return (
     <main className="page">
       <nav className="nav">
-        <a className="brand" href="/"><img src={logoUrl} alt="igeneris" className="brand-logo" /></a>
+        <a className="brand" href="/"><img src="/src/logo.png" alt="igeneris" className="brand-logo" /></a>
         <NavBack onBack={onBack} />
       </nav>
       <div className="profile-wrap" style={{ flex: 1 }}>
@@ -1618,7 +1426,7 @@ function AuthScreen({ onLogin }) {
   return (
     <main className="page auth-page">
       <nav className="nav">
-        <a className="brand" href="/"><img src={logoUrl} alt="igeneris" className="brand-logo" /></a>
+        <a className="brand" href="/"><img src="/src/logo.png" alt="igeneris" className="brand-logo" /></a>
       </nav>
       <div style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center", padding: "48px 24px" }}>
        <div className="auth-body" style={{ paddingTop: 0 }}>
@@ -1718,6 +1526,690 @@ function AuthScreen({ onLogin }) {
   );
 }
 
+function renderMd(text) {
+  return text.split("\n").map((line, li, arr) => {
+    const parts = line.split(/(\*[^*]+\*|_[^_]+_)/g);
+    return (
+      <span key={li}>
+        {parts.map((part, pi) => {
+          if (part.startsWith("*") && part.endsWith("*") && part.length > 2)
+            return <strong key={pi}>{part.slice(1, -1)}</strong>;
+          if (part.startsWith("_") && part.endsWith("_") && part.length > 2)
+            return <em key={pi}>{part.slice(1, -1)}</em>;
+          return <span key={pi}>{part}</span>;
+        })}
+        {li < arr.length - 1 && <br />}
+      </span>
+    );
+  });
+}
+
+function ChatEvalProyecto({ token, user, onComplete, onNavigate }) {
+  const persona = user?.persona || user?.username || "";
+  const storageKey = `evalproy_${(token || "").slice(-8)}`;
+  const GRACE_MS = 2 * 24 * 60 * 60 * 1000;
+
+  const _evalGuardadasIniciales = React.useMemo(() => {
+    try {
+      const saved = JSON.parse(sessionStorage.getItem(storageKey) || "[]");
+      return saved.filter(e => Date.now() - e.ts < GRACE_MS);
+    } catch { return []; }
+  }, []);
+  const _enGraciaAlMontar = _evalGuardadasIniciales.length > 0;
+
+  const [msgs, setMsgs] = React.useState(() => _enGraciaAlMontar
+    ? [{ role: "bot", text: t("cep.grace_intro") }]
+    : [{ role: "bot", text: t("cep.pending_intro") }]
+  );
+  const [step, setStep] = React.useState(_enGraciaAlMontar ? "terminado" : "intro");
+  const [area, setArea] = React.useState(null);
+  const [proyecto, setProyecto] = React.useState("");
+  const [evaluadoNombre, setEvaluadoNombre] = React.useState("");
+  const [relacion, setRelacion] = React.useState("igual");
+  const [preguntas, setPreguntas] = React.useState([]);
+  const [preguntaIdx, setPreguntaIdx] = React.useState(0);
+  const [respuestas, setRespuestas] = React.useState({});
+  const [evaluadosEnSesion, setEvaluadosEnSesion] = React.useState([]);
+  const [inputVal, setInputVal] = React.useState("");
+  const [loading, setLoading] = React.useState(false);
+  const [empleadosTodos, setEmpleadosTodos] = React.useState([]);
+  const [sugerencias, setSugerencias] = React.useState([]);
+  const [moEvaluables, setMoEvaluables] = React.useState([]);
+  const [modificandoCampo, setModificandoCampo] = React.useState(null);
+  // Evaluaciones guardadas en esta sesión con su page_id para el grace period (2 días)
+  const [evaluacionesGuardadas, setEvaluacionesGuardadas] = React.useState(() => {
+    try {
+      const saved = JSON.parse(sessionStorage.getItem(storageKey) || "[]");
+      return saved.filter(e => Date.now() - e.ts < GRACE_MS);
+    } catch { return []; }
+  });
+  const [editandoPageId, setEditandoPageId] = React.useState(null);
+  const bottomRef = React.useRef(null);
+
+  React.useEffect(() => { bottomRef.current?.scrollIntoView({ behavior: "smooth" }); }, [msgs]);
+  React.useEffect(() => {
+    apiRequest("/api/todos-empleados", { token }).then(d => setEmpleadosTodos(d.empleados || [])).catch(() => {});
+  }, [token]);
+
+  const botSay = (text) => setMsgs(m => [...m, { role: "bot", text }]);
+  const userSay = (text) => setMsgs(m => [...m, { role: "user", text }]);
+
+  function buscarSugerencias(texto) {
+    if (!texto || texto.length < 2) { setSugerencias([]); return; }
+    const norm = texto.toLowerCase();
+    setSugerencias(empleadosTodos.filter(e => e.toLowerCase().includes(norm)).slice(0, 5));
+  }
+
+  function getResumen(resp, preg) {
+    const lines = [t("cep.resumen_head")];
+    lines.push(t("cep.resumen_evaluado", { v: resp.evaluado || "" }));
+    if (resp.proyecto) lines.push(t("cep.resumen_proyecto", { v: resp.proyecto }));
+    for (const q of preg) {
+      const label = q.texto.split("\n")[0].replace(/\*/g, "").slice(0, 55);
+      lines.push(`- *${label}*: ${resp[q.clave] || ""}`);
+    }
+    lines.push(t("cep.resumen_satisf"));
+    return lines.join("\n");
+  }
+
+  function handleComenzar() {
+    userSay(t("cep.btn_comenzar"));
+    botSay(t("cep.ask_area"));
+    setStep("pedir_area");
+  }
+
+  async function handleArea(areaVal) {
+    const LABELS = { negocio: t("cep.area_negocio"), middleoffice: "MiddleOffice", palantir: "Palantir" };
+    userSay(LABELS[areaVal]);
+    setArea(areaVal);
+    if (areaVal === "middleoffice") {
+      setLoading(true);
+      try {
+        const d = await apiRequest("/api/buscar-empleado-slack?area=middleoffice", { token });
+        const lista = d.moEvaluables || [];
+        setMoEvaluables(lista);
+        setPreguntas(d.preguntas || []);
+        setRespuestas({ proyecto: "" });
+        botSay(lista.length ? t("cep.ask_who_list", { lista: lista.map(e => `- ${e}`).join("\n") }) : t("cep.ask_who"));
+        setSugerencias(lista);
+      } catch { botSay(t("cep.ask_who")); }
+      finally { setLoading(false); }
+      setStep("pedir_persona");
+    } else {
+      botSay(t("cep.ask_project"));
+      setStep("pedir_proyecto");
+    }
+  }
+
+  function handleProyecto() {
+    const val = inputVal.trim();
+    if (!val) return;
+    userSay(val);
+    setProyecto(val);
+    setRespuestas({ proyecto: val });
+    setInputVal("");
+    setSugerencias([]);
+    botSay(t("cep.project_ok", { val }));
+    setStep("pedir_persona");
+  }
+
+  async function handlePersonaSubmit(nombreStr) {
+    const nombre = (nombreStr || "").trim();
+    if (!nombre) return;
+    setSugerencias([]);
+    setInputVal("");
+    userSay(nombre);
+    setLoading(true);
+    try {
+      const areaActual = area || "negocio";
+      const d = await apiRequest(`/api/buscar-empleado-slack?nombre=${encodeURIComponent(nombre)}&area=${areaActual}`, { token });
+      if (d.empleado) {
+        const clave = `${(respuestas.proyecto || "").toLowerCase()}|${d.empleado.toLowerCase()}`;
+        if (evaluadosEnSesion.includes(clave)) {
+          botSay(t("cep.already_evaluated", { emp: d.empleado, proy: respuestas.proyecto || "?" }));
+          return;
+        }
+        setEvaluadoNombre(d.empleado);
+        setRelacion(d.relacion || "igual");
+        const finalPregs = d.preguntas?.length ? d.preguntas : preguntas;
+        setPreguntas(finalPregs);
+        setPreguntaIdx(0);
+        setRespuestas(r => ({ ...r, evaluado: d.empleado }));
+        if (finalPregs.length) { botSay(finalPregs[0].texto); setStep("preguntas"); }
+        else botSay(t("cep.no_questions"));
+      } else if (d.sugerencias?.length) {
+        setSugerencias(d.sugerencias);
+        botSay(t("cep.not_found_suggest", { nombre, sug: d.sugerencias.map((s, i) => `${i + 1}. ${s}`).join("\n") }));
+      } else {
+        botSay(t("cep.not_found", { nombre }));
+      }
+    } catch { botSay(t("cep.err_temp_data")); }
+    finally { setLoading(false); }
+  }
+
+  function avanzarPregunta(newResp, newPregs, nextIdx) {
+    if (nextIdx < newPregs.length) {
+      setPreguntaIdx(nextIdx);
+      botSay(newPregs[nextIdx].texto);
+    } else {
+      setPreguntaIdx(0);
+      botSay(getResumen(newResp, newPregs));
+      setStep("confirmacion");
+    }
+  }
+
+  function handleValoracion(val) {
+    const q = preguntas[preguntaIdx];
+    if (!q) return;
+    userSay(val);
+    const newResp = { ...respuestas, [q.clave]: val };
+    setRespuestas(newResp);
+    avanzarPregunta(newResp, preguntas, preguntaIdx + 1);
+  }
+
+  function handleRespuestaPregunta() {
+    const val = inputVal.trim();
+    if (!val) return;
+    const q = preguntas[preguntaIdx];
+    if (!q) return;
+    userSay(val);
+    setInputVal("");
+    const newResp = { ...respuestas, [q.clave]: val };
+    setRespuestas(newResp);
+    avanzarPregunta(newResp, preguntas, preguntaIdx + 1);
+  }
+
+  async function handleConfirmar() {
+    userSay(t("cep.save_yes"));
+    setLoading(true);
+    try {
+      const respsClave = Object.fromEntries(Object.entries(respuestas).filter(([k, v]) => k !== "evaluado" && k !== "proyecto" && v));
+      if (editandoPageId) {
+        await apiRequest("/api/actualizar-evaluacion-slack", {
+          token, method: "POST",
+          body: { page_id: editandoPageId, evaluado: respuestas.evaluado, proyecto: respuestas.proyecto || "", area: area || "negocio", respuestas: respsClave },
+        });
+        const updated = evaluacionesGuardadas.map(e =>
+          e.page_id === editandoPageId ? { ...e, respuestas: { ...respuestas }, ts: Date.now() } : e
+        );
+        setEvaluacionesGuardadas(updated);
+        try { sessionStorage.setItem(storageKey, JSON.stringify(updated)); } catch {}
+        setEditandoPageId(null);
+        botSay(t("cep.updated"));
+        setStep("preguntar_mas_modificaciones");
+      } else {
+        const data = await apiRequest("/api/guardar-evaluacion-slack", {
+          token, method: "POST",
+          body: { evaluado: respuestas.evaluado, proyecto: respuestas.proyecto || "", area: area || "negocio", respuestas: respsClave },
+        });
+        const nueva = {
+          page_id: data.page_id,
+          evaluado: respuestas.evaluado,
+          proyecto: respuestas.proyecto || "",
+          ts: Date.now(),
+          respuestas: { ...respuestas },
+          area: area || "negocio",
+          preguntas: [...preguntas],
+        };
+        const updated = [...evaluacionesGuardadas, nueva];
+        setEvaluacionesGuardadas(updated);
+        try { sessionStorage.setItem(storageKey, JSON.stringify(updated)); } catch {}
+        const clave = `${(respuestas.proyecto || "").toLowerCase()}|${(respuestas.evaluado || "").toLowerCase()}`;
+        setEvaluadosEnSesion(prev => [...prev, clave]);
+        botSay(t("cep.saved"));
+        setStep("mas_personas");
+      }
+    } catch (e) { botSay(t("cep.err_save", { msg: e.message || "" })); }
+    finally { setLoading(false); }
+  }
+
+  function handleElegirModificar(ev) {
+    userSay(`✏️ ${ev.evaluado}${ev.proyecto ? ` — ${ev.proyecto}` : ""}`);
+    setEditandoPageId(ev.page_id);
+    setRespuestas(ev.respuestas);
+    setArea(ev.area);
+    setPreguntas(ev.preguntas || []);
+    botSay(getResumen(ev.respuestas, ev.preguntas || []));
+    setStep("confirmar");
+  }
+
+  function handleModificar() {
+    userSay(t("cep.btn_modificar"));
+    const items = [t("cep.mod_item_persona")];
+    if (respuestas.proyecto) items.push(t("cep.mod_item_proyecto"));
+    const base = respuestas.proyecto ? 3 : 2;
+    preguntas.forEach((q, i) => items.push(`${base + i}. ${q.texto.split("\n")[0].replace(/\*/g, "").slice(0, 55)}`));
+    botSay(t("cep.ask_which_mod", { items: items.join("\n") }));
+    setStep("modificar_menu");
+  }
+
+  function handleModificarMenu() {
+    const num = parseInt(inputVal.trim());
+    if (isNaN(num)) { botSay(t("cep.reply_number")); return; }
+    userSay(inputVal.trim());
+    setInputVal("");
+    let campo = null;
+    if (num === 1) campo = "evaluado";
+    else if (num === 2 && respuestas.proyecto) campo = "proyecto";
+    else {
+      const base = respuestas.proyecto ? 3 : 2;
+      const idx = num - base;
+      if (idx >= 0 && idx < preguntas.length) campo = preguntas[idx].clave;
+    }
+    if (!campo) { botSay(t("cep.reply_number_range", { max: 2 + (respuestas.proyecto ? 1 : 0) + preguntas.length - (respuestas.proyecto ? 0 : 1) })); return; }
+    setModificandoCampo(campo);
+    if (campo === "evaluado") botSay(t("cep.enter_person"));
+    else if (campo === "proyecto") botSay(t("cep.enter_new_project"));
+    else botSay(preguntas.find(q => q.clave === campo)?.texto || t("cep.enter_new_answer"));
+    setStep("modificar_valor");
+  }
+
+  async function handleModificarValor(val) {
+    const v = (val ?? inputVal).trim();
+    if (!v) return;
+    const campo = modificandoCampo;
+    if (campo === "evaluado") {
+      setSugerencias([]);
+      setInputVal("");
+      userSay(v);
+      setLoading(true);
+      try {
+        const d = await apiRequest(`/api/buscar-empleado-slack?nombre=${encodeURIComponent(v)}&area=${area || "negocio"}`, { token });
+        if (d.empleado) {
+          setEvaluadoNombre(d.empleado);
+          setRelacion(d.relacion || "igual");
+          const finalPregs = d.preguntas?.length ? d.preguntas : preguntas;
+          setPreguntas(finalPregs);
+          const newResp = { ...respuestas, evaluado: d.empleado };
+          setRespuestas(newResp);
+          setModificandoCampo(null);
+          botSay(getResumen(newResp, finalPregs));
+          setStep("confirmacion");
+        } else if (d.sugerencias?.length) {
+          setSugerencias(d.sugerencias);
+          botSay(t("cep.not_found_suggest2", { v, sug: d.sugerencias.map((s, i) => `${i + 1}. ${s}`).join("\n") }));
+        } else {
+          botSay(t("cep.not_found2", { v }));
+        }
+      } catch { botSay(t("cep.err_temp")); }
+      finally { setLoading(false); }
+    } else {
+      const esVal = campo === "q1" || campo === "mo_contribucion";
+      if (esVal && !["1","2","3","4","5"].includes(v)) { botSay(t("cep.reply_1_5")); return; }
+      userSay(v);
+      setInputVal("");
+      const newResp = { ...respuestas, [campo]: v };
+      if (campo === "proyecto") setProyecto(v);
+      setRespuestas(newResp);
+      setModificandoCampo(null);
+      botSay(getResumen(newResp, preguntas));
+      setStep("confirmacion");
+    }
+  }
+
+  function handleMasPersonas(si) {
+    userSay(si ? t("cep.yes") : t("cep.no"));
+    if (si) {
+      setEvaluadoNombre("");
+      setRespuestas(r => ({ proyecto: r.proyecto }));
+      setPreguntaIdx(0);
+      setSugerencias([]);
+      if (area === "middleoffice") {
+        botSay(moEvaluables.length ? t("cep.ask_who_list", { lista: moEvaluables.map(e => `- ${e}`).join("\n") }) : t("cep.ask_who_short"));
+        setSugerencias(moEvaluables);
+      } else {
+        botSay(proyecto ? t("cep.ask_other_member_proj", { proy: proyecto }) : t("cep.ask_other_member"));
+      }
+      setStep("pedir_persona");
+    } else if (area === "middleoffice") {
+      botSay(t("cep.thanks_close"));
+      setStep("terminado");
+    } else {
+      botSay(t("cep.ask_other_project"));
+      setStep("mas_proyectos");
+    }
+  }
+
+  function handleMasProyectos(si) {
+    userSay(si ? t("cep.yes") : t("cep.no"));
+    if (si) {
+      setProyecto(""); setEvaluadoNombre(""); setRespuestas({}); setPreguntaIdx(0); setSugerencias([]);
+      botSay(t("cep.ask_project"));
+      setStep("pedir_proyecto");
+    } else {
+      const modificables = evaluacionesGuardadas.filter(e => Date.now() - e.ts < GRACE_MS);
+      if (modificables.length > 0) {
+        botSay(t("cep.thanks_grace"));
+      } else {
+        botSay(t("cep.thanks_close"));
+      }
+      setStep("terminado");
+      onComplete?.();
+    }
+  }
+
+  const pregActual = preguntas[preguntaIdx];
+  const esValoracion = pregActual?.clave === "q1" || pregActual?.clave === "mo_contribucion";
+  const esModValoracion = modificandoCampo === "q1" || modificandoCampo === "mo_contribucion";
+
+  function renderInput() {
+    if (loading) return <div className="chat-input-area"><div className="chat-input-row"><span className="fine" style={{ color: "var(--muted)" }}>...</span></div></div>;
+    if (step === "intro") return (
+      <div className="chat-input-area"><div className="chat-btns"><button className="chat-btn primary" onClick={handleComenzar}>{t("cep.btn_comenzar")}</button></div></div>
+    );
+    if (step === "pedir_area") return (
+      <div className="chat-input-area"><div className="chat-btns">
+        <button className="chat-btn" onClick={() => handleArea("negocio")}>{t("cep.area_negocio")}</button>
+        <button className="chat-btn" onClick={() => handleArea("middleoffice")}>MiddleOffice</button>
+        <button className="chat-btn" onClick={() => handleArea("palantir")}>Palantir</button>
+      </div></div>
+    );
+    if (step === "pedir_proyecto") return (
+      <div className="chat-input-area"><div className="chat-input-row">
+        <input className="chat-input" placeholder={t("cep.ph_project")} value={inputVal} onChange={e => setInputVal(e.target.value)} onKeyDown={e => e.key === "Enter" && handleProyecto()} autoFocus />
+        <button className="chat-send-btn" onClick={handleProyecto}>→</button>
+      </div></div>
+    );
+    if (step === "pedir_persona") return (
+      <div className="chat-input-area">
+        {sugerencias.length > 0 && <div className="chat-sugerencias">{sugerencias.map(s => <button key={s} className="chat-btn" onClick={() => { setSugerencias([]); handlePersonaSubmit(s); }}>{s}</button>)}</div>}
+        <div className="chat-input-row">
+          <input className="chat-input" placeholder={t("cep.ph_person")} value={inputVal} onChange={e => { setInputVal(e.target.value); buscarSugerencias(e.target.value); }} onKeyDown={e => e.key === "Enter" && handlePersonaSubmit(inputVal)} autoFocus />
+          <button className="chat-send-btn" onClick={() => handlePersonaSubmit(inputVal)}>→</button>
+        </div>
+      </div>
+    );
+    if (step === "preguntas") {
+      if (esValoracion) return (
+        <div className="chat-input-area"><div className="chat-btns">{[1,2,3,4,5].map(n => <button key={n} className="chat-btn" onClick={() => handleValoracion(String(n))}>{n}</button>)}</div></div>
+      );
+      return (
+        <div className="chat-input-area"><div className="chat-input-row">
+          <textarea className="chat-input chat-textarea" placeholder={t("cep.ph_answer")} value={inputVal} onChange={e => setInputVal(e.target.value)} onKeyDown={e => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); handleRespuestaPregunta(); } }} rows={2} autoFocus />
+          <button className="chat-send-btn" onClick={handleRespuestaPregunta}>→</button>
+        </div></div>
+      );
+    }
+    if (step === "confirmacion") return (
+      <div className="chat-input-area"><div className="chat-btns">
+        <button className="chat-btn primary" onClick={handleConfirmar}>{t("cep.save_yes")}</button>
+        <button className="chat-btn" onClick={handleModificar}>{t("cep.btn_modificar")}</button>
+      </div></div>
+    );
+    if (step === "modificar_menu") return (
+      <div className="chat-input-area"><div className="chat-input-row">
+        <input className="chat-input" placeholder={t("cep.ph_field_number")} value={inputVal} onChange={e => setInputVal(e.target.value)} onKeyDown={e => e.key === "Enter" && handleModificarMenu()} autoFocus />
+        <button className="chat-send-btn" onClick={handleModificarMenu}>→</button>
+      </div></div>
+    );
+    if (step === "modificar_valor") {
+      if (sugerencias.length > 0) return (
+        <div className="chat-input-area">
+          <div className="chat-sugerencias">{sugerencias.map(s => <button key={s} className="chat-btn" onClick={() => { setSugerencias([]); handleModificarValor(s); }}>{s}</button>)}</div>
+          <div className="chat-input-row">
+            <input className="chat-input" placeholder={t("cep.ph_or_name")} value={inputVal} onChange={e => setInputVal(e.target.value)} onKeyDown={e => e.key === "Enter" && handleModificarValor(inputVal)} autoFocus />
+            <button className="chat-send-btn" onClick={() => handleModificarValor(inputVal)}>→</button>
+          </div>
+        </div>
+      );
+      if (esModValoracion) return (
+        <div className="chat-input-area"><div className="chat-btns">{[1,2,3,4,5].map(n => <button key={n} className="chat-btn" onClick={() => handleModificarValor(String(n))}>{n}</button>)}</div></div>
+      );
+      return (
+        <div className="chat-input-area"><div className="chat-input-row">
+          <input className="chat-input" placeholder={t("cep.ph_new_answer")} value={inputVal} onChange={e => setInputVal(e.target.value)} onKeyDown={e => e.key === "Enter" && handleModificarValor(inputVal)} autoFocus />
+          <button className="chat-send-btn" onClick={() => handleModificarValor(inputVal)}>→</button>
+        </div></div>
+      );
+    }
+    if (step === "mas_personas") return (
+      <div className="chat-input-area"><div className="chat-btns">
+        <button className="chat-btn primary" onClick={() => handleMasPersonas(true)}>{t("cep.yes")}</button>
+        <button className="chat-btn" onClick={() => handleMasPersonas(false)}>{t("cep.no")}</button>
+      </div></div>
+    );
+    if (step === "mas_proyectos") return (
+      <div className="chat-input-area"><div className="chat-btns">
+        <button className="chat-btn primary" onClick={() => handleMasProyectos(true)}>{t("cep.yes")}</button>
+        <button className="chat-btn" onClick={() => handleMasProyectos(false)}>{t("cep.no")}</button>
+      </div></div>
+    );
+    if (step === "terminado") {
+      const modificables = evaluacionesGuardadas.filter(e => Date.now() - e.ts < GRACE_MS);
+      return (
+        <div className="chat-input-area">
+          <div className="chat-btns">
+            <span className="fine" style={{ color: "var(--muted)" }}>{t("cep.completed")}</span>
+            {modificables.length > 0 && (
+              <button className="chat-btn" onClick={() => {
+                botSay(t("cep.ask_whose_mod"));
+                setStep("elegir_modificar");
+              }}>{t("cep.btn_mod_answers")}</button>
+            )}
+          </div>
+        </div>
+      );
+    }
+    if (step === "elegir_modificar") {
+      const modificables = evaluacionesGuardadas.filter(e => Date.now() - e.ts < GRACE_MS);
+      return (
+        <div className="chat-input-area"><div className="chat-btns">
+          {modificables.map((ev, i) => (
+            <button key={i} className="chat-btn" onClick={() => handleElegirModificar(ev)}>
+              {ev.evaluado}{ev.proyecto ? ` — ${ev.proyecto}` : ""}
+            </button>
+          ))}
+        </div></div>
+      );
+    }
+    if (step === "preguntar_mas_modificaciones") {
+      const modificables = evaluacionesGuardadas.filter(e => Date.now() - e.ts < GRACE_MS);
+      return (
+        <div className="chat-input-area"><div className="chat-btns">
+          {modificables.length > 0 && (
+            <button className="chat-btn primary" onClick={() => {
+              botSay(t("cep.ask_whose_mod"));
+              setStep("elegir_modificar");
+            }}>{t("cep.yes")}</button>
+          )}
+          <button className="chat-btn" onClick={() => {
+            botSay(t("cep.bye"));
+            setStep("terminado");
+          }}>{t("cep.no")}</button>
+        </div></div>
+      );
+    }
+    return null;
+  }
+
+  return (
+    <div className="eval-chat-area">
+      <div className="chat-msgs">
+        {msgs.map((msg, i) => (
+          <div key={i} className={`chat-msg-${msg.role}`}>
+            {msg.role === "bot"
+              ? <><span className="chat-avatar">🤖</span><div className="chat-bubble-bot">{renderMd(msg.text)}</div></>
+              : <div className="chat-bubble-user">{msg.text}</div>
+            }
+          </div>
+        ))}
+        <div ref={bottomRef} />
+      </div>
+      {renderInput()}
+    </div>
+  );
+}
+
+function ChatEvalPersonal({ token, user, onComplete }) {
+  const persona = user?.persona || user?.username || "";
+  const [msgs, setMsgs] = React.useState([{
+    role: "bot",
+    text: "📝 *Seguimiento personal*\n\n_Esta evaluación es totalmente privada, solo podrá verla tu CA._\n_Si en algún momento quieres cancelar, cierra esta sección._\n\n*Pulsa el botón* para comenzar.",
+  }]);
+  const [step, setStep] = React.useState("intro");
+  const [comentario, setComentario] = React.useState("");
+  const [inputVal, setInputVal] = React.useState("");
+  const [loading, setLoading] = React.useState(false);
+  const bottomRef = React.useRef(null);
+
+  React.useEffect(() => { bottomRef.current?.scrollIntoView({ behavior: "smooth" }); }, [msgs]);
+
+  const botSay = (text) => setMsgs(m => [...m, { role: "bot", text }]);
+  const userSay = (text) => setMsgs(m => [...m, { role: "user", text }]);
+
+  function handleComenzar() {
+    userSay("Comenzar");
+    botSay("*Esta es tu oportunidad para:*\n\n*1.* Explicar cómo estás ayudando en _\"Contribution to the firm\"_\n*2.* Cómo te estás acercando a tus objetivos\n*3.* Señalar limitaciones o aspectos relevantes respecto al cumplimiento de los criterios de evaluación\n*4.* Si necesitas ayuda con algún tema o has tenido alguna dificultad que quieras comentar\n\nYa puedes escribir tu comentario.");
+    setStep("esperando_comentario");
+  }
+
+  async function handleVerObjetivos() {
+    try {
+      const d = await apiRequest(`/api/objetivos?nombre=${encodeURIComponent(persona)}`, { token });
+      const objs = d.objetivos || [];
+      if (objs.length) {
+        const lineas = objs.map(o => `• *${o.titulo}*${o.kpis ? `\n  _KPIs: ${o.kpis}_` : ""}`).join("\n");
+        botSay(`📌 *Tus objetivos actuales:*\n\n${lineas}`);
+      } else {
+        botSay("📌 No tienes objetivos registrados actualmente.");
+      }
+    } catch (e) { botSay(`⚠️ No se pudieron cargar los objetivos: ${e.message || "Error desconocido"}`); }
+  }
+
+  function handleVerCriterios() {
+    userSay("📊 Ver criterios");
+    botSay("¿Para qué área quieres ver los criterios?");
+    setStep("criterios_grupo");
+  }
+
+  async function handleCriteriosGrupo(grupo) {
+    const labels = { negocio: "Negocio", palantir: "Palantir", middleoffice: "Middle Office" };
+    userSay(labels[grupo] || grupo);
+    setLoading(true);
+    try {
+      const d = await apiRequest(`/api/criterios-evaluacion?grupo=${encodeURIComponent(grupo)}`, { token });
+      const criterios = d.criterios || {};
+      const entries = Object.entries(criterios);
+      if (!entries.length) {
+        botSay("📊 No hay criterios disponibles para este área.");
+      } else {
+        const texto = `📊 *Criterios — ${labels[grupo] || grupo}*\n\n` +
+          entries.map(([dim, niveles]) =>
+            `*${dim}*\n` + Object.entries(niveles).map(([n, ts]) => `  _${n}:_ ${Array.isArray(ts) ? ts.join(". ") : ts}`).join("\n")
+          ).join("\n\n");
+        botSay(texto);
+      }
+    } catch (e) {
+      botSay(`⚠️ No se pudieron cargar los criterios: ${e.message || "Error desconocido"}`);
+    } finally {
+      setLoading(false);
+    }
+    setStep("esperando_comentario");
+  }
+
+  function handleComentario() {
+    const val = inputVal.trim();
+    if (!val) return;
+    userSay(val);
+    setComentario(val);
+    setInputVal("");
+    botSay(`📋 Tu comentario:\n_${val}_\n\n¿Lo guardo?`);
+    setStep("confirmacion");
+  }
+
+  async function handleConfirmar() {
+    userSay(t("cep.save_yes"));
+    setLoading(true);
+    try {
+      await apiRequest("/api/guardar-evaluacion-personal", { token, method: "POST", body: { comentario } });
+      botSay("✅ Evaluación guardada. ¿Quieres añadir otro comentario?");
+      setStep("preguntando_otro");
+    } catch (e) { botSay(`⚠️ No se pudo guardar: ${e.message || "Error desconocido"}`); }
+    finally { setLoading(false); }
+  }
+
+  function handleModificar() {
+    userSay("✏️ Modificar");
+    setComentario("");
+    botSay("Escribe de nuevo tu comentario:");
+    setStep("esperando_comentario");
+  }
+
+  function handleOtroSi() {
+    userSay("✅ Sí");
+    setComentario("");
+    setInputVal("");
+    botSay("¿Qué más me quieres contar? Responde con tu comentario.");
+    setStep("esperando_comentario");
+  }
+
+  function handleOtroNo() {
+    userSay("❌ No");
+    botSay("Muchas gracias. Ya puedes cerrar esta sección 👋");
+    setStep("terminado");
+    onComplete?.();
+  }
+
+  function renderInput() {
+    if (loading) return <div className="chat-input-area"><div className="chat-input-row"><span className="fine" style={{ color: "var(--muted)" }}>...</span></div></div>;
+    if (step === "intro") return (
+      <div className="chat-input-area"><div className="chat-btns"><button className="chat-btn primary" onClick={handleComenzar}>Comenzar</button></div></div>
+    );
+    if (step === "esperando_comentario") return (
+      <div className="chat-input-area">
+        <div className="chat-btns" style={{ marginBottom: "8px" }}>
+          <button className="chat-btn" onClick={handleVerObjetivos}>📋 Ver mis objetivos</button>
+          <button className="chat-btn" onClick={handleVerCriterios}>📊 Ver criterios</button>
+        </div>
+        <div className="chat-input-row">
+          <textarea className="chat-input chat-textarea" placeholder="Escribe tu comentario..." value={inputVal} onChange={e => setInputVal(e.target.value)} onKeyDown={e => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); handleComentario(); } }} rows={3} autoFocus />
+          <button className="chat-send-btn" onClick={handleComentario}>→</button>
+        </div>
+      </div>
+    );
+    if (step === "criterios_grupo") return (
+      <div className="chat-input-area"><div className="chat-btns">
+        <button className="chat-btn" onClick={() => handleCriteriosGrupo("negocio")}>Negocio</button>
+        <button className="chat-btn" onClick={() => handleCriteriosGrupo("palantir")}>Palantir</button>
+        <button className="chat-btn" onClick={() => handleCriteriosGrupo("middleoffice")}>Middle Office</button>
+      </div></div>
+    );
+    if (step === "confirmacion") return (
+      <div className="chat-input-area"><div className="chat-btns">
+        <button className="chat-btn primary" onClick={handleConfirmar}>{t("cep.save_yes")}</button>
+        <button className="chat-btn" onClick={handleModificar}>{t("cep.btn_modificar")}</button>
+      </div></div>
+    );
+    if (step === "preguntando_otro") return (
+      <div className="chat-input-area"><div className="chat-btns">
+        <button className="chat-btn primary" onClick={handleOtroSi}>{t("cep.yes")}</button>
+        <button className="chat-btn" onClick={handleOtroNo}>{t("cep.no")}</button>
+      </div></div>
+    );
+    if (step === "terminado") return (
+      <div className="chat-input-area"><span className="fine" style={{ color: "var(--muted)" }}>Evaluación completada ✅</span></div>
+    );
+    return null;
+  }
+
+  return (
+    <div className="eval-chat-area">
+      <div className="chat-msgs">
+        {msgs.map((msg, i) => (
+          <div key={i} className={`chat-msg-${msg.role}`}>
+            {msg.role === "bot"
+              ? <><span className="chat-avatar">🤖</span><div className="chat-bubble-bot">{renderMd(msg.text)}</div></>
+              : <div className="chat-bubble-user">{msg.text}</div>
+            }
+          </div>
+        ))}
+        <div ref={bottomRef} />
+      </div>
+      {renderInput()}
+    </div>
+  );
+}
+
 function HistorialEvaluacionesPage({ token, evaluado, evaluador, proyecto, onBack }) {
   const [historial, setHistorial] = React.useState(null);
   const [error, setError] = React.useState(null);
@@ -1743,7 +2235,7 @@ function HistorialEvaluacionesPage({ token, evaluado, evaluador, proyecto, onBac
   return (
     <main className="page">
       <nav className="nav">
-        <a className="brand" href="/"><img src={logoUrl} alt="igeneris" className="brand-logo" /></a>
+        <a className="brand" href="/"><img src="/src/logo.png" alt="igeneris" className="brand-logo" /></a>
         <NavBack onBack={onBack} />
       </nav>
       <div className="historial-page">
@@ -1827,7 +2319,7 @@ function DetalleEvaluacionRealizadaPage({ ev, proyecto, onBack }) {
   return (
     <main className="page">
       <nav className="nav">
-        <a className="brand" href="/"><img src={logoUrl} alt="igeneris" className="brand-logo" /></a>
+        <a className="brand" href="/"><img src="/src/logo.png" alt="igeneris" className="brand-logo" /></a>
         <NavBack onBack={onBack} />
       </nav>
       <div className="historial-page">
@@ -1869,6 +2361,110 @@ function DetalleEvaluacionRealizadaPage({ ev, proyecto, onBack }) {
       </div>
       <Footer />
     </main>
+  );
+}
+
+function EvaluacionesSlackSection({ token, user, onNavigate, onCompletada }) {
+  // sessionStorage persiste dentro de la misma sesión del navegador (sobrevive navegar atrás/adelante).
+  // Clave incluye los últimos 8 chars del token para que sea específica del usuario.
+  const storageKey = `eval_completadas_${(token || "").slice(-8)}`;
+
+  const [estadoCiclo, setEstadoCiclo] = React.useState(null);
+  const [tipoActivo, setTipoActivo] = React.useState(null);
+  const [completadas, setCompletadas] = React.useState(() => {
+    try { return JSON.parse(sessionStorage.getItem(storageKey) || "{}"); } catch { return {}; }
+  });
+  // Ref para saber si el usuario ya empezó a interactuar antes de que llegue la API.
+  // Si ya empezó, ignoramos la respuesta de la API para no cambiar ticks mid-conversación.
+  const interactuoRef = React.useRef(false);
+
+  React.useEffect(() => {
+    apiRequest("/api/estado-ciclo-slack", { token })
+      .then(d => {
+        setEstadoCiclo(d);
+        if (!interactuoRef.current) {
+          // Merge: si la API dice que algo está hecho, se marca como hecho.
+          // Lo que ya estaba marcado en sesión se mantiene (por si la API tiene lag o falla).
+          setCompletadas(prev => {
+            const apiComp = d.completadas || {};
+            const merged = { ...prev };
+            Object.entries(apiComp).forEach(([k, v]) => { if (v) merged[k] = true; });
+            return merged;
+          });
+        }
+      })
+      .catch(() => setEstadoCiclo({ cicloActivo: true, completadas: {} }));
+  }, [token]);
+
+  const tipos = [
+    { key: "proyecto", label: t("ess.tab_monthly"), disponible: true },
+    { key: "personal", label: t("ess.tab_personal"), disponible: true },
+  ];
+
+  // Comprobar si hay evaluaciones mensuales en periodo de gracia (2 días)
+  const proyectoEnGracia = React.useMemo(() => {
+    try {
+      const key = `evalproy_${(token || "").slice(-8)}`;
+      const saved = JSON.parse(sessionStorage.getItem(key) || "[]");
+      return saved.some(e => Date.now() - e.ts < 2 * 24 * 60 * 60 * 1000);
+    } catch { return false; }
+  }, [token]);
+
+  function handleTabClick(key) {
+    interactuoRef.current = true;
+    setTipoActivo(key);
+  }
+
+  function marcarCompletada(key) {
+    setCompletadas(c => {
+      const next = { ...c, [key]: true };
+      try { sessionStorage.setItem(storageKey, JSON.stringify(next)); } catch {}
+      return next;
+    });
+    onCompletada?.(key);
+  }
+
+  return (
+    <div>
+      <p className="fine" style={{ marginBottom: "24px" }}>
+        {t("ess.intro")}
+      </p>
+      <div className="eval-slack-layout">
+        <nav className="eval-tipos">
+          {tipos.map(tipo => {
+            const enGracia = tipo.key === "proyecto" && completadas[tipo.key] && proyectoEnGracia;
+            const bloqueada = !tipo.disponible || (completadas[tipo.key] && !enGracia);
+            return (
+            <button
+              key={tipo.key}
+              className={`eval-tipo-btn${tipoActivo === tipo.key ? " active" : ""}${completadas[tipo.key] && !enGracia ? " completada" : ""}`}
+              onClick={() => { if (!bloqueada) handleTabClick(tipo.key); }}
+              disabled={bloqueada}
+              title={completadas[tipo.key] && !enGracia ? t("ess.tip_done") : enGracia ? t("ess.tip_editable") : !tipo.disponible ? t("ess.tip_soon") : ""}
+            >
+              <span>{tipo.label}</span>
+              {completadas[tipo.key] && !enGracia
+                ? <span className="eval-tick">✅</span>
+                : enGracia
+                  ? <span className="eval-tick" title={t("ess.editable")}>✏️</span>
+                  : !tipo.disponible
+                    ? <span className="eval-tick" style={{ fontSize: "11px", opacity: 0.4 }}>{t("ess.soon_short")}</span>
+                    : null
+              }
+            </button>
+            );
+          })}
+        </nav>
+        <div style={{ minHeight: "500px", display: "flex", flexDirection: "column" }}>
+          {tipoActivo === "proyecto"
+            ? <ChatEvalProyecto key="proyecto" token={token} user={user} onComplete={() => marcarCompletada("proyecto")} onNavigate={onNavigate} />
+            : tipoActivo === "personal"
+              ? <ChatEvalPersonal key="personal" token={token} user={user} onComplete={() => marcarCompletada("personal")} />
+              : <div className="eval-chat-area"><div className="eval-placeholder"><p className="fine">{t("ess.select_type")}</p></div></div>
+          }
+        </div>
+      </div>
+    </div>
   );
 }
 
@@ -1970,7 +2566,6 @@ function Dashboard({ token, user, onLogout, onNavigate, onBackToRoleSelect = nul
   // Evaluaciones de proyecto RECIBIDAS y liberadas para la persona (solo top-to-bottom,
   // de alguien por encima en la jerarquía de empresa). Las bottom-to-top nunca llegan aquí.
   const [evalsRecibidas, setEvalsRecibidas] = useState(null);
-  const [recibidasOpen, setRecibidasOpen] = useState(false);
 
   useEffect(() => {
     if (isAdmin) { setEvalsRecibidas([]); return; }
@@ -2228,7 +2823,7 @@ function Dashboard({ token, user, onLogout, onNavigate, onBackToRoleSelect = nul
   return (
     <main className="page dash-page">
       <nav className="nav">
-        <a className="brand" href="/"><img src={logoUrl} alt="igeneris" className="brand-logo" /></a>
+        <a className="brand" href="/"><img src="/src/logo.png" alt="igeneris" className="brand-logo" /></a>
         <div style={{ display: "flex", alignItems: "center", gap: "24px" }}>
           {onBackToRoleSelect && (
             <button className="link-button" onClick={onBackToRoleSelect}>{t("common.back")}</button>
@@ -2599,13 +3194,8 @@ function Dashboard({ token, user, onLogout, onNavigate, onBackToRoleSelect = nul
             </div>
             {/* ── EVALUACIONES DE PROYECTO RECIBIDAS (solo top-to-bottom liberadas) ── */}
             {!isAdmin && (
-              <DashCollapsible
-                title={t("dash.received_evals")}
-                open={recibidasOpen}
-                onToggle={() => setRecibidasOpen((v) => !v)}
-                badge={evalsRecibidas?.length || null}
-                bodyMarginTop={6}
-              >
+              <div>
+                <p className="eyebrow" style={{ margin: "0 0 6px", fontSize: "0.7rem" }}>{t("dash.received_evals")}</p>
                 {evalsRecibidas === null ? (
                   <p className="fine">{t("common.loading")}</p>
                 ) : evalsRecibidas.length === 0 ? (
@@ -2629,7 +3219,7 @@ function Dashboard({ token, user, onLogout, onNavigate, onBackToRoleSelect = nul
                     ))}
                   </div>
                 )}
-              </DashCollapsible>
+              </div>
             )}
             {/* ── PROYECTOS TERMINADOS ── */}
             {!isAdmin && (
@@ -2829,7 +3419,7 @@ function SubirInformePage({ token, advisee, onBack }) {
   return (
     <main className="page">
       <nav className="nav">
-        <a className="brand" href="/"><img src={logoUrl} alt="igeneris" className="brand-logo" /></a>
+        <a className="brand" href="/"><img src="/src/logo.png" alt="igeneris" className="brand-logo" /></a>
         <NavBack onBack={onBack} />
       </nav>
       <div className="profile-wrap" style={{ flex: 1 }}>
@@ -2895,7 +3485,7 @@ function AdviseesList({ token, advisees, onBack, onNavigate }) {
   return (
     <main className="page">
       <nav className="nav">
-        <a className="brand" href="/"><img src={logoUrl} alt="igeneris" className="brand-logo" /></a>
+        <a className="brand" href="/"><img src="/src/logo.png" alt="igeneris" className="brand-logo" /></a>
         <NavBack onBack={onBack} />
       </nav>
       <div className="advisees-page-wrap">
@@ -3043,7 +3633,7 @@ function RegistroComentariosPage({ token, advisee, onBack }) {
   return (
     <main className="page">
       <nav className="nav">
-        <a className="brand" href="/"><img src={logoUrl} alt="igeneris" className="brand-logo" /></a>
+        <a className="brand" href="/"><img src="/src/logo.png" alt="igeneris" className="brand-logo" /></a>
         <NavBack onBack={onBack} />
       </nav>
       <div className="profile-wrap" style={{ flex: 1 }}>
@@ -3131,7 +3721,6 @@ function AdviseeDetail({ token, advisee, advisees, onBack, onNavigate }) {
   const [comentariosOpen, setComentariosOpen] = useState(false);
   const [cargo, setCargo] = useState(advisee.cargo || "");
   const [accesoIndividual, setAccesoIndividual] = useState(false);
-  const [hayInformeFinal, setHayInformeFinal] = useState(true); // hasta saberlo, no se bloquea el botón
   const [togglingAccesoIndividual, setTogglingAccesoIndividual] = useState(false);
   const [notas, setNotas] = useState(null);
   const [loadingNotas, setLoadingNotas] = useState(true);
@@ -3150,26 +3739,17 @@ function AdviseeDetail({ token, advisee, advisees, onBack, onNavigate }) {
   const [fuenteOk, setFuenteOk] = useState(false);
   const [tieneEvaluacionesExtra, setTieneEvaluacionesExtra] = useState(false);
   const [verInformeBusy, setVerInformeBusy] = useState(false);
-  const [sinInformeFinal, setSinInformeFinal] = useState(false); // no hay ninguna versión en Notion
-  const [estadoVersion, setEstadoVersion] = useState(""); // "Final"|"Borrador" de lo último que se abrió
-  const [versionUrls, setVersionUrls] = useState(null); // { htmlUrl, docxUrl } de esa misma versión
+  const [sinInformeFinal, setSinInformeFinal] = useState(false); // no hay versión final en Notion
 
-  // Abre la versión actual del informe guardada en Notion: la publicada o, si el CA ha
-  // seguido editando desde entonces, el borrador en curso. Si no hay ninguna, muestra el
-  // aviso con enlace. Cuando lo abierto es un borrador se ofrece seguir editándolo.
-  //
-  // Abre la web (cómoda para repasar) y deja además el Word a mano: es el formato que el CA
-  // acaba usando para retocar antes de publicar, y tenerlo aquí le ahorra volver a generarlo.
+  // Abre la versión final del informe guardada en Notion; si no hay, muestra el aviso con enlace.
   async function verVersionActualInforme() {
-    setVerInformeBusy(true); setSinInformeFinal(false); setEstadoVersion(""); setVersionUrls(null);
+    setVerInformeBusy(true); setSinInformeFinal(false);
     try {
-      const data = await apiRequest(
-        `/api/informe-final?evaluado=${encodeURIComponent(advisee.nombre)}&incluir_borrador=1`, { token });
-      const url = data.disponible ? (data.htmlUrl || data.docxUrl) : "";
-      if (url) {
-        openAuthedFile(url, token);
-        setEstadoVersion(data.estado || "Final");
-        setVersionUrls({ htmlUrl: data.htmlUrl || "", docxUrl: data.docxUrl || "" });
+      const data = await apiRequest(`/api/informe-final?evaluado=${encodeURIComponent(advisee.nombre)}`, { token });
+      if (data.disponible && data.htmlUrl) {
+        openAuthedFile(data.htmlUrl, token);
+      } else if (data.disponible && data.docxUrl) {
+        openAuthedFile(data.docxUrl, token);
       } else {
         setSinInformeFinal(true);
       }
@@ -3213,10 +3793,7 @@ function AdviseeDetail({ token, advisee, advisees, onBack, onNavigate }) {
   }
 
   useEffect(() => {
-    const apply = (data) => {
-      setAccesoIndividual(data.activo || false);
-      setHayInformeFinal(data.informeFinal !== false);
-    };
+    const apply = (data) => setAccesoIndividual(data.activo || false);
     apiRequestCached(`/api/acceso-advisee-individual?advisee=${encodeURIComponent(advisee.nombre)}`, { token }, apply)
       .then(apply)
       .catch(() => {});
@@ -3335,7 +3912,7 @@ function AdviseeDetail({ token, advisee, advisees, onBack, onNavigate }) {
   return (
     <main className="page">
       <nav className="nav">
-        <a className="brand" href="/"><img src={logoUrl} alt="igeneris" className="brand-logo" /></a>
+        <a className="brand" href="/"><img src="/src/logo.png" alt="igeneris" className="brand-logo" /></a>
         <button className="link-button" onClick={onBack}>{t("ad.back_advisees")}</button>
       </nav>
       <div className="profile-wrap" style={{ flex: 1 }}>
@@ -3407,39 +3984,12 @@ function AdviseeDetail({ token, advisee, advisees, onBack, onNavigate }) {
                         {t("ad.no_final_post")}
                       </p>
                     )}
-                    {versionUrls && (versionUrls.htmlUrl || versionUrls.docxUrl) && (
-                      <p className="fine" style={{ margin: "2px 0 6px", paddingLeft: 14 }}>
-                        {t("ad.current_open_again")}
-                        {versionUrls.htmlUrl && (
-                          <a href="#" onClick={(e) => { e.preventDefault(); openAuthedFile(versionUrls.htmlUrl, token); }}>
-                            {t("ad.current_open_web")}
-                          </a>
-                        )}
-                        {versionUrls.htmlUrl && versionUrls.docxUrl && " · "}
-                        {versionUrls.docxUrl && (
-                          <a href="#" onClick={(e) => { e.preventDefault(); openAuthedFile(versionUrls.docxUrl, token); }}>
-                            {t("ad.current_open_word")}
-                          </a>
-                        )}
-                      </p>
-                    )}
-                    {estadoVersion === "Borrador" && (
-                      <p className="fine" style={{ margin: "2px 0 6px", paddingLeft: 14 }}>
-                        {t("ad.current_is_draft_pre")}
-                        <a href="#" onClick={(e) => { e.preventDefault(); onNavigate({ type: "eval-anual", advisee, advisees, from: "advisee-detail", modo: "manual" }); }}>
-                          {t("ad.current_is_draft_link")}
-                        </a>
-                        {t("ad.current_is_draft_post")}
-                      </p>
-                    )}
-                    {/* Sin versión final publicada no se puede dar acceso (un borrador no cuenta),
-                        pero revocar un acceso ya activo siempre debe poder hacerse. */}
                     <div style={{ display: "flex", alignItems: "center", marginTop: 8 }}>
                       <span className="dash-dot" />
                       <button
                         className="secondary"
                         onClick={toggleAccesoIndividual}
-                        disabled={togglingAccesoIndividual || (!accesoIndividual && !hayInformeFinal)}
+                        disabled={togglingAccesoIndividual}
                         style={{ height: 30, minHeight: "auto", padding: "0 14px", fontSize: 12 }}
                       >
                         {togglingAccesoIndividual
@@ -3449,11 +3999,6 @@ function AdviseeDetail({ token, advisee, advisees, onBack, onNavigate }) {
                           : t("ad.give_access")}
                       </button>
                     </div>
-                    {!accesoIndividual && !hayInformeFinal && (
-                      <p className="fine" style={{ margin: "4px 0 0", paddingLeft: 14 }}>
-                        {t("ad.give_access_needs_final")}
-                      </p>
-                    )}
                   </div>
                 </AdviseeNavGroup>
 
@@ -3621,7 +4166,7 @@ function PlanAccionPage({ token, advisee, advisees, onBack, onNavigate }) {
   return (
     <main className="page">
       <nav className="nav">
-        <a className="brand" href="/"><img src={logoUrl} alt="igeneris" className="brand-logo" /></a>
+        <a className="brand" href="/"><img src="/src/logo.png" alt="igeneris" className="brand-logo" /></a>
         <NavBack onBack={onBack} />
       </nav>
       <div className="profile-wrap" style={{ flex: 1 }}>
@@ -3754,10 +4299,6 @@ function MisProyectosActivosPage({ token, user, onBack }) {
     }
   }
 
-  // El manager es la persona de la sesión: estos proyectos son justo los que ella activó.
-  const personaSesion = user?.persona || user?.username || "";
-  const esManager = (nombre) => normalizarNombre(nombre) === normalizarNombre(personaSesion);
-
   function cargarEstado(nombre) {
     apiRequest(`/api/estado-proyecto?proyecto=${encodeURIComponent(nombre)}`, { token })
       .then((d) => setEstadoMap((prev) => ({ ...prev, [nombre]: d.estado || [] })))
@@ -3807,7 +4348,7 @@ function MisProyectosActivosPage({ token, user, onBack }) {
   return (
     <main className="page">
       <nav className="nav">
-        <a className="brand" href="/"><img src={logoUrl} alt="igeneris" className="brand-logo" /></a>
+        <a className="brand" href="/"><img src="/src/logo.png" alt="igeneris" className="brand-logo" /></a>
         <NavBack onBack={onBack} />
       </nav>
 
@@ -3912,19 +4453,14 @@ function MisProyectosActivosPage({ token, user, onBack }) {
                                 </span>
                               </td>
                               <td>
-                                {esManager(m.nombre) ? (
-                                  /* El manager no puede darse de baja: dejaría el proyecto sin quien lo gestione. */
-                                  <span className="badge badge-light" title={t("mpa.manager_hint")}>{t("mpa.manager")}</span>
-                                ) : (
-                                  <button
-                                    className="mpa-remove"
-                                    onClick={() => modificarMiembro("eliminar", nombre, m.nombre)}
-                                    title={t("mpa.remove_member", { nombre: m.nombre })}
-                                  >
-                                    <span className="mpa-remove-x" aria-hidden="true">✕</span>
-                                    {t("mpa.remove_short")}
-                                  </button>
-                                )}
+                                <button
+                                  className="mpa-remove"
+                                  onClick={() => modificarMiembro("eliminar", nombre, m.nombre)}
+                                  title={t("mpa.remove_member", { nombre: m.nombre })}
+                                >
+                                  <span className="mpa-remove-x" aria-hidden="true">✕</span>
+                                  {t("mpa.remove_short")}
+                                </button>
                               </td>
                             </tr>
                           );
@@ -4058,7 +4594,7 @@ function ActivarEvaluacionesProyectoPage({ token, user, onBack, onActivado }) {
   return (
     <main className="page">
       <nav className="nav">
-        <a className="brand" href="/"><img src={logoUrl} alt="igeneris" className="brand-logo" /></a>
+        <a className="brand" href="/"><img src="/src/logo.png" alt="igeneris" className="brand-logo" /></a>
         <NavBack onBack={onBack} />
       </nav>
 
@@ -4357,7 +4893,7 @@ function EvaluacionesProyectoPage({ token, user, proyectos, onBack, onNavigate, 
   return (
     <main className="page">
       <nav className="nav">
-        <a className="brand" href="/"><img src={logoUrl} alt="igeneris" className="brand-logo" /></a>
+        <a className="brand" href="/"><img src="/src/logo.png" alt="igeneris" className="brand-logo" /></a>
         <NavBack onBack={onBack} />
       </nav>
 
@@ -4612,7 +5148,7 @@ function FormularioEvaluacionProyecto({ token, user, proyecto, tipo, manager, ev
     return (
       <main className="page">
         <nav className="nav">
-          <a className="brand" href="/"><img src={logoUrl} alt="igeneris" className="brand-logo" /></a>
+          <a className="brand" href="/"><img src="/src/logo.png" alt="igeneris" className="brand-logo" /></a>
           <NavBack onBack={onBack} />
         </nav>
         <div style={{ padding: "40px", maxWidth: 820, margin: "0 auto", width: "100%" }}>
@@ -4625,7 +5161,7 @@ function FormularioEvaluacionProyecto({ token, user, proyecto, tipo, manager, ev
   return (
     <main className="page">
       <nav className="nav">
-        <a className="brand" href="/"><img src={logoUrl} alt="igeneris" className="brand-logo" /></a>
+        <a className="brand" href="/"><img src="/src/logo.png" alt="igeneris" className="brand-logo" /></a>
         <NavBack onBack={onBack} />
       </nav>
       <section className="hero">
@@ -4897,7 +5433,7 @@ function SolicitarEvaluacionExtraPage({ token, user, onBack }) {
   return (
     <main className="page">
       <nav className="nav">
-        <a className="brand" href="/"><img src={logoUrl} alt="igeneris" className="brand-logo" /></a>
+        <a className="brand" href="/"><img src="/src/logo.png" alt="igeneris" className="brand-logo" /></a>
         <NavBack onBack={onBack} />
       </nav>
 
@@ -5033,7 +5569,7 @@ function FormularioEvaluacionExtra({ token, evaluado, contexto, solicitudPageId,
   return (
     <main className="page">
       <nav className="nav">
-        <a className="brand" href="/"><img src={logoUrl} alt="igeneris" className="brand-logo" /></a>
+        <a className="brand" href="/"><img src="/src/logo.png" alt="igeneris" className="brand-logo" /></a>
         <NavBack onBack={onBack} />
       </nav>
       <section className="hero">
@@ -5102,6 +5638,22 @@ function FormularioEvaluacionExtra({ token, evaluado, contexto, solicitudPageId,
           </div>
         </form>
       )}
+      <Footer />
+    </main>
+  );
+}
+
+function EvaluacionesSlackPage({ token, user, onBack, onNavigate, completadasApp = {}, onCompletada }) {
+  return (
+    <main className="page">
+      <nav className="nav">
+        <a className="brand" href="/"><img src="/src/logo.png" alt="igeneris" className="brand-logo" /></a>
+        <NavBack onBack={onBack} />
+      </nav>
+      <div style={{ paddingTop: "clamp(44px, 6vw, 68px)" }}>
+        <p className="kicker">{t("ess.page_kicker")}</p>
+        <EvaluacionesSlackSection token={token} user={user} onNavigate={onNavigate} completadasApp={completadasApp} onCompletada={onCompletada} />
+      </div>
       <Footer />
     </main>
   );
@@ -5286,8 +5838,6 @@ function EvaluacionAnualWizard({ token, advisee, onBack, modo }) {
   const [citaSel, setCitaSel] = useState(null);  // cid de la cita abierta en el chat
   const [resumenBusy, setResumenBusy] = useState(false); // sugerencia final del área
   const [resetting, setResetting] = useState(false);
-  const [plantillaBusy, setPlantillaBusy] = useState(false);
-  const [areaNonce, setAreaNonce] = useState(0);
   const [reloadNonce, setReloadNonce] = useState(0);
   const [plan, setPlan] = useState(null);        // plan de acción sugerido (texto)
   const [planInstr, setPlanInstr] = useState("");
@@ -5343,7 +5893,7 @@ function EvaluacionAnualWizard({ token, advisee, onBack, modo }) {
     // Flujo manual: se salta la conversación por áreas y abre el Word editable en blanco.
     if (esManual) {
       apiRequest("/api/eval-anual/iniciar-manual", { token, method: "POST", body: { evaluado: nombre } })
-        .then((r) => { if (!alive) return; setBorr(r.borrador); setEst(r.estado || null); setStep("borrador"); })
+        .then((r) => { if (!alive) return; setBorr(r.borrador); setStep("borrador"); })
         .catch((e) => { if (alive) { setError(e.message); setStep("error"); } });
       return () => { alive = false; };
     }
@@ -5364,18 +5914,13 @@ function EvaluacionAnualWizard({ token, advisee, onBack, modo }) {
   // actualiza `est` para reflejar que un área quedó desconfirmada, este efecto no
   // se relanza y no pisa la conversación recién recibida con un refetch de más.
   const claveActual = est?.secciones?.[secIdx]?.clave;
-  // `areaNonce` fuerza la recarga cuando hay que volver a pedir la MISMA área. Pasa al
-  // actualizar la plantilla: renombrar un criterio en Notion no cambia su clave (es el id
-  // de página), así que sin el nonce las dependencias quedaban igual, el efecto no se
-  // relanzaba y la pantalla se quedaba con `area` en null enseñando la barra de espera
-  // para siempre, sin haber pedido nada al servidor.
   useEffect(() => {
     if (step !== "loop" || !claveActual) return;
     setArea(null); setInput(""); setEvidOpen(true); setError(""); setCitaSel(null);
     apiRequest(`/api/eval-anual/area?evaluado=${encodeURIComponent(nombre)}&clave=${encodeURIComponent(claveActual)}`, { token })
       .then(setArea)
       .catch((e) => setError(e.message));
-  }, [step, claveActual, token, nombre, areaNonce]);
+  }, [step, claveActual, token, nombre]);
 
   async function confirmarIdentidad() {
     setBusy(true); setError("");
@@ -5519,32 +6064,6 @@ function EvaluacionAnualWizard({ token, advisee, onBack, modo }) {
     }
   }
 
-  // Adopta las dimensiones que hay ahora en Notion. No se hace solo a propósito: si los
-  // criterios cambian a mitad de campaña, el CA decide si termina con la plantilla con la
-  // que empezó o se pasa a la nueva (las áreas que sigan existiendo conservan su texto).
-  async function actualizarPlantilla() {
-    if (!window.confirm(t("eaw.template_confirm"))) return;
-    setPlantillaBusy(true); setError("");
-    try {
-      const data = await apiRequest("/api/eval-anual/actualizar-plantilla", {
-        token, method: "POST", body: { evaluado: nombre },
-      });
-      setEst(data);
-      // En manual, lo que se está editando es el borrador: viene rehecho con las
-      // dimensiones nuevas, así que hay que reemplazarlo o se seguirían viendo las viejas.
-      if (data.borrador) setBorr(data.borrador);
-      // El área abierta puede haber dejado de existir: se vuelve a la primera sin confirmar.
-      const i = data.secciones.findIndex((s) => !s.confirmada);
-      setSecIdx(i < 0 ? 0 : i);
-      // Y se pide de nuevo aunque sea la misma clave: su contenido ha cambiado.
-      setAreaNonce((n) => n + 1);
-    } catch (e) {
-      setError(e.message);
-    } finally {
-      setPlantillaBusy(false);
-    }
-  }
-
   // Descarga un PDF con TODA la información recibida por la persona (las 4 fuentes juntas).
   async function descargarInfoCompleta() {
     setDescInfo(true);
@@ -5576,7 +6095,7 @@ function EvaluacionAnualWizard({ token, advisee, onBack, modo }) {
   const shell = (children) => (
     <main className="page">
       <nav className="nav">
-        <a className="brand" href="/"><img src={logoUrl} alt="igeneris" className="brand-logo" /></a>
+        <a className="brand" href="/"><img src="/src/logo.png" alt="igeneris" className="brand-logo" /></a>
         <NavBack onBack={onBack} />
       </nav>
       <div style={{ flex: 1, paddingTop: "clamp(44px, 6vw, 68px)", paddingBottom: 48, maxWidth: 820, margin: "0 auto", width: "100%" }}>
@@ -5600,25 +6119,7 @@ function EvaluacionAnualWizard({ token, advisee, onBack, modo }) {
             )}
           </div>
         </div>
-        {est && (
-          <p className="fine" style={{ marginBottom: est.plantillaDesactualizada ? 12 : 24 }}>
-            {t("eaw.year_stat", { anio: est.anio, done: est.seccionesConfirmadas, total: est.totalSecciones })}
-            {/* El área decide qué criterios y qué apartados le tocan a esta persona. */}
-            {est.area && <> · {t("eaw.area_label", { area: est.area })}</>}
-          </p>
-        )}
-        {est?.plantillaDesactualizada && (
-          <div
-            className="panel"
-            style={{ marginBottom: 24, padding: "12px 16px", borderColor: "#f59e0b", background: "#fffbeb",
-                     display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}
-          >
-            <span style={{ flex: "1 1 320px" }}>{t("eaw.template_changed")}</span>
-            <button className="secondary" onClick={actualizarPlantilla} disabled={plantillaBusy}>
-              {plantillaBusy ? t("eaw.template_updating") : t("eaw.template_update")}
-            </button>
-          </div>
-        )}
+        {est && <p className="fine" style={{ marginBottom: 24 }}>{t("eaw.year_stat", { anio: est.anio, done: est.seccionesConfirmadas, total: est.totalSecciones })}</p>}
         {error && <p className="form-error">{error}</p>}
         {children}
       </div>
@@ -6135,6 +6636,7 @@ function App() {
   const [page, setPage] = useState(null);
   const [adminMode, setAdminMode] = useState(null); // null | "personal" | "admin"
   const [completedEvals, setCompletedEvals] = useState({});
+  const [slackEvalCompletadas, setSlackEvalCompletadas] = useState({});
   const [legalDoc, setLegalDoc] = useState(getLegalDoc());
   const [, forceLang] = useState(0);
 
@@ -6151,11 +6653,6 @@ function App() {
   useEffect(() => {
     window.history.replaceState({ page: null, adminMode: null }, "");
   }, []);
-
-  // Al cambiar de pagina, empezar arriba del todo
-  useEffect(() => {
-    window.scrollTo(0, 0);
-  }, [page, adminMode]);
 
   // Escucha el botón de atrás del navegador
   useEffect(() => {
@@ -6300,10 +6797,21 @@ function App() {
         onBack={() => navigate(null)}
       />
     );
+  } else if (page?.type === "evaluaciones-slack") {
+    content = (
+      <EvaluacionesSlackPage
+        token={token}
+        user={user}
+        onBack={() => navigate(null)}
+        onNavigate={navigate}
+        completadasApp={slackEvalCompletadas}
+        onCompletada={(key) => setSlackEvalCompletadas(prev => ({ ...prev, [key]: true }))}
+      />
+    );
   } else if (page?.type === "historial-evaluaciones") {
     const backFromHistorial = page.from === "evaluaciones-proyecto"
       ? () => navigate({ type: "evaluaciones-proyecto", proyectos: page.proyectos || [], initialProyecto: page.proyecto })
-      : () => navigate(null);
+      : () => navigate({ type: "evaluaciones-slack" });
     content = (
       <HistorialEvaluacionesPage
         token={token}

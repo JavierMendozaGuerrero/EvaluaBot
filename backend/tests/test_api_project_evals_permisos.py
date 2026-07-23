@@ -73,7 +73,7 @@ def test_modificar_equipo_del_proyecto_propio_sigue_funcionando(client, as_sessi
     llamadas = []
     monkeypatch.setattr(
         router, "eliminar_miembro_proyecto",
-        lambda proyecto, empleado, idioma="es", manager="": llamadas.append((proyecto, empleado)) or {"ok": True},
+        lambda proyecto, empleado, idioma="es": llamadas.append((proyecto, empleado)) or {"ok": True},
     )
     r = client.post(
         "/api/modificar-equipo-proyecto",
@@ -82,38 +82,6 @@ def test_modificar_equipo_del_proyecto_propio_sigue_funcionando(client, as_sessi
     assert r.status_code == 200
     assert r.json() == {"ok": True}
     assert llamadas == [(_PROPIO, "Miembro")]
-
-
-def test_el_manager_no_puede_eliminarse_a_si_mismo(client, as_session, user_session, monkeypatch):
-    """El manager de un proyecto es quien lo activó (Activado_por), y es por ahí por donde
-    obtener_proyectos_manager decide quién puede gestionarlo. Si se da de baja a sí mismo el
-    proyecto se queda sin nadie que pueda tocar el equipo ni mandar recordatorios, y además
-    _limpiar_registros_evaluacion_miembro le borra sus propias evaluaciones."""
-    as_session(user_session)
-    _solo_gestiona_el_propio(monkeypatch)
-    monkeypatch.setattr(router, "eliminar_miembro_proyecto", _explota_si_se_llama("eliminar_miembro_proyecto"))
-
-    r = client.post(
-        "/api/modificar-equipo-proyecto",
-        json={"accion": "eliminar", "proyecto": _PROPIO, "empleado": user_session["persona"]},
-    )
-    assert r.status_code == 400
-
-
-def test_eliminarse_a_si_mismo_se_detecta_con_el_nombre_escrito_distinto(
-    client, as_session, user_session, monkeypatch
-):
-    """Los nombres vienen de Notion y no siempre llegan igual escritos; la comparación
-    normaliza tildes, mayúsculas y espacios, así que el rodeo tampoco cuela."""
-    as_session(user_session)
-    _solo_gestiona_el_propio(monkeypatch)
-    monkeypatch.setattr(router, "eliminar_miembro_proyecto", _explota_si_se_llama("eliminar_miembro_proyecto"))
-
-    r = client.post(
-        "/api/modificar-equipo-proyecto",
-        json={"accion": "eliminar", "proyecto": _PROPIO, "empleado": "  cárlos   cá  "},
-    )
-    assert r.status_code == 400
 
 
 # ---------------------------------------------------------------------------

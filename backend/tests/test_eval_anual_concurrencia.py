@@ -90,7 +90,7 @@ def test_dos_peticiones_a_la_vez_solo_lanzan_un_analisis(carpeta):
     ses._guardar("laura", {"advisee": "Laura", "cargo": "Associate", "emp_data": {"empleado": "Laura"}})
     llamadas = []
 
-    def analisis_lento(emp_data, cargo="", idioma="es", **kw):
+    def analisis_lento(emp_data, cargo=""):
         llamadas.append(cargo)
         time.sleep(0.3)  # ventana para que el otro hilo entre si no hubiera lock
         return {"resultado": "ok", "_fuentes": {}}

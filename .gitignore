@@ -17,6 +17,11 @@ env/
 # Se crea copiando deploy-template.sh, que sí va versionado.
 deploy.sh
 
+# Deploy a Cloud Run: cada entorno tiene su proyecto GCP y sus env vars.
+# Se crean copiando deploy-gcp-template.sh y env.gcp.yaml.example.
+deploy-gcp.sh
+env.gcp.yaml
+
 backend/dashboard_web/*
 !backend/dashboard_web/.gitkeep
 backend/slack_lists_config.json

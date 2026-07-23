@@ -1,22 +1,22 @@
 """La integridad del campo que decide la privacidad: `relacion`.
 
 Todo el filtrado de feedback confidencial (ver test_pdfs_fuentes_privacidad) se apoya en que
-`relacion` sea correcta. Estos tests cubren las dos formas en que podía dejar de serlo:
+`relacion` sea correcta. Estos tests cubren las tres formas en que podía dejar de serlo:
 
   1. Editar una evaluación cuando la jerarquía cambió dejaba la columna vieja puesta, así que
      la fila declaraba dos jerarquías y la lectura resolvía el empate a favor de 'superiores'
      -> una bottom-to-top se publicaba al CA.
   2. Una fila ya corrupta (por el bug anterior o editada a mano en Notion) debía dejar de
      interpretarse en vez de adivinar.
-
-(Había un tercer frente: la web de "contestar las evaluaciones de Slack" recalculaba la
-jerarquía al guardar. Esa funcionalidad se retiró junto con sus endpoints, así que sus tests
-se fueron con ella.)
+  3. La web recalculaba la jerarquía al guardar, y no al servir las preguntas: si el cargo
+     cambiaba entremedias, el evaluador respondía a preguntas bottom-to-top y se grababa
+     como top-down.
 """
 
 import pytest
 
 from backend import notion_service as ns
+from backend.api.routers import personal_slack as ps
 
 
 # ── 1. Editar no puede dejar dos jerarquías en la misma fila ──────────────────
@@ -114,3 +114,45 @@ def test_una_fila_corrupta_no_se_lleva_por_delante_a_las_sanas(leer_paginas):
     assert len(evals) == 1
     assert evals[0]["relacion"] == "superior"
     assert evals[0]["q2"] == "SANA"
+
+
+# ── 3. La jerarquía se fija al abrir y se reutiliza al guardar ────────────────
+
+@pytest.fixture(autouse=True)
+def _limpiar_relaciones():
+    ps._relaciones_fijadas.clear()
+    yield
+    ps._relaciones_fijadas.clear()
+
+
+def test_al_guardar_se_usa_la_jerarquia_fijada_al_abrir(monkeypatch):
+    """El cargo cambia después de servir las preguntas: debe mandar el de cuando se abrió."""
+    ps._fijar_relacion("Ana", "Laura", "inferior")   # abrió una eval bottom-to-top
+    # Ahora el perfil dice que es senior (la ascendieron, o la caché devuelve otro cargo).
+    monkeypatch.setattr(ps, "obtener_perfil_empleado", lambda p: {"cargo": "Director"})
+
+    assert ps._relacion_al_guardar("Ana", "Laura", "Analyst") == "inferior"
+
+
+def test_sin_jerarquia_fijada_se_recalcula(monkeypatch):
+    """Reinicio del proceso: se vuelve al comportamiento anterior, no se rompe el guardado."""
+    monkeypatch.setattr(ps, "obtener_perfil_empleado", lambda p: {"cargo": "Director"})
+
+    assert ps._relacion_al_guardar("Ana", "Laura", "Analyst") == "superior"
+
+
+def test_la_jerarquia_fijada_caduca(monkeypatch):
+    ps._fijar_relacion("Ana", "Laura", "inferior")
+    monkeypatch.setattr(ps, "obtener_perfil_empleado", lambda p: {"cargo": "Director"})
+    # Simula que la entrada es más vieja que el TTL.
+    viejo = ps.time.time() - ps._TTL_RELACION_FIJADA - 1
+    ps._relaciones_fijadas[ps._clave_relacion("Ana", "Laura")] = ("inferior", viejo)
+
+    assert ps._relacion_al_guardar("Ana", "Laura", "Analyst") == "superior"
+    assert ps._clave_relacion("Ana", "Laura") not in ps._relaciones_fijadas, "debe purgarse"
+
+
+def test_la_jerarquia_fijada_no_depende_de_como_se_escriba_el_nombre():
+    ps._fijar_relacion("ana garcia", "Laura Carrasco", "inferior")
+
+    assert ps._relacion_al_guardar("Ana García", "laura  carrasco", "Analyst") == "inferior"

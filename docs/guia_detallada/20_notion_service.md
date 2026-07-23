@@ -19,7 +19,7 @@ El módulo soporta **dos APIs de Notion**: la clásica basada en `databases` y l
 **Variables/constantes de módulo relevantes:**
 - Importadas: `config` (nombres de páginas, IDs, zona horaria, prefijos), `notion` (cliente en `clients.py`), `IDIOMAS_SOPORTADOS` (i18n), `bbdd_por_evaluado` y `lock` (estado global en `state.py`), `normalizar_nombre` (utils).
 - `_NOTION_PAGE_STYLE` — estilos (emoji/color/callout) por nombre de página para decorarlas.
-- Cachés de IDs de bases (protegidos por `lock` o locks propios): `bbdd_por_evaluado`, `_cache_bbdd_continuas`, `_cache_bbdd_sesiones_anual`, `_cache_lista_ca`, `_cache_advisees_por_ca`, `_cache_objetivos_db`, `_cache_objetivos_persona`, `_cache_acceso_individual_db`, `_cache_informes_finales_db`, `_cache_pagina_preguntas`, `_cache_preguntas_mo_db`, `_cache_preguntas_palantir_db`, `_cache_calendario_db`, `_cache_personales_page_id`, `_cache_personal_eval_db`, `_cache_personal_preguntas_db`, `_cache_gestion_mo_page`, `_cache_cargos_mo`, `_cache_relaciones_mo`, `_criterios_db_ids`, `_ejemplos_db_id`, `_cache_nombre_por_id`.
+- Cachés de IDs de bases (protegidos por `lock` o locks propios): `bbdd_por_evaluado`, `_cache_bbdd_continuas`, `_cache_bbdd_sesiones_anual`, `_cache_lista_ca`, `_cache_advisees_por_ca`, `_cache_objetivos_db`, `_cache_objetivos_persona`, `_cache_acceso_ca_db`, `_cache_acceso_individual_db`, `_cache_informes_finales_db`, `_cache_pagina_preguntas`, `_cache_preguntas_mo_db`, `_cache_preguntas_palantir_db`, `_cache_calendario_db`, `_cache_personales_page_id`, `_cache_personal_eval_db`, `_cache_personal_preguntas_db`, `_cache_gestion_mo_page`, `_cache_cargos_mo`, `_cache_relaciones_mo`, `_criterios_db_ids`, `_ejemplos_db_id`, `_cache_nombre_por_id`.
 - Cachés de datos con TTL de 300 s (5 min): `_empleados_cache_*`, `_preguntas_cache*`, `_cache_preguntas_mo_data`, `_cache_preguntas_palantir_data`, `_cache_criterios`, `_cache_ejemplos`, `_cache_personal_preguntas`.
 - Locks propios: `_lock_pagina_preguntas`, `_lock_preguntas`, `_lock_preguntas_mo`, `_lock_preguntas_palantir`, `_lock_empleados`, `_lock_criterios`, `_lock_ejemplos`.
 - Sets "ya poblado" (idempotencia): `_preguntas_bbdd_pobladas`, `_preguntas_mo_bbdd_pobladas`, `_preguntas_palantir_bbdd_pobladas`, `_mensaje_inicial_migrado`.
@@ -552,6 +552,22 @@ El módulo soporta **dos APIs de Notion**: la clásica basada en `databases` y l
 ### `_norm_ca(nombre)` — [notion_service.py:2834](../backend/notion_service.py#L2834)
 - **Qué hace:** normaliza un nombre de CA (sin acentos, minúsculas, espacios colapsados) para usar como clave.
 - **Devuelve:** str.
+
+### `_obtener_o_crear_bbdd_acceso_ca()` — [notion_service.py:2839](../backend/notion_service.py#L2839)
+- **Qué hace:** obtiene/crea la base "Acceso CA" (Name title, Activo checkbox). Cachea.
+- **Devuelve:** str db_id.
+
+### `_acceso_ca_fila(db_id, ca_keys)` — [notion_service.py:2878](../backend/notion_service.py#L2878)
+- **Qué hace:** busca en "Acceso CA" la fila cuyo título normalizado esté en `ca_keys`.
+- **Devuelve:** dict fila o None.
+
+### `ca_tiene_acceso_activo(ca_nombre, ca_aliases=None)` — [notion_service.py:2895](../backend/notion_service.py#L2895)
+- **Qué hace:** indica si un CA tiene el checkbox Activo marcado en "Acceso CA".
+- **Devuelve:** bool. **Se usa desde:** control de acceso a la web del CA.
+
+### `toggle_acceso_advisees(ca_nombre, activo, ca_aliases=None)` — [notion_service.py:2908](../backend/notion_service.py#L2908)
+- **Qué hace:** activa/desactiva el acceso global de un CA (actualiza o crea la fila en "Acceso CA").
+- **Devuelve:** bool.
 
 ### `_obtener_o_crear_bbdd_acceso_individual()` — [notion_service.py:2933](../backend/notion_service.py#L2933)
 - **Qué hace:** obtiene/crea la base "Acceso Individual Advisee" (Name, CA rich_text, Activo checkbox). Cachea.

@@ -6,7 +6,7 @@ import logging
 from ..deps import exigir_acceso_advisee, require_admin, require_session
 from ..files import url_archivo
 from ... import eval_anual_sesion as eval_sesion
-from ...notion_service import guardar_informe_final_estructurado, idioma_por_sesion
+from ...notion_service import guardar_informe_final_estructurado
 from ...skill_informes_anual import generar_informe_anual, obtener_empleados_evaluacion_anual
 from ...utils import slug_archivo
 
@@ -82,10 +82,7 @@ def eval_anual_iniciar(datos: dict = Body(default={}), session=Depends(require_s
     evaluado = _requiere_evaluado(datos.get("evaluado", ""), session)
     if evaluado is None:
         return JSONResponse({"error": "Falta el campo evaluado."}, status_code=400)
-    # El informe se redacta en el idioma del CA: es el que ve la plantilla y el que
-    # decide cómo sale el Word que acabará leyendo el advisee.
-    return eval_sesion.iniciar_sesion(evaluado, cargo=datos.get("cargo", "").strip(),
-                                      idioma=idioma_por_sesion(session))
+    return eval_sesion.iniciar_sesion(evaluado, cargo=datos.get("cargo", "").strip())
 
 
 @router.post("/api/eval-anual/iniciar-manual")
@@ -94,8 +91,7 @@ def eval_anual_iniciar_manual(datos: dict = Body(default={}), session=Depends(re
     evaluado = _requiere_evaluado(datos.get("evaluado", ""), session)
     if evaluado is None:
         return JSONResponse({"error": "Falta el campo evaluado."}, status_code=400)
-    return eval_sesion.iniciar_manual(evaluado, cargo=datos.get("cargo", "").strip(),
-                                      idioma=idioma_por_sesion(session))
+    return eval_sesion.iniciar_manual(evaluado, cargo=datos.get("cargo", "").strip())
 
 
 @router.post("/api/eval-anual/confirmar-identidad")
@@ -112,14 +108,6 @@ def eval_anual_eliminar(datos: dict = Body(default={}), session=Depends(require_
     if evaluado is None:
         return JSONResponse({"error": "Falta el campo evaluado."}, status_code=400)
     return eval_sesion.eliminar_sesion(evaluado)
-
-
-@router.post("/api/eval-anual/actualizar-plantilla")
-def eval_anual_actualizar_plantilla(datos: dict = Body(default={}), session=Depends(require_session)):
-    evaluado = _requiere_evaluado(datos.get("evaluado", ""), session)
-    if evaluado is None:
-        return JSONResponse({"error": "Falta el campo evaluado."}, status_code=400)
-    return eval_sesion.actualizar_plantilla(evaluado)
 
 
 @router.post("/api/eval-anual/responder-area")

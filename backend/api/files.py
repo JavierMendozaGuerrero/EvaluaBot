@@ -8,6 +8,7 @@ from fastapi.responses import JSONResponse, Response
 from .. import config
 from ..notion_service import (
     advisee_tiene_acceso_individual,
+    ca_tiene_acceso_activo,
     obtener_advisees,
     obtener_ca_de_empleado,
 )
@@ -84,34 +85,30 @@ def servir_archivo_protegido(
         or nombre_archivo.startswith(f"informe_anual_{slug}.")
     )
     es_trayectoria = nombre_archivo.startswith(f"trayectoria_{slug}.")
-    # Dos informes finales distintos, y la diferencia importa:
-    #  - con timestamp (informe_final_{slug}_{ts}.docx): la copia que publica el CA. LLEVA el anexo
-    #    de Fuentes/Evidencia, con el texto crudo de cada evaluación y el nombre del evaluador.
-    #  - estable (informe_final_{slug}.docx/html): el que se regenera desde Notion para el advisee,
-    #    sin anexo de fuentes.
-    # Por eso solo el estable cae en la rama que el advisee puede descargar. El timestamp es un
-    # Unix en segundos, perfectamente adivinable, así que tratarlos igual filtraba las fuentes.
-    es_final_ca = nombre_archivo.startswith(f"informe_final_{slug}_")
-    es_final = nombre_archivo.startswith(f"informe_final_{slug}.")
-    # Copia de revisión del CA ("Ver versión actual del informe"): puede ser un borrador en
-    # curso y además lleva el anexo de Fuentes/Evidencia. Va con nombre propio (no
-    # `informe_final_*`) justo para que nunca caiga en la rama que el advisee puede descargar.
-    es_revision = nombre_archivo.startswith(f"revision_informe_{slug}.")
+    # Acepta tanto el nombre con timestamp (subida/publicación: informe_final_{slug}_{ts}.docx)
+    # como el estable sin timestamp que genera la regeneración desde Notion (informe_final_{slug}.docx/html).
+    es_final = (
+        nombre_archivo.startswith(f"informe_final_{slug}_")
+        or nombre_archivo.startswith(f"informe_final_{slug}.")
+    )
     es_opiniones = nombre_archivo.startswith(f"opiniones_ca_{slug}.")
     es_fuente_pdf = any(
         nombre_archivo.startswith(f"{p}_{slug}.")
         for p in ("evals_proyecto", "seguimiento_personal", "evals_mensuales", "info_completa")
     )
-    if not es_borrador and not es_trayectoria and not es_final and not es_final_ca and not es_opiniones and not es_fuente_pdf and not es_revision:
+    if not es_borrador and not es_trayectoria and not es_final and not es_opiniones and not es_fuente_pdf:
         raise PermissionError("El archivo solicitado no corresponde con la persona autorizada.")
-    if (es_borrador or es_opiniones or es_fuente_pdf or es_revision or es_final_ca) and not es_admin and not es_ca:
+    if (es_borrador or es_opiniones or es_fuente_pdf) and not es_admin and not es_ca:
         raise PermissionError("Solo el CA o un administrador pueden ver los documentos generados.")
     if (es_trayectoria or es_final) and not es_admin and not es_ca:
         if es_propio:
-            # Misma regla que /api/informe-final y /api/trayectoria: el acceso individual
-            # que su CA le haya concedido.
+            # Misma regla que /api/informe-final y /api/trayectoria: vale el acceso
+            # global del CA O el acceso individual concedido a este advisee.
             ca_del_evaluado = obtener_ca_de_empleado(evaluado)
-            acceso = bool(ca_del_evaluado and advisee_tiene_acceso_individual(evaluado, ca_del_evaluado))
+            acceso = bool(ca_del_evaluado and (
+                ca_tiene_acceso_activo(ca_del_evaluado)
+                or advisee_tiene_acceso_individual(evaluado, ca_del_evaluado)
+            ))
             if not acceso:
                 raise PermissionError("Tu CA aún no ha publicado tu informe.")
         else:
@@ -135,7 +132,7 @@ def servir_archivo_protegido(
     else:
         content_type = "text/html; charset=utf-8"
 
-    cache_control = "no-cache" if (es_opiniones or es_fuente_pdf or es_borrador or es_revision) else "private, max-age=300"
+    cache_control = "no-cache" if (es_opiniones or es_fuente_pdf or es_borrador) else "private, max-age=300"
     stat = os.stat(ruta)
     etag = '"%x-%x"' % (int(stat.st_mtime), stat.st_size)
 
@@ -144,7 +141,7 @@ def servir_archivo_protegido(
     # neutralizar cualquier script incrustado, se sirven con una CSP que prohíbe
     # ejecutar JS. (Los HTML generados por nosotros —trayectoria— sí usan script,
     # por eso la CSP se aplica solo al informe final subido.)
-    if (es_final or es_final_ca or es_revision) and base.endswith(".html"):
+    if es_final and base.endswith(".html"):
         headers["Content-Security-Policy"] = "default-src 'none'; img-src data:; style-src 'unsafe-inline'"
 
     if request.headers.get("If-None-Match") == etag:

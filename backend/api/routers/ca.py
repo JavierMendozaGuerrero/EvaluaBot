@@ -7,7 +7,7 @@ from ...ca_reviews import guardar_nota_ca_web, notificar_acceso_informe_final_we
 from ...eval_tracking import detalle_por_persona, resumen_ciclo_actual
 from ...notion_service import (
     advisee_tiene_acceso_individual,
-    existe_informe_final,
+    ca_tiene_acceso_activo,
     guardar_objetivo_persona,
     idioma_por_sesion,
     mover_objetivo_a_antiguos,
@@ -19,6 +19,7 @@ from ...notion_service import (
     obtener_opiniones_ca_por_advisee,
     obtener_todo_el_feedback_confidencial,
     toggle_acceso_advisee_individual,
+    toggle_acceso_advisees,
 )
 from ...utils import normalizar_nombre
 
@@ -85,12 +86,29 @@ def objetivos_delete(datos: dict = Body(default={}), session=Depends(require_ses
     return {"ok": ok}
 
 
+@router.get("/api/acceso-advisees")
+def acceso_advisees_get(session=Depends(require_session)):
+    ca_aliases_sesion = [session.get("username", ""), session.get("email", "")]
+    activo = ca_tiene_acceso_activo(session.get("persona", ""), ca_aliases=ca_aliases_sesion)
+    return {"activo": activo}
+
+
+@router.post("/api/acceso-advisees")
+def acceso_advisees_post(datos: dict = Body(default={}), session=Depends(require_session)):
+    activo = datos.get("activo", False)
+    ca_aliases_sesion = [session.get("username", ""), session.get("email", "")]
+    exito = toggle_acceso_advisees(session.get("persona", ""), activo, ca_aliases=ca_aliases_sesion)
+    if not exito:
+        raise RuntimeError("No se encontró tu fila en Lista CA. Contacta con el administrador.")
+    return {"ok": True, "activo": activo}
+
+
 @router.get("/api/acceso-advisee-individual")
 def acceso_advisee_individual_get(advisee: str = "", session=Depends(require_session)):
     if not advisee:
         return JSONResponse({"error": "Falta el parámetro advisee."}, status_code=400)
     activo = advisee_tiene_acceso_individual(advisee, session.get("persona", ""))
-    return {"activo": activo, "informeFinal": existe_informe_final(advisee)}
+    return {"activo": activo}
 
 
 @router.post("/api/acceso-advisee-individual")
@@ -99,13 +117,6 @@ def acceso_advisee_individual_post(datos: dict = Body(default={}), session=Depen
     activo = datos.get("activo", False)
     if not advisee_nombre:
         return JSONResponse({"error": "Falta el campo advisee."}, status_code=400)
-    # Dar acceso sin versión final publicada dejaría al advisee ante un informe vacío:
-    # el borrador en curso no es visible para él y no cuenta como informe.
-    if activo and not existe_informe_final(advisee_nombre):
-        return JSONResponse(
-            {"error": "Aún no has publicado el informe final de esta persona. Un borrador no cuenta."},
-            status_code=400,
-        )
     exito = toggle_acceso_advisee_individual(session.get("persona", ""), advisee_nombre, activo)
     if not exito:
         raise RuntimeError("No se pudo actualizar el acceso individual.")

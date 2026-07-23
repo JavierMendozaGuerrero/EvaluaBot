@@ -67,7 +67,7 @@ class BodySizeLimitMiddleware:
             await self.app(scope, receive, send)
             return
         path = scope.get("path", "")
-        limite = MAX_BODY_UPLOAD if path in ("/api/subir-informe-final", "/api/admin/subir-foto") else MAX_BODY_JSON
+        limite = MAX_BODY_UPLOAD if path == "/api/subir-informe-final" else MAX_BODY_JSON
         headers = dict(scope.get("headers", []))
         try:
             content_length = int(headers.get(b"content-length", b"0"))

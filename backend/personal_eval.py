@@ -79,14 +79,11 @@ def _editar_dm_inicial_personal_caducada(user_id, idioma=None):
 
 # Temas del selector "¿Sobre qué vas a querer hablar hoy?".
 # (clave del action_id, clave i18n de la etiqueta del botón, valor canónico guardado en Notion → columna "Tipo")
-# El orden sigue el orden canónico de áreas del hilo (Contribution → Criterios → Objetivos → Apoyo)
-# para que las tres secciones se lean igual: cttf=Contribution, trayectoria=Criterios,
-# objetivos=Objetivos, dificultades=Apoyo (ver _ALIAS_APARTADO_EJEMPLO). "Otro" siempre al final.
 _TOPICOS_PERSONAL = [
     ("cttf",         "bp.topic_cttf",         "CTTF"),
-    ("trayectoria",  "bp.topic_trayectoria",  "Trayectoria"),
     ("objetivos",    "bp.topic_objetivos",    "Objetivos"),
     ("dificultades", "bp.topic_dificultades", "Dificultades"),
+    ("trayectoria",  "bp.topic_trayectoria",  "Trayectoria"),
     ("otro",         "bp.topic_otro",         "Otro"),
 ]
 _TOPICO_LABEL = {clave: label for clave, _i18n, label in _TOPICOS_PERSONAL}
@@ -102,28 +99,14 @@ _ALIAS_APARTADO_EJEMPLO = {
     "trayectoria": "Criterios",
 }
 
-# Orden canónico de las áreas en el hilo de seguimiento personal, para que las tres
-# secciones (ejemplos, "esta es tu oportunidad para" y el selector de tema) se lean
-# en el mismo orden y sea fácil de seguir.
-_ORDEN_AREAS_PERSONAL = ["contribution to the firm", "criterios", "objetivos", "apoyo"]
-
-
-def _indice_area(nombre: str) -> int:
-    """Posición de un área en el orden canónico; las desconocidas van al final (orden estable)."""
-    try:
-        return _ORDEN_AREAS_PERSONAL.index(nombre.strip().lower())
-    except ValueError:
-        return len(_ORDEN_AREAS_PERSONAL)
-
 
 def _obtener_bloques_oportunidad(idioma: str = "es") -> list:
     preguntas = obtener_preguntas_personales(idioma)
-    # Orden canónico de áreas: Contribution (item_1) → Criterios (item_3) → Objetivos (item_2) → Apoyo (item_4).
     items = [
         ("item_1", None),
-        ("item_3", {"type": "button", "text": {"type": "plain_text", "text": t("bp.btn_view_criteria", idioma), "emoji": True}, "action_id": "personal_ver_criterios"}),
         ("item_2", {"type": "button", "text": {"type": "plain_text", "text": t("bp.btn_view_goals", idioma), "emoji": True}, "action_id": "personal_ver_objetivos"}),
         ("item_4", None),
+        ("item_3", {"type": "button", "text": {"type": "plain_text", "text": t("bp.btn_view_criteria", idioma), "emoji": True}, "action_id": "personal_ver_criterios"}),
     ]
     bloques = [{"type": "section", "text": {"type": "mrkdwn", "text": t("bp.opp_header", idioma)}}]
     for clave, accessory in items:
@@ -988,8 +971,6 @@ def _bloques_ejemplos_personal_hilo(ejemplos: dict, idioma: str = "es") -> list:
     botón "Ver ejemplo" que abre el ejemplo en una ventana (modal), en lugar de
     desplegarlo dentro del propio hilo."""
     personales = {k: v for k, v in ejemplos.items() if "personal" in k.lower()}
-    # Mismo orden canónico que las demás secciones del hilo (Contribution → Criterios → Objetivos → Apoyo).
-    personales = dict(sorted(personales.items(), key=lambda kv: _indice_area(_nombre_apartado_ejemplo(kv[0]))))
     blocks: list = [
         {"type": "section", "text": {"type": "mrkdwn", "text": t("bp.examples_header", idioma)}},
         {"type": "divider"},

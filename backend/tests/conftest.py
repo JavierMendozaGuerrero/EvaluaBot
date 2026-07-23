@@ -22,6 +22,27 @@ from backend.api.app import app
 from backend.api.deps import get_session
 
 
+@pytest.fixture(autouse=True)
+def sin_notion_en_dimensiones(monkeypatch):
+    """Corta el acceso a Notion al resolver las dimensiones del informe.
+
+    Los apartados del informe salen de la BD de criterios del área en Notion, así que
+    construir un borrador o iniciar una sesión intenta leerla. Con el token dummy de
+    arriba esa llamada no falla rápido: se queda reintentando y el test se cuelga. Sin
+    dimensiones, `dimensiones_informe` cae a las fijas, que es lo que estos tests
+    esperan; el que quiera probar las de Notion, que las mockee él.
+    """
+    from backend import eval_anual_sesion as ea
+    from backend import skill_informes_anual as sk
+
+    monkeypatch.setattr(sk, "obtener_dimensiones_evaluacion", lambda grupo: [])
+    monkeypatch.setattr(sk, "_grupo_empleado", lambda nombre, cargo: "Negocio")
+    # La huella de la plantilla incluye el TEXTO de los criterios, así que también lee
+    # de Notion. Sin esto la suite pasa igual, pero tarda trece veces más reintentando.
+    monkeypatch.setattr(ea, "obtener_criterios_evaluacion", lambda grupo, idioma="es": {})
+    monkeypatch.setattr(sk, "obtener_criterios_evaluacion", lambda grupo, idioma="es": {})
+
+
 @pytest.fixture
 def client():
     return TestClient(app)

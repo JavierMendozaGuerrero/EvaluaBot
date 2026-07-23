@@ -629,37 +629,9 @@ def _es_modificar(texto: str) -> bool:
                                         "alterar", "mudar"}
 
 
-_OPCIONES_MODIFICACION_CA = {
-    "1": "advisee", "advisee": "advisee",
-    "2": "opinion", "opinion": "opinion",
-}
-
-
-def _texto_menu_modificacion_ca(idioma="es") -> str:
-    return t("bc.mod_which", idioma)
-
-
-def _bloques_menu_modificacion_ca(idioma="es") -> list:
-    """Menú '¿Qué respuesta quieres modificar?' (CA) como botones."""
-    return [
-        {"type": "section", "text": {"type": "mrkdwn", "text": t("bc.mod_which_bold", idioma)}},
-        {"type": "actions", "elements": [
-            {"type": "button", "text": {"type": "plain_text", "text": "Advisee"}, "value": "1", "action_id": "mod_ca_1"},
-            {"type": "button", "text": {"type": "plain_text", "text": t("bc.opinion_label", idioma)}, "value": "2", "action_id": "mod_ca_2"},
-        ]},
-    ]
-
-
-def _clave_modificacion_ca(texto: str) -> str | None:
-    return _OPCIONES_MODIFICACION_CA.get(normalizar_nombre(texto))
-
-
-def _texto_pregunta_ca_por_clave(clave: str, idioma="es") -> str:
-    if clave == "advisee":
-        return t("bc.ask_advisee_name", idioma)
-    if clave == "opinion":
-        return obtener_preguntas_seguimiento_ca(idioma).get("opinion", "")
-    return t("bc.enter_new_answer", idioma)
+def _texto_pregunta_modificacion_ca(idioma="es") -> str:
+    """Modificar solo permite reescribir la opinión; el advisee no se puede cambiar."""
+    return obtener_preguntas_seguimiento_ca(idioma).get("opinion", "") or t("bc.enter_new_answer", idioma)
 
 
 def _mensaje_advisee_no_encontrado(nombre: str, idioma="es") -> str:
@@ -1028,15 +1000,8 @@ def _enviar_confirmacion_ca(channel, thread_ts, idioma, estado):
     _recordar_botones_ca(channel, resp, texto_conf)
 
 
-def _enviar_menu_modificacion_ca(channel, thread_ts, idioma, estado):
-    bloques = _bloques_menu_modificacion_ca(idioma) + fila_atras("atras_ca", "bc.back_btn", estado, idioma)
-    resp = slack_app.client.chat_postMessage(channel=channel, thread_ts=thread_ts, text=t("bc.mod_which", idioma), blocks=bloques)
-    _recordar_botones_ca(channel, resp, t("bc.mod_which", idioma))
-
-
 def _enviar_pregunta_valor_modificacion_ca(channel, thread_ts, idioma, estado):
-    campo = estado.get("campo_modificando")
-    texto = _texto_pregunta_ca_por_clave(campo, idioma) if campo else _texto_menu_modificacion_ca(idioma)
+    texto = _texto_pregunta_modificacion_ca(idioma)
     bloques = [{"type": "section", "text": {"type": "mrkdwn", "text": texto}}] + fila_atras("atras_ca", "bc.back_btn", estado, idioma)
     resp = slack_app.client.chat_postMessage(channel=channel, thread_ts=thread_ts, text=texto, blocks=bloques)
     _recordar_botones_ca(channel, resp, texto)
@@ -1053,8 +1018,6 @@ def _reenviar_pregunta_actual_ca(user_id, channel, thread_ts, estado, logger):
         _enviar_pregunta_opinion(channel, thread_ts, idi, estado)
     elif modo == "confirmacion_ca":
         _enviar_confirmacion_ca(channel, thread_ts, idi, estado)
-    elif modo == "seleccionando_modificacion_ca":
-        _enviar_menu_modificacion_ca(channel, thread_ts, idi, estado)
     elif modo == "modificando_respuesta_ca":
         _enviar_pregunta_valor_modificacion_ca(channel, thread_ts, idi, estado)
 
@@ -1156,8 +1119,8 @@ def manejar_mensaje_ca(event, logger) -> None:
                 accion = "guardar_y_preguntar_otro"
             elif _es_modificar(texto):
                 push_historial(estado)
-                estado["modo"] = "seleccionando_modificacion_ca"
-                accion = "pedir_modificacion_ca"
+                estado["modo"] = "modificando_respuesta_ca"
+                accion = "pedir_valor_modificacion_ca"
             elif _es_no(texto):
                 limpiar_historial(estado)
                 estado["modo"] = "esperando_otro"
@@ -1165,52 +1128,16 @@ def manejar_mensaje_ca(event, logger) -> None:
             else:
                 accion = "mostrar_confirmacion_ca"
 
-        elif modo == "seleccionando_modificacion_ca":
-            payload["advisee"] = estado.get("advisee_actual", "?")
-            payload["ca_nombre"] = estado.get("ca_nombre")
-            payload["opinion"] = estado.get("opinion_actual", "")
-            campo = _clave_modificacion_ca(texto)
-            if campo:
-                push_historial(estado)
-                estado["campo_modificando"] = campo
-                estado["modo"] = "modificando_respuesta_ca"
-                accion = "pedir_valor_modificacion_ca"
-            else:
-                accion = "pedir_modificacion_ca"
-
         elif modo == "modificando_respuesta_ca":
             payload["advisee"] = estado.get("advisee_actual", "?")
             payload["ca_nombre"] = estado.get("ca_nombre")
             payload["opinion"] = estado.get("opinion_actual", "")
-            campo = estado.get("campo_modificando")
-            if campo and texto:
-                if campo == "advisee":
-                    empleado = buscar_empleado_en_lista(texto)
-                    if not empleado:
-                        accion = "pedir_valor_modificacion_ca"
-                        payload["error_advisee"] = texto
-                    else:
-                        ca_nombre, ca_aliases = _identidad_usuario_slack(user_id, logger)
-                        permitido, permitidos = _advisee_permitido_para_ca(ca_nombre, ca_aliases, empleado)
-                        if not permitido:
-                            accion = "pedir_valor_modificacion_ca"
-                            payload["error_advisee_no_asociado"] = empleado
-                            payload["advisees_permitidos"] = permitidos
-                        else:
-                            push_historial(estado)
-                            estado["ca_nombre"] = ca_nombre
-                            estado["advisee_actual"] = empleado
-                            payload["advisee"] = empleado
-                            estado.pop("campo_modificando", None)
-                            estado["modo"] = "confirmacion_ca"
-                            accion = "mostrar_confirmacion_ca"
-                elif campo == "opinion":
-                    push_historial(estado)
-                    estado["opinion_actual"] = texto
-                    payload["opinion"] = texto
-                    estado.pop("campo_modificando", None)
-                    estado["modo"] = "confirmacion_ca"
-                    accion = "mostrar_confirmacion_ca"
+            if texto:
+                push_historial(estado)
+                estado["opinion_actual"] = texto
+                payload["opinion"] = texto
+                estado["modo"] = "confirmacion_ca"
+                accion = "mostrar_confirmacion_ca"
             else:
                 accion = "pedir_valor_modificacion_ca"
 
@@ -1317,24 +1244,8 @@ def manejar_mensaje_ca(event, logger) -> None:
     elif accion == "mostrar_confirmacion_ca":
         _enviar_confirmacion_ca(channel, thread_ts, _idi, estado)
 
-    elif accion == "pedir_modificacion_ca":
-        _enviar_menu_modificacion_ca(channel, thread_ts, _idi, estado)
-
     elif accion == "pedir_valor_modificacion_ca":
-        campo = estado.get("campo_modificando")
-        if payload.get("error_advisee_no_asociado"):
-            permitidos = payload.get("advisees_permitidos") or []
-            opciones = "\n".join(f"- {item}" for item in permitidos) if permitidos else t("bc.no_associated_advisees", _idi)
-            reply(t("bc.error_advisee_not_associated", _idi, advisee=payload['error_advisee_no_asociado'], opciones=opciones))
-        elif payload.get("error_advisee"):
-            sugerencias = sugerir_empleados_parecidos(payload["error_advisee"])
-            if sugerencias:
-                opciones = "\n".join(f"- {n}" for n in sugerencias)
-                reply(t("bc.error_advisee_suggest", _idi, advisee=payload['error_advisee'], opciones=opciones))
-            else:
-                reply(t("bc.error_advisee_no_suggest", _idi, advisee=payload['error_advisee']))
-        else:
-            reply(_texto_pregunta_ca_por_clave(campo, _idi) if campo else _texto_menu_modificacion_ca(_idi))
+        _enviar_pregunta_valor_modificacion_ca(channel, thread_ts, _idi, estado)
 
     elif accion == "llamar_claude":
         advisee = payload["advisee"]
@@ -1776,26 +1687,6 @@ def _handle_ca_modificar(ack, body, logger):
         manejar_mensaje_ca(evento, logger)
     except Exception:
         logger.exception("Error procesando modificación CA interactiva")
-
-
-@slack_app.action(re.compile(r"^mod_ca_\d+$"))
-def _handle_mod_ca_opcion(ack, body, logger):
-    """Botón del menú '¿Qué respuesta quieres modificar?' (CA): reinyecta el número."""
-    ack()
-    _cerrar_botones_click_ca(body)
-    try:
-        val = ""
-        for a in body.get("actions", []):
-            val = a.get("value", "") or val
-        evento = {
-            "user": body["user"]["id"],
-            "channel": body["channel"]["id"],
-            "thread_ts": body["message"].get("thread_ts") or body["message"]["ts"],
-            "text": val,
-        }
-        manejar_mensaje_ca(evento, logger)
-    except Exception:
-        logger.exception("Error procesando opción de modificación CA")
 
 
 @slack_app.action("atras_ca")

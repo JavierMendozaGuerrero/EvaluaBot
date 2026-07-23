@@ -1861,6 +1861,98 @@ def invalidar_cache_empleados() -> None:
     invalidar_cache_bbdd_evaluados()
 
 
+def subir_archivo_a_notion(nombre_archivo, contenido, content_type="application/octet-stream") -> str:
+    """Sube un archivo (bytes) a Notion y devuelve su file_upload_id, listo para
+    adjuntarlo a una propiedad 'files'. Flujo single-part de la File Upload API."""
+    nombre_archivo = (nombre_archivo or "archivo").strip() or "archivo"
+    creado = notion.file_uploads.create(
+        mode="single_part",
+        filename=nombre_archivo,
+        content_type=content_type or "application/octet-stream",
+    )
+    file_upload_id = creado.get("id")
+    if not file_upload_id:
+        raise RuntimeError("Notion no devolvió un id de subida.")
+    notion.file_uploads.send(
+        file_upload_id=file_upload_id,
+        file=(nombre_archivo, contenido, content_type or "application/octet-stream"),
+    )
+    return file_upload_id
+
+
+def crear_empleado_en_notion(nombre, correo="", id_usuario="", nombre_slack="",
+                             cargo="", area="", idioma="", pais="", foto="", foto_upload_id="") -> dict:
+    """Crea una fila nueva en 'Lista de empleados'. Idempotente por nombre normalizado.
+
+    La 'Lista de empleados' la mantienen a mano, así que no asumimos nombres ni tipos
+    de columna: leemos el esquema real y escribimos solo en las columnas que existan,
+    con el tipo que declara Notion (email/rich_text/select). Devuelve
+    {"creado": bool, "nombre": str}: si ya hay un empleado con ese nombre no duplica.
+    """
+    nombre = (nombre or "").strip()
+    if not nombre:
+        raise ValueError("El nombre del empleado es obligatorio.")
+    nombre_norm = normalizar_nombre(nombre)
+    for r in _obtener_registros_empleados():
+        if normalizar_nombre(r.get("nombre", "")) == nombre_norm:
+            return {"creado": False, "nombre": r.get("nombre", nombre)}
+
+    db_id, resultado = _retrieve_bbdd(config.NOTION_EMPLOYEES_DATABASE_ID)
+    esquema = resultado.get("properties", {})
+
+    col_titulo = next((c for c, cfg in esquema.items() if cfg.get("type") == "title"), "Nombre")
+    valores = {col_titulo: {"title": [{"text": {"content": nombre}}]}}
+
+    # (columnas candidatas por orden de preferencia, valor) — mismas variantes que lee el lector.
+    campos = [
+        (("Correo", "Email", "Mail", "Correo electronico", "Correo electrónico", "E-mail"), correo),
+        (("ID_usuario", "ID usuario", "Slack ID"), id_usuario),
+        (("Nombre_Slack", "Nombre Slack", "Usuario Slack", "Slack", "Alias"), nombre_slack),
+        (("Cargo", "Puesto", "Rol", "Role"), cargo),
+        (("Area", "Área", "Departamento", "Department"), area),
+        (("Idioma", "Language", "Lang"), idioma),
+        (("Pais", "País", "Country"), pais),
+        (("Foto", "Photo", "Avatar"), foto),
+    ]
+    for candidatas, valor in campos:
+        valor = (valor or "").strip()
+        if not valor:
+            continue
+        for col in candidatas:
+            cfg = esquema.get(col)
+            if not cfg:
+                continue
+            tipo = cfg.get("type")
+            if tipo == "email":
+                valores[col] = {"email": valor}
+            elif tipo == "rich_text":
+                valores[col] = {"rich_text": [{"text": {"content": valor}}]}
+            elif tipo == "select":
+                valores[col] = {"select": {"name": valor}}
+            elif tipo == "url":
+                valores[col] = {"url": valor}
+            elif tipo == "files":
+                # La foto se guarda como archivo externo (una URL); es como la lee el bot.
+                valores[col] = {"files": [{"name": "foto", "type": "external", "external": {"url": valor}}]}
+            else:
+                # Tipo que no sabemos escribir de forma sencilla: lo saltamos.
+                continue
+            break
+
+    # Foto subida como archivo (tiene prioridad sobre la URL externa del bucle).
+    if (foto_upload_id or "").strip():
+        col_foto = next((c for c in ("Foto", "Photo", "Avatar")
+                         if (esquema.get(c) or {}).get("type") == "files"), None)
+        if col_foto:
+            valores[col_foto] = {"files": [{"name": "foto", "type": "file_upload",
+                                            "file_upload": {"id": foto_upload_id.strip()}}]}
+
+    _crear_pagina_en_bbdd(db_id, valores)
+    invalidar_cache_empleados()
+    logging.info("Empleado '%s' creado en Lista de empleados", nombre)
+    return {"creado": True, "nombre": nombre}
+
+
 def obtener_registros_empleados() -> list[dict]:
     """Lee empleados con nombre, email y aliases desde Notion."""
     return _obtener_registros_empleados()
@@ -1928,7 +2020,10 @@ def _obtener_db_criterios(grupo: str) -> str | None:
     global _criterios_db_ids, _criterios_db_ids_ts
     ahora = time.time()
     with _lock_criterios:
-        if _criterios_db_ids and (ahora - _criterios_db_ids_ts) < _CRITERIOS_CACHE_TTL:
+        # Ojo con el `_criterios_db_ids_ts > 0`: antes esto miraba si el dict tenía algo, y
+        # un dict vacío es falsy, así que cuando el descubrimiento no encontraba nada se
+        # repetía el escaneo entero de páginas MÁS una búsqueda global en cada llamada.
+        if _criterios_db_ids_ts > 0 and (ahora - _criterios_db_ids_ts) < _CRITERIOS_CACHE_TTL:
             return _criterios_db_ids.get(grupo)
 
     try:
@@ -1946,6 +2041,8 @@ def _obtener_db_criterios(grupo: str) -> str | None:
             criterios_page_id = _buscar_objeto_notion_por_nombre(_NOMBRE_PAGINA_CRITERIOS)
         if not criterios_page_id:
             logging.warning("[criterios] No se encontró la página '%s'", _NOMBRE_PAGINA_CRITERIOS)
+            with _lock_criterios:   # cachear también el "no está": si no, se reintenta en cada petición
+                _criterios_db_ids, _criterios_db_ids_ts = {}, time.time()
             return None
         ids: dict[str, str] = {}
         for bloque in _iter_blocks(criterios_page_id):
@@ -1980,34 +2077,52 @@ def _obtener_db_criterios(grupo: str) -> str | None:
         return ids.get(grupo)
     except Exception:
         logging.exception("Error buscando BD de criterios para grupo '%s'", grupo)
+        with _lock_criterios:   # y el fallo también: reintentar en bucle bloquea la web
+            _criterios_db_ids, _criterios_db_ids_ts = {}, time.time()
         return None
 
 
-def obtener_criterios_evaluacion(grupo: str, idioma: str = "es") -> dict:
+_NIVELES_CRITERIOS = ["Trainee", "Analista", "Asociado", "Asociado Sr", "Manager"]
+
+# Filas que NO son dimensiones del informe: el bloque de liderazgo se añade aparte,
+# condicionado al cargo, así que rellenarlo en Notion no debe crear un área duplicada.
+_SLUGS_NO_DIMENSION = {"liderazgo"}
+
+
+def slug_criterio(texto: str) -> str:
+    """Slug estable a partir del título del criterio, sin tildes ni signos.
+
+    No es la clave persistida (esa es el id de página, que sobrevive a renombrados):
+    sirve para emparejar con las tablas de traducción de etiquetas y con el fallback
+    hardcodeado de criterios.
     """
-    Devuelve {dimension_label: {nivel: [textos]}} para el grupo indicado, en el idioma dado.
-    Lee de 'Criterios de evaluaciones/{grupo}' en Notion. Cachea 5 min.
-    Filtra por la columna 'Idioma' (ES/EN); el nombre del Criterio es la clave estable
-    (no se traduce) y se cae a ES cuando un criterio no tiene fila EN.
+    base = unicodedata.normalize("NFKD", texto or "").encode("ascii", "ignore").decode()
+    return re.sub(r"[^a-z0-9]+", "_", base.lower()).strip("_")
+
+
+def _leer_filas_criterios(grupo: str) -> list[dict]:
+    """Filas de la BD de criterios del grupo, parseadas y en el orden de Notion.
+
+    Una única lectura alimenta tanto los criterios por idioma como las dimensiones que
+    estructuran el informe, así que las dos comparten esta caché y leer la estructura
+    no añade ni una llamada a Notion.
     """
-    idioma = idioma if idioma in IDIOMAS_SOPORTADOS else "es"
     ahora = time.time()
-    cache_key = f"{grupo}|{idioma}"
     with _lock_criterios:
-        cached = _cache_criterios.get(cache_key)
+        cached = _cache_criterios.get(f"filas|{grupo}")
         if cached and (ahora - cached[1]) < _CRITERIOS_CACHE_TTL:
             return cached[0]
 
     db_id = _obtener_db_criterios(grupo)
     if not db_id:
-        return {}
-
-    _NIVELES = ["Trainee", "Analista", "Asociado", "Asociado Sr", "Manager"]
+        with _lock_criterios:   # cachear el vacío: si no, cada petición reintenta la lectura
+            _cache_criterios[f"filas|{grupo}"] = ([], time.time())
+        return []
 
     def _rt(prop):
         return "".join(t.get("plain_text", "") for t in (prop or {}).get("rich_text", [])).strip()
 
-    mapas: dict = {}  # idioma -> {criterio: niveles}
+    filas: list[dict] = []
     try:
         cursor = None
         while True:
@@ -2015,14 +2130,13 @@ def obtener_criterios_evaluacion(grupo: str, idioma: str = "es") -> dict:
             if cursor:
                 kwargs["start_cursor"] = cursor
             resp = _query_bbdd(db_id, **kwargs)
-            rows = resp.get("results", [])
-            for row in rows:
+            for row in resp.get("results", []):
                 props = row.get("properties", {})
                 criterio = "".join(t.get("plain_text", "") for t in (props.get("Criterio") or {}).get("title", [])).strip()
                 if not criterio:
                     continue
                 niveles: dict = {}
-                for nivel in _NIVELES:
+                for nivel in _NIVELES_CRITERIOS:
                     texto = _rt(props.get(nivel))
                     if texto:
                         lineas = [
@@ -2033,23 +2147,97 @@ def obtener_criterios_evaluacion(grupo: str, idioma: str = "es") -> dict:
                         if lineas:
                             niveles[nivel] = lineas
                 if not niveles:
+                    # Fila a medio rellenar: ni aporta criterios ni debe crear un área.
+                    logging.info("[criterios] '%s' (%s) sin contenido en ningún nivel: se ignora", criterio, grupo)
                     continue
-                _lang = _normalizar_idioma(_texto_propiedad(props, "Idioma"))
-                mapas.setdefault(_lang, {})[criterio] = niveles
+                filas.append({
+                    "page_id": row.get("id", ""),
+                    "criterio": criterio,
+                    "slug": slug_criterio(criterio),
+                    "niveles": niveles,
+                    "idioma": _normalizar_idioma(_texto_propiedad(props, "Idioma")),
+                })
             if not resp.get("has_more"):
                 break
             cursor = resp.get("next_cursor")
     except Exception:
         logging.exception("Error leyendo criterios para grupo '%s'", grupo)
-        return {}
+        with _lock_criterios:
+            _cache_criterios[f"filas|{grupo}"] = ([], time.time())
+        return []
+
+    with _lock_criterios:
+        _cache_criterios[f"filas|{grupo}"] = (filas, time.time())
+    return filas
+
+
+def obtener_criterios_evaluacion(grupo: str, idioma: str = "es") -> dict:
+    """
+    Devuelve {dimension_label: {nivel: [textos]}} para el grupo indicado, en el idioma dado.
+    Lee de 'Criterios de evaluaciones/{grupo}' en Notion. Cachea 5 min.
+    Filtra por la columna 'Idioma' (ES/EN); el nombre del Criterio es la clave estable
+    (no se traduce) y se cae a ES cuando un criterio no tiene fila EN.
+    """
+    idioma = idioma if idioma in IDIOMAS_SOPORTADOS else "es"
+    mapas: dict = {}  # idioma -> {criterio: niveles}
+    for fila in _leer_filas_criterios(grupo):
+        mapas.setdefault(fila["idioma"], {})[fila["criterio"]] = fila["niveles"]
 
     es_res = mapas.get("es", {})
     base = mapas.get(idioma, {})
-    resultado = {c: (base.get(c) or es_res.get(c)) for c in (list(es_res) + [k for k in base if k not in es_res])}
+    return {c: (base.get(c) or es_res.get(c)) for c in (list(es_res) + [k for k in base if k not in es_res])}
 
-    with _lock_criterios:
-        _cache_criterios[cache_key] = (resultado, time.time())
-    return resultado
+
+def obtener_criterios_por_clave(grupo: str, idioma: str = "es") -> dict:
+    """{id_de_la_fila_ES: {nivel: [textos]}} para el grupo, en el idioma pedido.
+
+    Es lo mismo que `obtener_criterios_evaluacion` pero tecleado por la clave estable en
+    vez de por el título. Buscar los criterios por nombre después de haber elegido el id
+    de página como clave era contradictorio: bastaba renombrar el criterio en Notion para
+    que el CA se quedara sin bullets (o con los del diccionario hardcodeado).
+
+    La traducción se une por título, que es lo único que enlaza la fila española con su
+    versión PT/EN; si esa fila no existe, se cae a los bullets en español.
+    """
+    idioma = idioma if idioma in IDIOMAS_SOPORTADOS else "es"
+    filas = _leer_filas_criterios(grupo)
+    traducidas = {f["criterio"]: f["niveles"] for f in filas if f["idioma"] == idioma}
+    return {f["page_id"]: (traducidas.get(f["criterio"]) or f["niveles"])
+            for f in filas if f["idioma"] == "es"}
+
+
+def obtener_dimensiones_evaluacion(grupo: str) -> list[dict]:
+    """Dimensiones que estructuran el informe de ese grupo, en el orden de Notion.
+
+    Devuelve [{"clave": <id de página>, "slug": ..., "etiqueta": <título ES>}, ...].
+
+    La estructura sale SIEMPRE de las filas en español, nunca del idioma que se esté
+    pintando: el CA y su advisee pueden tener idiomas distintos (la sesión usa el del CA
+    y el informe automático el del advisee) y las traducciones son filas aparte con su
+    propio id, así que dejar que el idioma decidiera la clave daría dos juegos de claves
+    para la misma persona. El idioma solo cambia el texto, nunca qué áreas existen.
+    """
+    filas = _leer_filas_criterios(grupo)
+    dims: list[dict] = []
+    vistos: set = set()
+    for fila in filas:
+        if fila["idioma"] != "es" or fila["slug"] in _SLUGS_NO_DIMENSION:
+            continue
+        if fila["slug"] in vistos:
+            logging.warning("[criterios] '%s' duplicado en %s: se usa la primera fila", fila["criterio"], grupo)
+            continue
+        vistos.add(fila["slug"])
+        dims.append({"clave": fila["page_id"], "slug": fila["slug"], "etiqueta": fila["criterio"]})
+
+    # Una dimensión que solo exista traducida no aparecería en ningún sitio. Avisar en
+    # vez de perderla en silencio, que es como se han colado los demás desajustes.
+    for fila in filas:
+        if fila["idioma"] != "es" and fila["slug"] not in vistos and fila["slug"] not in _SLUGS_NO_DIMENSION:
+            logging.warning(
+                "[criterios] '%s' existe en %s pero no en español (%s): no saldrá en el informe",
+                fila["criterio"], fila["idioma"], grupo,
+            )
+    return dims
 
 
 # ---------------------------------------------------------------------------
@@ -2558,12 +2746,29 @@ def listar_bbdd_evaluados():
     parent = obtener_parent_bbdd_evaluados()
     if parent is None:
         return []
-    resultado = notion.search(query=config.PREFIJO_BBDD_EVALUADO, filter={"value": _tipo_objeto_busqueda_bbdd(), "property": "object"}, page_size=100)
+    # Hay que paginar: el search de Notion devuelve como mucho 100 resultados por
+    # página y mezcla mucho ruido (páginas y BDs que solo se le parecen), así que las
+    # tablas "Evaluaciones - X" caen repartidas entre varias páginas. Leyendo solo la
+    # primera aparecían 7 de 29 y las 22 restantes daban "No se encontró una tabla de
+    # evaluaciones para X" en PDFs, informes anuales y feedback confidencial.
     bases = []
-    for bbdd in resultado.get("results", []):
-        titulo = _extraer_titulo_bbdd(bbdd)
-        if titulo.startswith(config.PREFIJO_BBDD_EVALUADO) and _coincide_parent_bbdd(bbdd, parent):
-            bases.append({"id": _data_source_id(bbdd), "evaluado": titulo.removeprefix(config.PREFIJO_BBDD_EVALUADO)})
+    cursor = None
+    while True:
+        kwargs = {
+            "query": config.PREFIJO_BBDD_EVALUADO,
+            "filter": {"value": _tipo_objeto_busqueda_bbdd(), "property": "object"},
+            "page_size": 100,
+        }
+        if cursor:
+            kwargs["start_cursor"] = cursor
+        resultado = notion.search(**kwargs)
+        for bbdd in resultado.get("results", []):
+            titulo = _extraer_titulo_bbdd(bbdd)
+            if titulo.startswith(config.PREFIJO_BBDD_EVALUADO) and _coincide_parent_bbdd(bbdd, parent):
+                bases.append({"id": _data_source_id(bbdd), "evaluado": titulo.removeprefix(config.PREFIJO_BBDD_EVALUADO)})
+        if not resultado.get("has_more"):
+            break
+        cursor = resultado.get("next_cursor")
     with _lock_bbdd_evaluados:
         _bbdd_evaluados_cache = bases
         _bbdd_evaluados_cache_ts = _time.time()
@@ -2659,10 +2864,25 @@ def obtener_evaluaciones():
 def obtener_evaluaciones_por_evaluado(evaluado):
     if not evaluado:
         raise RuntimeError("Selecciona una persona evaluada.")
-    for bbdd in listar_bbdd_evaluados():
-        if bbdd["evaluado"] == evaluado:
+    # Comparar normalizado, como el resto del módulo: el nombre del evaluado llega
+    # unas veces con tildes y otras plegado, y un '==' crudo no casaría.
+    objetivo = normalizar_nombre(evaluado)
+    bases = listar_bbdd_evaluados()
+    for bbdd in bases:
+        if normalizar_nombre(bbdd["evaluado"]) == objetivo:
             return obtener_evaluaciones_de_bbdd(bbdd["id"], bbdd["evaluado"])
-    raise RuntimeError(f"No se encontró una tabla de evaluaciones para {evaluado}.")
+    if not bases:
+        # Ni una sola tabla en todo el workspace: no es que falte la de esta persona,
+        # es que la búsqueda está mal configurada (NOTION_PARENT_PAGE_ID apuntando a
+        # otra página, o el token sin acceso). Debe verse, no degradarse a PDF vacío.
+        raise RuntimeError(
+            "No se encontró ninguna tabla de evaluaciones en Notion. Revisa "
+            "NOTION_PARENT_PAGE_ID y que la integración tenga acceso a esas páginas."
+        )
+    # Que una persona concreta no tenga tabla sí es normal (recién incorporada, o
+    # evaluada solo por proyecto): se deja la sección vacía en vez de tumbar el PDF.
+    logging.warning("Sin tabla de evaluaciones mensuales para '%s' (%d bases encontradas).", evaluado, len(bases))
+    return []
 
 
 def excluir_feedback_confidencial(evaluaciones: list[dict]) -> list[dict]:
@@ -3441,114 +3661,100 @@ def obtener_ca_de_empleado(empleado_nombre: str) -> str | None:
     return None
 
 
-_cache_acceso_ca_db: dict = {"db_id": None}
-# Lock mantenido durante TODA la búsqueda/creación: dos peticiones web concurrentes
-# no deben poder crear dos BDs 'Acceso CA'.
-_lock_acceso_ca = threading.Lock()
+def obtener_lista_cas() -> list[str]:
+    """Nombres de los CA de 'Lista de CAs' (columna título 'CA'), ordenados y sin vacíos."""
+    db_id = _obtener_db_id_lista_ca()
+    if not db_id:
+        return []
+    nombres: list[str] = []
+    try:
+        cursor = None
+        while True:
+            kwargs: dict = {"page_size": 100}
+            if cursor:
+                kwargs["start_cursor"] = cursor
+            resp = _query_bbdd(db_id, **kwargs)
+            for fila in resp.get("results", []):
+                prop_ca = fila.get("properties", {}).get("CA", {})
+                nombre = "".join(
+                    p.get("plain_text", "")
+                    for p in (prop_ca.get("title") or prop_ca.get("rich_text") or [])
+                ).strip()
+                if nombre:
+                    nombres.append(nombre)
+            if not resp.get("has_more"):
+                break
+            cursor = resp.get("next_cursor")
+    except Exception:
+        logging.exception("Error listando CAs")
+    return sorted(nombres, key=normalizar_nombre)
+
+
+def _asegurar_columna_lista_ca(db_id: str, col_name: str) -> None:
+    """Crea la columna de texto `col_name` en 'Lista de CAs' si aún no existe."""
+    props_nueva = {col_name: {"rich_text": {}}}
+    if _usa_data_sources():
+        bbdd = notion.data_sources.retrieve(data_source_id=db_id)
+        if col_name not in bbdd.get("properties", {}):
+            notion.data_sources.update(data_source_id=db_id, properties=props_nueva)
+        return
+    bbdd = notion.databases.retrieve(database_id=db_id)
+    if col_name not in bbdd.get("properties", {}):
+        notion.databases.update(database_id=db_id, properties=props_nueva)
+
+
+def asignar_advisee_a_ca(ca_nombre, advisee_nombre) -> dict:
+    """Añade `advisee_nombre` en la primera columna A# libre de la fila del CA.
+
+    Idempotente: si ya está asignado a ese CA no hace nada. Devuelve
+    {"ok": bool, "motivo": str}. No mueve al advisee si ya estaba con otro CA.
+    """
+    ca_nombre = (ca_nombre or "").strip()
+    advisee_nombre = (advisee_nombre or "").strip()
+    if not ca_nombre or not advisee_nombre:
+        return {"ok": False, "motivo": "Faltan datos de CA o empleado."}
+    db_id = _obtener_db_id_lista_ca()
+    if not db_id:
+        return {"ok": False, "motivo": "No se encontró 'Lista de CAs'."}
+    fila = _ca_fila_por_nombre(db_id, {normalizar_nombre(ca_nombre)})
+    if not fila:
+        return {"ok": False, "motivo": f"No existe el CA '{ca_nombre}' en la lista."}
+
+    props = fila.get("properties", {})
+    advisee_norm = normalizar_nombre(advisee_nombre)
+    cols_a = sorted((c for c in props if re.match(r"^A\d+$", c)), key=lambda c: int(c[1:]))
+    primer_libre = None
+    for col in cols_a:
+        prop_val = props.get(col, {})
+        actual = "".join(
+            p.get("plain_text", "")
+            for p in (prop_val.get("rich_text") or prop_val.get("title") or [])
+        ).strip()
+        if normalizar_nombre(actual) == advisee_norm:
+            return {"ok": True, "motivo": "Ya estaba asignado a este CA."}
+        if not actual and primer_libre is None:
+            primer_libre = col
+    if primer_libre is None:
+        # Todas las A# ocupadas: creamos la siguiente (A9, A10, ...) en la tabla.
+        # La lectura de advisees ya reconoce cualquier A\d+, así que no hay tope real.
+        siguiente = max((int(c[1:]) for c in cols_a), default=0) + 1
+        primer_libre = f"A{siguiente}"
+        try:
+            _asegurar_columna_lista_ca(db_id, primer_libre)
+        except Exception:
+            logging.exception("No se pudo crear la columna '%s' en 'Lista de CAs'", primer_libre)
+            return {"ok": False, "motivo": f"El CA '{ca_nombre}' tenía las columnas llenas y no se pudo crear una nueva."}
+    notion.pages.update(
+        page_id=fila.get("id"),
+        properties={primer_libre: {"rich_text": [{"text": {"content": advisee_nombre}}]}},
+    )
+    logging.info("Advisee '%s' asignado a CA '%s' en %s", advisee_nombre, ca_nombre, primer_libre)
+    return {"ok": True, "motivo": f"Asignado en {primer_libre}."}
 
 
 def _norm_ca(nombre: str) -> str:
     sin_acentos = unicodedata.normalize("NFD", nombre).encode("ascii", "ignore").decode("ascii")
     return " ".join(sin_acentos.strip().lower().split())
-
-
-def _obtener_o_crear_bbdd_acceso_ca() -> str:
-    with _lock_acceso_ca:
-        if _cache_acceso_ca_db["db_id"]:
-            return _cache_acceso_ca_db["db_id"]
-        titulo = "Acceso CA"
-
-        # 1) Escanear los hijos de la página esperada: children.list es consistente
-        #    al instante, mientras que notion.search puede no devolver BDs migradas
-        #    o recién creadas y provocar duplicados vacíos.
-        db_id = None
-        parent = _parent_bbdd_en_pagina(config.NOTION_ACTIVACIONES_PERMISOS_PAGE_NAME, crear=False)
-        if parent.get("type") == "page_id":
-            db_id = _buscar_bbdd_en_pagina_id(parent["page_id"], titulo)
-
-        # 2) Fallback: búsqueda global. Si falla, se propaga la excepción: un error
-        #    de búsqueda no significa que la BD no exista.
-        if not db_id:
-            resultado = notion.search(
-                query=titulo,
-                filter={"value": _tipo_objeto_busqueda_bbdd(), "property": "object"},
-                page_size=10,
-            )
-            for bbdd in resultado.get("results", []):
-                if normalizar_nombre(_extraer_titulo_bbdd(bbdd)) == "acceso ca":
-                    db_id = _data_source_id(bbdd)
-                    break
-
-        # 3) Crear solo si de verdad no existe.
-        if not db_id:
-            parent = _parent_bbdd_en_pagina(config.NOTION_ACTIVACIONES_PERMISOS_PAGE_NAME, crear=True)
-            props = {"Name": {"title": {}}, "Activo": {"checkbox": {}}}
-            if _usa_data_sources():
-                nueva = notion.databases.create(
-                    parent=parent,
-                    title=[{"type": "text", "text": {"content": titulo}}],
-                    initial_data_source={"title": [{"type": "text", "text": {"content": titulo}}], "properties": props},
-                )
-                nueva = notion.databases.retrieve(database_id=nueva["id"])
-            else:
-                nueva = notion.databases.create(
-                    parent=parent,
-                    title=[{"type": "text", "text": {"content": titulo}}],
-                    properties=props,
-                )
-            db_id = _data_source_id(nueva)
-            logging.info("Base de datos 'Acceso CA' creada en Notion")
-
-        _cache_acceso_ca_db["db_id"] = db_id
-        return db_id
-
-
-def _acceso_ca_fila(db_id: str, ca_keys: set) -> dict | None:
-    cursor = None
-    while True:
-        kwargs: dict = {"page_size": 100}
-        if cursor:
-            kwargs["start_cursor"] = cursor
-        resp = _query_bbdd(db_id, **kwargs)
-        for fila in resp.get("results", []):
-            nombre = _extraer_titulo_pagina(fila)
-            if _norm_ca(nombre) in ca_keys:
-                return fila
-        if not resp.get("has_more"):
-            break
-        cursor = resp.get("next_cursor")
-    return None
-
-
-def ca_tiene_acceso_activo(ca_nombre: str, ca_aliases=None) -> bool:
-    ca_keys = {_norm_ca(n) for n in [ca_nombre, *(ca_aliases or [])] if n}
-    try:
-        db_id = _obtener_o_crear_bbdd_acceso_ca()
-        fila = _acceso_ca_fila(db_id, ca_keys)
-        if not fila:
-            return False
-        return bool(fila.get("properties", {}).get("Activo", {}).get("checkbox", False))
-    except Exception:
-        logging.exception("Error verificando acceso de CA '%s'", ca_nombre)
-        return False
-
-
-def toggle_acceso_advisees(ca_nombre: str, activo: bool, ca_aliases=None) -> bool:
-    ca_keys = {_norm_ca(n) for n in [ca_nombre, *(ca_aliases or [])] if n}
-    try:
-        db_id = _obtener_o_crear_bbdd_acceso_ca()
-        fila = _acceso_ca_fila(db_id, ca_keys)
-        if fila:
-            notion.pages.update(page_id=fila["id"], properties={"Activo": {"checkbox": activo}})
-        else:
-            _crear_pagina_en_bbdd(db_id, {
-                "Name": {"title": [{"text": {"content": ca_nombre}}]},
-                "Activo": {"checkbox": activo},
-            })
-        return True
-    except Exception:
-        logging.exception("Error actualizando acceso de CA '%s'", ca_nombre)
-        return False
 
 
 # ---------------------------------------------------------------------------
@@ -3740,10 +3946,10 @@ def _asegurar_props_informes_web(db_id: str) -> None:
         logging.exception("No se pudieron asegurar las propiedades de la BD de informes")
 
 
-def _obtener_o_crear_pagina_informes() -> str:
-    """page_id de la página 'Informes finales' bajo TO-SEE (la crea si falta)."""
-    if _cache_pagina_informes["page_id"]:
-        return _cache_pagina_informes["page_id"]
+def _obtener_o_crear_pagina_tosee(nombre: str, cache: dict) -> str:
+    """page_id de una página contenedora bajo TO-SEE (la crea si falta), cacheado en `cache`."""
+    if cache["page_id"]:
+        return cache["page_id"]
 
     parent = _parent_bbdd_en_pagina(config.NOTION_TOSEE_PAGE_NAME, crear=False)
     if parent.get("type") != "page_id":
@@ -3753,7 +3959,7 @@ def _obtener_o_crear_pagina_informes() -> str:
         )
     tosee_id = parent["page_id"]
 
-    objetivo = normalizar_nombre(_NOMBRE_PAGINA_INFORMES)
+    objetivo = normalizar_nombre(nombre)
     page_id = None
     for bloque in _iter_blocks(tosee_id):
         if bloque.get("type") == "child_page" and normalizar_nombre(_titulo_child_page(bloque)) == objetivo:
@@ -3762,13 +3968,18 @@ def _obtener_o_crear_pagina_informes() -> str:
     if not page_id:
         pagina = notion.pages.create(
             parent={"type": "page_id", "page_id": tosee_id},
-            properties={"title": {"title": [{"type": "text", "text": {"content": _NOMBRE_PAGINA_INFORMES}}]}},
+            properties={"title": {"title": [{"type": "text", "text": {"content": nombre}}]}},
         )
         page_id = pagina["id"]
-        logging.info("Página '%s' creada bajo '%s'", _NOMBRE_PAGINA_INFORMES, config.NOTION_TOSEE_PAGE_NAME)
+        logging.info("Página '%s' creada bajo '%s'", nombre, config.NOTION_TOSEE_PAGE_NAME)
 
-    _cache_pagina_informes["page_id"] = page_id
+    cache["page_id"] = page_id
     return page_id
+
+
+def _obtener_o_crear_pagina_informes() -> str:
+    """page_id de la página 'Informes finales' bajo TO-SEE (la crea si falta)."""
+    return _obtener_o_crear_pagina_tosee(_NOMBRE_PAGINA_INFORMES, _cache_pagina_informes)
 
 
 def _obtener_o_crear_bbdd_informe_persona(empleado: str) -> str:
@@ -3991,11 +4202,12 @@ def _leer_json_informe(page_id: str) -> dict | None:
     return None
 
 
-def _informe_estructurado_reciente(advisee: str, solo_estado: str) -> dict | None:
-    """Devuelve el borrador (dict) de la página más reciente del advisee cuyo Estado coincide.
+def _fila_informe_reciente(advisee: str, estados: tuple[str, ...]) -> dict | None:
+    """Fila más reciente del advisee cuyo Estado esté en `estados`; None si no hay.
 
-    solo_estado='Final'  → última versión oficial (para el Word del advisee).
-    solo_estado='Borrador' → borrador en curso (para restaurar tras perder la caché local).
+    Devuelve {'page_id', 'estado'}. 'Fecha' se guarda como timestamp ISO completo, así que
+    ordenar por su texto ordena por instante real: por eso se pueden pasar varios estados y
+    comparar un Borrador con una Final para saber cuál es la versión actual.
     Las filas antiguas sin 'Estado' se tratan como 'Final' por compatibilidad."""
     try:
         db_id = _obtener_o_crear_bbdd_informe_persona(advisee)
@@ -4013,22 +4225,46 @@ def _informe_estructurado_reciente(advisee: str, solo_estado: str) -> dict | Non
             for fila in resp.get("results", []):
                 props = fila.get("properties", {})
                 estado = _estado_de(props) or "Final"
-                if estado != solo_estado:
+                if estado not in estados:
                     continue
                 candidatos.append({
                     "page_id": fila["id"],
+                    "estado": estado,
                     "fecha": (props.get("Fecha", {}).get("date") or {}).get("start", ""),
                 })
             if not resp.get("has_more"):
                 break
             cursor = resp.get("next_cursor")
     except Exception:
-        logging.exception("Error consultando informes (%s) de '%s'", solo_estado, advisee)
+        logging.exception("Error consultando informes (%s) de '%s'", "/".join(estados), advisee)
         return None
     if not candidatos:
         return None
     candidatos.sort(key=lambda x: x["fecha"], reverse=True)
-    return _leer_json_informe(candidatos[0]["page_id"])
+    return candidatos[0]
+
+
+def _page_id_informe_reciente(advisee: str, solo_estado: str) -> str | None:
+    """Page id de la fila más reciente del advisee cuyo Estado coincide; None si no hay.
+
+    solo_estado='Final'  → última versión oficial (para el Word del advisee).
+    solo_estado='Borrador' → borrador en curso (para restaurar tras perder la caché local)."""
+    fila = _fila_informe_reciente(advisee, (solo_estado,))
+    return fila["page_id"] if fila else None
+
+
+def _informe_estructurado_reciente(advisee: str, solo_estado: str) -> dict | None:
+    """Contenido (dict) de la fila más reciente del advisee cuyo Estado coincide."""
+    page_id = _page_id_informe_reciente(advisee, solo_estado)
+    return _leer_json_informe(page_id) if page_id else None
+
+
+def existe_informe_final(advisee: str) -> bool:
+    """¿Hay una versión FINAL publicada? Un borrador en curso NO cuenta.
+
+    Solo mira si existe la fila: no baja el contenido, porque quien pregunta esto
+    (dar acceso al advisee) solo necesita el sí/no."""
+    return _page_id_informe_reciente(advisee, "Final") is not None
 
 
 def obtener_informe_final_estructurado_reciente(advisee: str) -> dict | None:
@@ -4039,6 +4275,151 @@ def obtener_informe_final_estructurado_reciente(advisee: str) -> dict | None:
 def obtener_borrador_estructurado(advisee: str) -> dict | None:
     """Borrador en curso guardado en Notion (para restaurar si se pierde la caché local)."""
     return _informe_estructurado_reciente(advisee, "Borrador")
+
+
+def obtener_informe_estructurado_actual(advisee: str) -> dict | None:
+    """Versión actual del informe, sea Final o Borrador: {'estado', 'contenido'}. None si no hay.
+
+    Es lo que el CA quiere ver ("¿en qué punto está el informe?"), y por eso incluye el
+    borrador. Al advisee NO se le sirve esto: a él solo la versión publicada
+    (obtener_informe_final_estructurado_reciente).
+
+    Publicar una Final archiva el borrador previo, así que si aquí sale 'Borrador' es que
+    el CA ha vuelto a editar después de la última versión publicada."""
+    fila = _fila_informe_reciente(advisee, ("Final", "Borrador"))
+    if not fila:
+        return None
+    contenido = _leer_json_informe(fila["page_id"])
+    if contenido is None:
+        return None
+    return {"estado": fila["estado"], "contenido": contenido}
+
+
+# ---------------------------------------------------------------------------
+# Plan de acción — BD por persona "Plan de acción - {Nombre}" dentro de la página
+# "Planes de acción" en TO-SEE. Mismo patrón que los informes finales: cada guardado
+# del CA es una fila nueva, así queda el histórico de versiones del plan.
+# ---------------------------------------------------------------------------
+
+_NOMBRE_PAGINA_PLANES = "Planes de acción"
+_PREFIJO_PLAN_PERSONA = "Plan de acción - "
+
+_PROPS_PLANES = {
+    "Name": {"title": {}},
+    "Empleado": {"rich_text": {}},
+    "CA": {"rich_text": {}},
+    "Año": {"number": {}},
+    "Fecha": {"date": {}},
+}
+
+_cache_pagina_planes: dict = {"page_id": None}
+_cache_bbdd_planes: dict = {}                # {persona_normalizada: db_id}
+_lock_planes = threading.Lock()
+
+
+def _obtener_o_crear_bbdd_plan_persona(empleado: str) -> str:
+    """BD 'Plan de acción - {empleado}' dentro de la página 'Planes de acción' (una por persona)."""
+    empleado = str(empleado or "").strip()
+    clave = normalizar_nombre(empleado)
+    with _lock_planes:
+        if _cache_bbdd_planes.get(clave):
+            return _cache_bbdd_planes[clave]
+
+        page_id = _obtener_o_crear_pagina_tosee(_NOMBRE_PAGINA_PLANES, _cache_pagina_planes)
+        titulo = f"{_PREFIJO_PLAN_PERSONA}{empleado}"
+        db_id = _buscar_bbdd_en_pagina_id(page_id, titulo)
+        if not db_id:
+            db_id = _crear_bbdd_en_pagina(page_id, titulo, _PROPS_PLANES, inline=False)
+            logging.info("BD '%s' creada en Notion", titulo)
+
+        _cache_bbdd_planes[clave] = db_id
+        return db_id
+
+
+_RE_NEGRITA_MD = re.compile(r"\*\*(.+?)\*\*", re.DOTALL)
+
+
+def _rt_markdown(texto: str) -> list:
+    """rich_text traduciendo los **...** de Claude a negrita real de Notion.
+
+    Notion no interpreta Markdown en la API: sin esto los asteriscos se guardan como
+    texto literal (`\\*\\*Título\\*\\*`), que es justo como salían los planes."""
+    texto = str(texto or "")
+    partes = []
+    pos = 0
+    for m in _RE_NEGRITA_MD.finditer(texto):
+        if m.start() > pos:
+            partes.append((texto[pos:m.start()], False))
+        partes.append((m.group(1), True))
+        pos = m.end()
+    if pos < len(texto):
+        partes.append((texto[pos:], False))
+
+    rich = []
+    for contenido, negrita in partes:
+        if not contenido:
+            continue
+        # Trocea a <=1900 chars: el límite de Notion es 2000 por objeto rich_text.
+        for i in range(0, len(contenido), 1900):
+            rich.append({"type": "text", "text": {"content": contenido[i:i + 1900]},
+                         "annotations": {"bold": negrita}})
+    return rich
+
+
+def _bloques_plan(texto: str) -> list:
+    """Texto del plan como bloques de Notion: viñetas y numeración van como listas.
+
+    Notion limita a 100 hijos por creación de página; un plan que se pase de 100 bloques
+    se recorta con un aviso, que es preferible a que la llamada falle y no se guarde nada."""
+    bloques = []
+    for linea in str(texto or "").splitlines():
+        limpia = linea.strip()
+        if not limpia:
+            continue
+        # El espacio tras la marca es obligatorio: si no, una línea que empiece por
+        # '**Título**' se tomaría por viñeta y perdería un asterisco.
+        vineta = re.match(r"^[-•*]\s+(.*)$", limpia)
+        num = re.match(r"^\d+[.)]\s+(.*)$", limpia)
+        if vineta:
+            bloques.append({"object": "block", "type": "bulleted_list_item",
+                            "bulleted_list_item": {"rich_text": _rt_markdown(vineta.group(1))}})
+        elif num:
+            bloques.append({"object": "block", "type": "numbered_list_item",
+                            "numbered_list_item": {"rich_text": _rt_markdown(num.group(1))}})
+        else:
+            bloques.append({"object": "block", "type": "paragraph",
+                            "paragraph": {"rich_text": _rt_markdown(limpia)}})
+    if len(bloques) > 100:
+        bloques = bloques[:99]
+        bloques.append({"object": "block", "type": "paragraph",
+                        "paragraph": {"rich_text": _rt_celda("[…] Plan recortado: supera el máximo de bloques de Notion.")}})
+    return bloques
+
+
+def guardar_plan_accion_en_notion(empleado: str, texto: str, ca_nombre: str = "") -> dict:
+    """Crea una fila con el plan de acción vigente en 'Plan de acción - {empleado}'.
+
+    Cada guardado del CA añade una versión nueva (no se archivan las anteriores: el
+    histórico de planes es justo lo que interesa conservar). Devuelve {page_id, url}."""
+    empleado = str(empleado or "").strip()
+    if not empleado:
+        raise ValueError("Falta el nombre del empleado.")
+    db_id = _obtener_o_crear_bbdd_plan_persona(empleado)
+
+    fecha = datetime.now(timezone.utc)
+    props = {
+        "Name": {"title": [{"text": {"content": f"Plan de acción · {fecha.date().isoformat()}"}}]},
+        "Empleado": _prop_rt(empleado),
+        "CA": _prop_rt(ca_nombre),
+        # Año del plan = el año en que se hace, no el año evaluado de la sesión (que es el
+        # anterior): el plan mira hacia delante, así que un plan escrito en 2026 es de 2026.
+        "Año": {"number": fecha.year},
+        "Fecha": {"date": {"start": fecha.isoformat()}},
+    }
+    parent = {"data_source_id": db_id} if _usa_data_sources() else {"database_id": db_id}
+    pagina = notion.pages.create(parent=parent, properties=props, children=_bloques_plan(texto))
+    logging.info("Plan de acción guardado en Notion para '%s'", empleado)
+    return {"page_id": pagina["id"], "url": pagina.get("url", "")}
 
 
 # ---------------------------------------------------------------------------
@@ -4706,15 +5087,29 @@ _cache_frecuencias_val: dict = {"ts": 0.0, "data": None}
 _FREC_TTL = 300
 _frecuencias_sembradas: set = set()
 
+# Nombre de la columna numérica. Se llamó 'Frecuencia' hasta el 22/07/2026; ahora
+# 'Frecuencia (días)'. Se lee cualquiera de los dos para no romper workspaces sin renombrar.
+_PROP_FRECUENCIA = "Frecuencia (días)"
+_PROPS_FRECUENCIA_LEGACY = ("Frecuencia",)
+
 _PROPS_FRECUENCIAS = {
     "Tipo": {"title": {}},
-    "Frecuencia": {"number": {}},
+    _PROP_FRECUENCIA: {"number": {}},
 }
 # Frecuencia (días) con la que se siembra la BD la primera vez. Editable en Notion después.
 _FRECUENCIAS_DEFAULT = {"mensual": 30, "personal": 14, "ca": 30, "proyecto": 14, "extra": 14}
 
 _TITULO_FRECUENCIAS = "Deadlines evaluaciones"
 _TITULOS_FRECUENCIAS_LEGACY = ("Frecuencia evaluaciones",)
+
+
+def _leer_num_frecuencia(props: dict):
+    """Número de la columna de frecuencia, aceptando el nombre nuevo y el legacy."""
+    for nombre in (_PROP_FRECUENCIA, *_PROPS_FRECUENCIA_LEGACY):
+        num = (props.get(nombre) or {}).get("number")
+        if num is not None:
+            return num
+    return None
 
 
 def _asegurar_filas_frecuencias(db_id: str) -> None:
@@ -4736,7 +5131,7 @@ def _asegurar_filas_frecuencias(db_id: str) -> None:
                 continue
             _crear_pagina_en_bbdd(db_id, {
                 "Tipo": {"title": [{"type": "text", "text": {"content": tipo}}]},
-                "Frecuencia": {"number": dias},
+                _PROP_FRECUENCIA: {"number": dias},
             })
     except Exception:
         logging.exception("Error sembrando '%s'", _TITULO_FRECUENCIAS)
@@ -4817,7 +5212,7 @@ def obtener_frecuencias_evaluaciones() -> dict:
                 tipo = "".join(
                     p.get("plain_text", "") for p in props.get("Tipo", {}).get("title", [])
                 ).strip().lower()
-                num = (props.get("Frecuencia") or {}).get("number")
+                num = _leer_num_frecuencia(props)
                 if tipo in _FRECUENCIAS_DEFAULT and isinstance(num, (int, float)) and num > 0:
                     data[tipo] = int(num)
         except Exception:

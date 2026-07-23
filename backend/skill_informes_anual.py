@@ -12,6 +12,7 @@ import json
 import logging
 import os
 import re
+import time
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 
@@ -28,6 +29,7 @@ from .notion_service import (
     obtener_opiniones_ca_por_advisee,
     obtener_objetivos_persona,
     obtener_criterios_evaluacion,
+    obtener_dimensiones_evaluacion,
     obtener_grupo_empleado,
     obtener_comentarios_personales,
     obtener_barbecho_por_empleado,
@@ -35,7 +37,7 @@ from .notion_service import (
 )
 from .project_evals import obtener_evaluaciones_proyecto_por_evaluado
 from .evaluaciones_extra import obtener_evaluaciones_extra_por_evaluado
-from .utils import slug_archivo
+from .utils import normalizar_nombre, slug_archivo
 
 
 # Etiquetas en ingles para elementos cuya version espanola ya vive en el codigo.
@@ -84,9 +86,18 @@ def _mes_label(idx: int, idioma: str) -> str:
     return _MESES_POR_IDIOMA.get(idioma, _MESES_ES)[idx]
 
 
-def _dim_label(clave: str, etiqueta: str, idioma: str) -> str:
+# Las dimensiones ya no son una lista fija: salen de Notion y su slug se deriva del
+# titulo. Estos son los slugs derivados que corresponden a las claves historicas de
+# arriba, para que la traduccion de etiquetas siga encontrandolas.
+_SLUG_A_LEGACY = {
+    "gestion_del_proyecto":   "gestion_proyecto",
+    "relacion_con_el_cliente": "relacion_cliente",
+}
+
+
+def _dim_label(slug: str, etiqueta: str, idioma: str) -> str:
     """Etiqueta de dimension en el idioma dado; conserva el espanol si no hay traduccion."""
-    return _DIMS_POR_IDIOMA.get(idioma, {}).get(clave, etiqueta)
+    return _DIMS_POR_IDIOMA.get(idioma, {}).get(_SLUG_A_LEGACY.get(slug, slug), etiqueta)
 
 
 def _nivel_label(clave: str, etiqueta: str, idioma: str) -> str:
@@ -98,6 +109,9 @@ def _nivel_label(clave: str, etiqueta: str, idioma: str) -> str:
 _REQUIERE_LIDERAZGO = {"sr associate", "manager", "director"}
 _CONTENT_W_IN = 9906 / 1440  # ~6.88 pulgadas (A4 márgenes 1.76 cm)
 
+# Fallback de las dimensiones de proyecto: las reales salen de la BD de criterios del
+# grupo en Notion (ver dimensiones_informe). Esta lista solo entra si Notion no
+# responde o la BD está vacía, para no generar un informe sin apartados.
 _DIMS_PROYECTOS = [
     ("gestion_proyecto",  "Gestión del proyecto"),
     ("calidad_tecnica",   "Calidad técnica"),
@@ -121,10 +135,11 @@ _LABELS_NIVEL = [
     ("sin_nivel","Sin nivel especificado"),
 ]
 
-# Claves de comentarios que contienen bullets agrupados por nivel (dict lider/equipo/sin_nivel)
-_CLAVES_POR_NIVEL = {c for c, _ in (*_DIMS_PROYECTOS, *_DIMS_LIDERAZGO)}
-# Claves de comentarios que son texto plano con bullets
-_CLAVES_PLANAS = {"contribution_to_firm", "evaluaciones_adicionales"}
+# Claves de comentarios que son texto plano con bullets. Las dimensiones ya no se pueden
+# enumerar aquí (dependen de Notion), así que se reconocen por forma: un dict de
+# lider/equipo/sin_nivel es una dimensión, y 'resultado' se queda fuera de ambas a
+# propósito, como antes, por ser una síntesis sin citas propias.
+_CLAVES_PLANAS = {"contribution_to_firm", "evaluaciones_adicionales", "sin_clasificar"}
 
 # Token de cita por tipo de fuente:
 #   E = evaluación mensual · O = opinión CA · P = evaluación de proyecto
@@ -144,14 +159,43 @@ def _fmt_deadline(valor) -> str:
     m = re.fullmatch(r"(\d{4})-(\d{2})-(\d{2})", valor)
     return f"{m.group(3)}/{m.group(2)}/{m.group(1)}" if m else valor
 
-# Dimensiones de Proyectos con la etiqueta tal y como aparece en la plantilla PDF
-_DIMS_PDF = [
-    ("gestion_proyecto",  "Gestión proyecto"),
-    ("calidad_tecnica",   "Calidad técnica"),
-    ("trabajo_en_equipo", "Trabajo en equipo"),
-    ("comunicacion",      "Comunicación"),
-    ("relacion_cliente",  "Relación cliente"),
-]
+def _dims_fijas(pares: list[tuple[str, str]]) -> list[dict]:
+    """Convierte una lista fija (clave, etiqueta) al formato de dimensión."""
+    return [{"clave": c, "slug": c, "etiqueta": e} for c, e in pares]
+
+
+def dimensiones_informe(nombre: str, cargo: str, incluir_liderazgo: bool = True,
+                        grupo: str = "") -> list[dict]:
+    """Dimensiones del informe de esa persona, en orden, como [{clave, slug, etiqueta}].
+
+    Las de proyecto salen de la BD de criterios de SU GRUPO en Notion, así que añadir,
+    quitar o reordenar una fila allí cambia los apartados del informe sin tocar código.
+    La clave es el id de la página de Notion: sobrevive a que se renombre el criterio,
+    que es lo que dejaría huérfano el trabajo ya escrito por el CA.
+
+    Las de liderazgo NO salen de Notion: siguen siendo fijas y condicionadas al cargo.
+    """
+    try:
+        grupo = grupo or _grupo_empleado(nombre, cargo)
+        dims = [dict(d) for d in obtener_dimensiones_evaluacion(grupo)]
+    except Exception:
+        # Notion caído no puede dejar sin informe: se sigue con las dimensiones de siempre.
+        logging.exception("[informe] fallo leyendo dimensiones del grupo '%s'", grupo or "?")
+        dims = []
+    if not dims:
+        # Notion caído o BD vacía: mejor el informe de siempre que uno sin apartados.
+        logging.warning("[informe] sin dimensiones en Notion para '%s': se usan las fijas", grupo)
+        dims = _dims_fijas(_DIMS_PROYECTOS)
+    if incluir_liderazgo and any(c in cargo.strip().lower() for c in _REQUIERE_LIDERAZGO):
+        dims += _dims_fijas(_DIMS_LIDERAZGO)
+    return dims
+
+
+def huella_dimensiones(dims: list[dict]) -> str:
+    """Firma de la estructura del informe. Cambia si se añade, quita, renombra o
+    reordena una dimensión, y con ella la huella de caché: así el informe se regenera
+    solo cuando de verdad ha cambiado algo, sin gastar IA el resto de las veces."""
+    return "|".join(f"{d['clave']}:{d['etiqueta']}" for d in dims)
 
 
 # ── Criterios DTI por cargo ───────────────────────────────────────────────────
@@ -396,7 +440,17 @@ def _grupo_empleado(nombre: str, cargo: str) -> str:
     return _grupo_por_cargo(cargo)
 
 
-def _criterios_para_prompt(cargo: str, idioma: str = "es", nombre: str = "") -> str:
+def _criterios_para_prompt(cargo: str, idioma: str = "es", nombre: str = "",
+                           dims: list[dict] | None = None) -> str:
+    """Bloque de criterios para el prompt.
+
+    Con `dims`, cada bloque se rotula con la clave EXACTA que Claude tiene que devolver,
+    en vez de con el título del criterio. Sin eso, el modelo recibía las claves por un
+    lado ("Dimensiones requeridas: ...") y los criterios por otro, rotulados distinto, y
+    acababa agrupando la evidencia por el nombre de la dimensión en vez de por lo que sus
+    criterios describen: un criterio vacío o renombrado seguía llevándose las mismas
+    evaluaciones de siempre.
+    """
     nivel = _nivel_cargo(cargo)
     grupo = _grupo_empleado(nombre, cargo)
 
@@ -423,10 +477,20 @@ def _criterios_para_prompt(cargo: str, idioma: str = "es", nombre: str = "") -> 
 
     if criterios_notion:
         bloques = [f"Lo que se espera de un {cargo} en {grupo} y niveles superiores como referencia:"]
+        # Rotular por la clave que se le pide devolver, para que no haya que adivinar qué
+        # bloque corresponde a qué dimensión.
+        etiqueta_a_slug = {d["etiqueta"]: d["slug"] for d in (dims or [])}
         for dim_label, niveles_dict in criterios_notion.items():
             lineas = _lineas(niveles_dict)
-            if lineas:
-                bloques.append(f"\n{dim_label}:\n" + "\n".join(lineas))
+            if not lineas:
+                continue
+            slug = etiqueta_a_slug.get(dim_label)
+            cabecera = f'"{slug}" ({dim_label})' if slug else dim_label
+            bloques.append(f"\n{cabecera}:\n" + "\n".join(lineas))
+        # Una dimensión sin criterios en Notion no debe llevarse evidencia por inercia.
+        for d in (dims or []):
+            if d["etiqueta"] not in criterios_notion:
+                bloques.append(f'\n"{d["slug"]}" ({d["etiqueta"]}):\n  (sin criterios definidos en Notion)')
         return "\n".join(bloques)
 
     # Fallback al diccionario hardcodeado (solo Negocio)
@@ -484,6 +548,7 @@ def obtener_datos_empleado_anual(nombre: str) -> dict:
     # Un worker por tarea, y uno de más para las opiniones: esa se queda esperando al
     # resultado de otra, y si no tuviera worker propio podría quedarse sin sitio y
     # bloquear el pool entero.
+    _t_notion = time.time()
     with ThreadPoolExecutor(max_workers=8) as pool:
         # Independientes entre sí → todas a la vez.
         # `ca_lista` se pide aunque casi siempre sobre (el CA suele venir en los
@@ -521,6 +586,7 @@ def obtener_datos_empleado_anual(nombre: str) -> dict:
         evals_extra = _resultado(fut["evals_extra"], "evals_extra", nombre)
         ca_nombre, opiniones = _resultado(fut_opiniones, "opiniones_ca", nombre, ("", []))
 
+    logging.warning("[perf] lectura de todo Notion para %s: %.1fs", nombre, time.time() - _t_notion)
     return {
         "empleado": nombre,
         "ca": ca_nombre,
@@ -735,6 +801,16 @@ def _formatear_contexto(emp_data: dict) -> tuple[str, dict]:
     return texto, fuentes
 
 
+# Lo que escribe Claude cuando una dimensión no tiene evidencia. Va sin cita a propósito,
+# así que hay que reconocerlo para no confundirlo con una afirmación sin respaldo.
+_SIN_INFO = ("sin informacion suficiente", "sem informacao suficiente", "not enough information")
+
+
+def _es_sin_informacion(linea: str) -> bool:
+    # Plegando tildes: _norm_txt no las quita, así que "información" nunca casaría.
+    return normalizar_nombre(_norm_txt(linea)).rstrip(". ") in _SIN_INFO
+
+
 def _filtrar_bullets_citados(texto: str, fuentes: dict, descartados: list) -> str:
     """Devuelve solo los bullets que tienen al menos una cita válida.
 
@@ -747,6 +823,12 @@ def _filtrar_bullets_citados(texto: str, fuentes: dict, descartados: list) -> st
     for linea in (texto or "").splitlines():
         bruta = linea.strip(" •-–\t")
         if not bruta:
+            continue
+        if _es_sin_informacion(bruta):
+            # El prompt pide escribir esto SIN cita cuando una dimensión no tiene
+            # evidencia. Descartarlo por no citar dejaba la dimensión vacía y borraba
+            # justo la señal de que ahí no hay nada que decir.
+            lineas_ok.append(bruta)
             continue
         ids = _CITE_RE.findall(bruta)
         validos = [i for i in ids if i in fuentes]
@@ -765,7 +847,9 @@ def _validar_citas(comentarios: dict, fuentes: dict) -> dict:
     """Aplica el filtro de citas a todas las dimensiones y registra lo descartado."""
     descartados: list[str] = []
     for clave, valor in list(comentarios.items()):
-        if clave in _CLAVES_POR_NIVEL and isinstance(valor, dict):
+        if clave.startswith("_"):
+            continue
+        if isinstance(valor, dict):
             comentarios[clave] = {
                 nivel: _filtrar_bullets_citados(txt, fuentes, descartados)
                 for nivel, txt in valor.items()
@@ -781,13 +865,32 @@ def _validar_citas(comentarios: dict, fuentes: dict) -> dict:
     return comentarios
 
 
+def _remapear_slugs_a_claves(comentarios: dict, dims: list[dict]) -> dict:
+    """Traduce las claves que devuelve Claude (slugs) a las claves persistidas.
+
+    Se conserva el orden de `dims` para que el informe salga en el orden de Notion, y las
+    claves que no son dimensiones (contribution_to_firm, resultado, los metadatos con _)
+    pasan tal cual.
+    """
+    por_slug = {d["slug"]: d["clave"] for d in dims}
+    salida: dict = {}
+    for d in dims:
+        if d["slug"] in comentarios:
+            salida[d["clave"]] = comentarios[d["slug"]]
+    for clave, valor in comentarios.items():
+        if clave in por_slug:
+            continue
+        salida[clave] = valor
+    return salida
+
+
 def _recolectar_afirmaciones(comentarios: dict) -> list[dict]:
     """Extrae cada bullet con sus citas para auditarlo. No incluye 'resultado' (síntesis)."""
     afirmaciones = []
     for clave, valor in comentarios.items():
         if clave.startswith("_"):
             continue
-        if clave in _CLAVES_POR_NIVEL and isinstance(valor, dict):
+        if isinstance(valor, dict):
             textos = [(nivel, t) for nivel, t in valor.items()]
         elif clave in _CLAVES_PLANAS and isinstance(valor, str):
             textos = [("", valor)]
@@ -935,13 +1038,15 @@ def _extraer_json_objeto(texto: str) -> dict | None:
     return mejor
 
 
-def interpretar_evaluaciones_anual(emp_data: dict, cargo: str = "", criterios: str | None = None, idioma: str = "es") -> dict:
+def interpretar_evaluaciones_anual(emp_data: dict, cargo: str = "", criterios: str | None = None,
+                                   idioma: str = "es", dims: list[dict] | None = None) -> dict:
     """
     Llama a Claude con el contexto de evaluaciones y opiniones.
-    Devuelve un dict con bullets y notas por dimensión.
+    Devuelve un dict con bullets y notas por dimensión, tecleado por la clave de cada una.
 
     `criterios`: texto de criterios ya renderizado. Si es None se obtiene de Notion.
     Pasarlo evita una segunda lectura de Notion cuando ya se computó para la huella de caché.
+    `dims`: dimensiones ya resueltas, por el mismo motivo.
     """
     if not anthropic_client:
         raise ErrorIA(MSG_NO_DISPONIBLE, "ia_no_configurada", definitivo=True)
@@ -949,14 +1054,31 @@ def interpretar_evaluaciones_anual(emp_data: dict, cargo: str = "", criterios: s
     cargo_lower = cargo.strip().lower()
     requiere_liderazgo = any(c in cargo_lower for c in _REQUIERE_LIDERAZGO)
 
-    dims = list(_DIMS_PROYECTOS)
-    if requiere_liderazgo:
-        dims += list(_DIMS_LIDERAZGO)
-    dims_lista = ", ".join(f'"{c}"' for c, _ in dims)
+    if dims is None:
+        dims = dimensiones_informe(emp_data.get("empleado", ""), cargo)
+    # A Claude se le piden los slugs, no las claves: la clave es un id de página de Notion
+    # y meter UUIDs en el prompt lo haría ilegible y fácil de equivocar. Se remapean al
+    # volver, que es donde importa que la clave sea estable.
+    dims_lista = ", ".join(f'"{d["slug"]}"' for d in dims)
 
-    criterios_bloque = _criterios_para_prompt(cargo, idioma, emp_data.get("empleado", "")) if criterios is None else criterios
+    criterios_bloque = (_criterios_para_prompt(cargo, idioma, emp_data.get("empleado", ""), dims=dims)
+                        if criterios is None else criterios)
     criterios_section = (
-        f"\n\nCRITERIOS DTI DE EVALUACIÓN (úsalos para calibrar el feedback según el cargo):\n{criterios_bloque}"
+        "\n\nCRITERIOS DE CADA DIMENSIÓN (definen QUÉ evalúa cada una, y calibran el nivel "
+        "exigible según el cargo):\n" + criterios_bloque +
+        "\n\nQUÉ VA EN CADA DIMENSIÓN (obligatorio):\n"
+        "Esto aplica SOLO a las dimensiones listadas arriba con sus criterios. Los criterios son "
+        "su DEFINICIÓN, no un adorno: coloca cada evidencia en la dimensión cuyos criterios "
+        "describan lo que esa evidencia cuenta. No te guíes por el nombre de la dimensión, "
+        "guíate por sus criterios. Si los criterios de una dimensión cambian, cambia también qué "
+        "evidencia le corresponde.\n"
+        "Si una dimensión no tiene criterios definidos, o ninguna evidencia encaja con los que "
+        "tiene, escribe exactamente 'Sin información suficiente'. NO le asignes evidencia solo "
+        "porque su nombre suene relacionado o porque antes fuera de otra manera.\n"
+        "EXCEPCIÓN — 'contribution_to_firm', 'evaluaciones_adicionales' y 'resultado' NO tienen "
+        "criterios y NO se rigen por esta regla: siguen guiándose por su significado de siempre "
+        "(contribution_to_firm = contribución a la firma, sobre todo barbecho [B#] y seguimiento "
+        "personal marcado como CTTF)."
         if criterios_bloque else ""
     )
 
@@ -981,15 +1103,20 @@ def interpretar_evaluaciones_anual(emp_data: dict, cargo: str = "", criterios: s
         "No inventes, no infieras, no generalices más allá del texto citado. No uses etiquetas inexistentes.\n\n"
         "COBERTURA DE FUENTES (obligatoria):\n"
         "La regla anterior va de afirmación a fuente. Esta va al revés: TODA fuente debe acabar en uno "
-        "de estos dos sitios, sin excepción:\n"
-        "  (a) citada en CADA dimensión con la que encaje su contenido —si una fuente habla de gestión "
-        "de proyecto y de comunicación, cítala en las dos—, o\n"
-        "  (b) listada en '_fuentes_ignoradas' con su motivo.\n"
+        "de estos tres sitios, sin excepción:\n"
+        "  (a) citada en CADA dimensión con cuyos CRITERIOS encaje su contenido —si una fuente habla de "
+        "gestión de proyecto y de comunicación, cítala en las dos—, o\n"
+        "  (b) recogida en 'sin_clasificar' si tiene contenido evaluable pero no encaja con los "
+        "criterios de ninguna dimensión, o\n"
+        "  (c) listada en '_fuentes_ignoradas' con su motivo, solo si no hay nada evaluable en ella.\n"
         "Antes de cerrar el JSON, repasa la lista de fuentes una a una y comprueba que ninguna se ha "
-        "quedado fuera de (a) y (b).\n"
+        "quedado fuera de (a), (b) y (c).\n"
         "Que una fuente sea genérica, poco concreta o repita lo que ya dice otra NO es motivo para "
-        "descartarla: cítala en su dimensión y refleja en el bullet lo justo que aporta. A (b) solo van "
-        "las fuentes sin nada evaluable (texto de prueba, vacío, o que no habla del desempeño).\n\n"
+        "descartarla: cítala en la dimensión cuyos criterios cubra.\n"
+        "La cobertura NO te autoriza a meter una fuente en una dimensión con cuyos criterios no encaja: "
+        "en ese caso va a 'sin_clasificar' —con su cita, como cualquier otro bullet—, nunca repartida a "
+        "la fuerza. Es preferible una dimensión con 'Sin información suficiente' que una dimensión "
+        "rellenada con evidencia que no le toca.\n\n"
         "EVOLUCIÓN TEMPORAL (importante):\n"
         "Los datos están en orden cronológico con su mes. NO promedies ni des una foto plana: describe la "
         "TRAYECTORIA a lo largo del año. No es lo mismo febrero que noviembre. Da MÁS PESO a lo más reciente, "
@@ -1011,16 +1138,33 @@ def interpretar_evaluaciones_anual(emp_data: dict, cargo: str = "", criterios: s
         "  ...\n"
         '  "contribution_to_firm": "bullets de contribución a la firma, cada uno con su cita [B1][O1]",\n'
         '  "evaluaciones_adicionales": "bullets de evaluaciones extra fuera de proyecto, cada uno con su cita [X1][X2]",\n'
+        '  "sin_clasificar": "bullets con contenido evaluable que no encaja con los criterios de ninguna dimensión, cada uno con su cita [E7]",\n'
         '  "resultado": "valoración global en 2-3 frases que resuma la evolución del año",\n'
         '  "_fuentes_ignoradas": [{"cid": "E4", "motivo": "por qué no la has citado en ninguna dimensión"}]\n'
         "}\n\n"
         f"Dimensiones requeridas: {dims_lista}, contribution_to_firm, evaluaciones_adicionales, resultado.\n"
+        "QUÉ DEFINE A CADA DIMENSIÓN (regla dura, por encima de la de cobertura):\n"
+        "El mensaje del usuario trae, para cada dimensión, los criterios que la definen. Esos "
+        "criterios —no su nombre, no su posición en la lista— deciden qué evidencia le "
+        "corresponde. Aplica esta prueba a cada fuente y cada dimensión: '¿esta evidencia "
+        "demuestra o contradice alguno de los criterios literales de esta dimensión?'. Si la "
+        "respuesta es no, esa fuente NO va en esa dimensión, por muy relevante que sea la fuente "
+        "y por mucho que el nombre de la dimensión sugiera lo contrario.\n"
+        "Si los criterios de una dimensión están vacíos, son un texto de relleno o no describen "
+        "ninguna conducta evaluable, entonces NINGUNA evidencia le corresponde: su valor es "
+        "exactamente 'Sin información suficiente'. Que te queden fuentes sin colocar no es un "
+        "error: van a 'sin_clasificar'. Rellenar una dimensión así SÍ es un error grave.\n"
+        "Esta regla manda sobre la de cobertura y sobre cualquier impulso de dejar el informe "
+        "completo. Las tres claves sin criterios (contribution_to_firm, evaluaciones_adicionales, "
+        "resultado) quedan fuera de esta regla y se rigen por su significado habitual.\n"
         "Para cada dimensión agrupa: 'lider' = evaluadores superiores, "
         "'equipo' = mismo nivel o subordinados, 'sin_nivel' = sin jerarquía clara "
         "(coloca seguimiento personal y proyecto en el nivel que corresponda según quién evalúa). "
-        "Omite las claves que no tengan datos. "
+        "Dentro de una dimensión, omite los niveles que no tengan datos; la dimensión en sí "
+        "siempre aparece, aunque sea con 'Sin información suficiente'. "
         "contribution_to_firm, evaluaciones_adicionales y resultado son cadenas planas, no objetos. "
-        "resultado es una síntesis de lo ya afirmado; puede no llevar citas.\n\n"
+        "resultado es una síntesis global de lo ya afirmado en las demás dimensiones: 2-3 frases "
+        "en prosa, SIN citas [E#] y SIN meter evidencia nueva. No es una dimensión más.\n\n"
         "FORMATO DE LA RESPUESTA (obligatorio):\n"
         "Responde SOLO con el JSON. Tu primer carácter debe ser '{' y el último '}'. No "
         "escribas nada antes ni después: ni el repaso de las fuentes, ni tu razonamiento, "
@@ -1038,7 +1182,8 @@ def interpretar_evaluaciones_anual(emp_data: dict, cargo: str = "", criterios: s
     elif idioma == "pt":
         system += (
             "\n\nIDIOMA: Escreve TODO o texto dos comentários em português europeu (os campos "
-            "'lider', 'equipo', 'sin_nivel', 'contribution_to_firm' e 'resultado'). Os dados de "
+            "'lider', 'equipo', 'sin_nivel', 'contribution_to_firm', 'evaluaciones_adicionales' "
+            "e 'resultado'). Os dados de "
             "origem podem estar em espanhol; traduz o significado, não copies texto em espanhol. "
             "Mantém as chaves do JSON e as etiquetas de citação como [E3] exatamente como se indica. "
             "Quando não houver evidência para uma dimensão, escreve exatamente 'Informação "
@@ -1074,6 +1219,7 @@ def interpretar_evaluaciones_anual(emp_data: dict, cargo: str = "", criterios: s
     # empleados generados en ráfaga → se cachea (prompt caching): mismo modelo y misma calidad,
     # solo se paga una vez el prefijo durante la ventana de caché. La evidencia (variable por
     # persona) va en el mensaje del usuario, fuera de la caché.
+    _t_ia = time.time()
     try:
         respuesta = _crear([{"type": "text", "text": system, "cache_control": {"type": "ephemeral"}}])
     except ErrorIA as err:
@@ -1082,6 +1228,8 @@ def interpretar_evaluaciones_anual(emp_data: dict, cargo: str = "", criterios: s
             raise
         logging.warning("[informe anual] Prompt caching no disponible; reintento sin caché")
         respuesta = _crear(system)
+    # [perf] para poder ver en el log si la espera está aquí o en las lecturas de Notion.
+    logging.warning("[perf] redaccion del informe con Claude: %.1fs", time.time() - _t_ia)
     texto = "".join(b.text for b in respuesta.content if b.type == "text").strip()
     comentarios = _extraer_json_objeto(texto)
     if comentarios is None:
@@ -1100,8 +1248,11 @@ def interpretar_evaluaciones_anual(emp_data: dict, cargo: str = "", criterios: s
             f"herramienta ({CONTACTO}).",
             codigo="informe_anual_respuesta_invalida",
         ) from None
+    comentarios = _remapear_slugs_a_claves(comentarios, dims)
     comentarios = _validar_citas(comentarios, fuentes)
+    _t_aud = time.time()
     comentarios["_avisos_verificacion"] = _verificar_soporte(comentarios, fuentes)
+    logging.warning("[perf] auditoria de citas con Claude: %.1fs", time.time() - _t_aud)
     comentarios["_fuentes"] = fuentes
     return comentarios
 
@@ -1287,21 +1438,24 @@ def _tabla_dims(doc, dims, comentarios, fuentes=None):
     for c, txt, w in ((c0, "Dimensión", _W_DIM), (c1, "Nota", _W_NOTA), (c2, "Comentarios del evaluador", _W_COM)):
         _dxb(c); _dxw(c, w)
         _dxr(c.paragraphs[0], txt, bold=True, size=9, center=(txt == "Nota"))
-    for i, (clave, etiqueta) in enumerate(dims):
+    for i, d in enumerate(dims):
         c0, c1, c2 = tabla.rows[i + 1].cells
         _dxb(c0); _dxw(c0, _W_DIM)
         _dxb(c1); _dxw(c1, _W_NOTA)
         _dxb(c2); _dxw(c2, _W_COM)
-        _dxr(c0.paragraphs[0], etiqueta, size=9)
+        _dxr(c0.paragraphs[0], d["etiqueta"], size=9)
         _dxr(c1.paragraphs[0], "X", size=9, center=True)
-        _dx_bullets_por_nivel(c2, comentarios.get(clave, ""), fuentes)
+        _dx_bullets_por_nivel(c2, comentarios.get(d["clave"], ""), fuentes)
     return tabla
 
 
 # ── HTML: generación ─────────────────────────────────────────────────────────
 
-def guardar_informe_anual_html(emp_data: dict, comentarios: dict, cargo: str = "", idioma: str = "es") -> str:
-    fuentes = comentarios.get("_fuentes", {})
+def guardar_informe_anual_html(emp_data: dict, comentarios: dict, cargo: str = "", idioma: str = "es",
+                               incluir_fuentes: bool = True) -> str:
+    # `incluir_fuentes=False` para todo documento que pueda acabar en manos del advisee: el anexo
+    # trae el texto crudo de cada evaluación y el nombre del evaluador. Ver guardar_informe_anual_word.
+    fuentes = comentarios.get("_fuentes", {}) if incluir_fuentes else {}
 
     def esc(v):
         return html_lib.escape(str(v or ""))
@@ -1336,9 +1490,12 @@ def guardar_informe_anual_html(emp_data: dict, comentarios: dict, cargo: str = "
 
     def filas_dims(dims):
         filas = ""
-        for clave, etiqueta in dims:
-            filas += f"<tr><td>{esc(_dim_label(clave, etiqueta, idioma))}</td><td class='nc'>X</td><td>{bullets_html_por_nivel(comentarios.get(clave,''))}</td></tr>"
+        for d in dims:
+            etiqueta = esc(_dim_label(d["slug"], d["etiqueta"], idioma))
+            filas += f"<tr><td>{etiqueta}</td><td class='nc'>X</td><td>{bullets_html_por_nivel(comentarios.get(d['clave'],''))}</td></tr>"
         return filas
+
+    dims_proyectos = dimensiones_informe(emp_data.get("empleado", ""), cargo, incluir_liderazgo=False)
 
     cargo_lower = cargo.strip().lower()
     requiere_liderazgo = any(c in cargo_lower for c in _REQUIERE_LIDERAZGO)
@@ -1350,13 +1507,23 @@ def guardar_informe_anual_html(emp_data: dict, comentarios: dict, cargo: str = "
         liderazgo_bloque = f"""
         <h2 class="sec">{t("anual.leadership", idioma)}</h2>
         <table class="et"><thead><tr><th>{t("anual.col_dimension", idioma)}</th><th class="nc">{t("anual.col_score", idioma)}</th><th>{t("anual.col_eval_comments", idioma)}</th></tr></thead>
-        <tbody>{filas_dims(_DIMS_LIDERAZGO)}</tbody></table>"""
+        <tbody>{filas_dims(_dims_fijas(_DIMS_LIDERAZGO))}</tbody></table>"""
 
     evals_adicionales_bloque = ""
     if emp_data.get("evals_extra"):
         evals_adicionales_bloque = f"""
         <h2 class="sec">{t("anual.additional_evals", idioma)}</h2>
         <p>{bullets_html(comentarios.get('evaluaciones_adicionales',''))}</p>"""
+
+    # Evidencia con contenido pero que no encaja con los criterios de ninguna dimensión.
+    # Se muestra aparte —"cosas que la IA no ha sabido clasificar"— en vez de forzarla en
+    # una dimensión: así no se pierde y el CA ve qué se ha quedado fuera.
+    sin_clasificar_bloque = ""
+    if (comentarios.get("sin_clasificar") or "").strip():
+        sin_clasificar_bloque = f"""
+        <h2 class="sec">{t("anual.unclassified", idioma)}</h2>
+        <p class="fine">{t("anual.unclassified_hint", idioma)}</p>
+        <p>{bullets_html(comentarios.get('sin_clasificar',''))}</p>"""
 
     objetivos_html = ""
     objetivos = emp_data.get("objetivos", [])
@@ -1508,7 +1675,7 @@ def guardar_informe_anual_html(emp_data: dict, comentarios: dict, cargo: str = "
 <h2 class="sec">{t("anual.rating_year", idioma, anio=f"{año}/{año + 1}")}</h2>
 <table class="et">
   <thead><tr><th>{t("anual.col_dimension", idioma)}</th><th class="nc">{t("anual.col_score", idioma)}</th><th>{t("anual.col_eval_comments", idioma)}</th></tr></thead>
-  <tbody>{filas_dims(_DIMS_PROYECTOS)}</tbody>
+  <tbody>{filas_dims(dims_proyectos)}</tbody>
 </table>
 
 {liderazgo_bloque}
@@ -1517,6 +1684,7 @@ def guardar_informe_anual_html(emp_data: dict, comentarios: dict, cargo: str = "
 <p>{bullets_html(comentarios.get('contribution_to_firm',''))}</p>
 
 {evals_adicionales_bloque}
+{sin_clasificar_bloque}
 
 <h2 class="sec">{t("anual.result", idioma)}</h2>
 <div class="rg">
@@ -1553,7 +1721,8 @@ def _celda_emp(cell, label, valor, w):
 
 
 def guardar_informe_anual_word(emp_data: dict, comentarios: dict, cargo: str = "", idioma: str = "es",
-                               valores_ca: dict | None = None, nombre_archivo: str = "") -> str:
+                               valores_ca: dict | None = None, nombre_archivo: str = "",
+                               incluir_fuentes: bool = True) -> str:
     """Genera el .docx replicando la plantilla oficial de EVALUACIÓN ANUAL de IGENERIS.
 
     Campos que el sistema no posee (CA '26, salarios, % variable, promoción, deadlines,
@@ -1565,6 +1734,9 @@ def guardar_informe_anual_word(emp_data: dict, comentarios: dict, cargo: str = "
     objetivos[{texto,deadline}]). Si falta una clave, su hueco se queda en blanco.
     `nombre_archivo`: nombre del .docx a escribir en CARPETA_WEB (por defecto
     informe_anual_{slug}.docx).
+    `incluir_fuentes`: el anexo de Fuentes/Evidencia es SOLO para el CA. Lleva el texto literal
+    de cada evaluación y el nombre de quien la escribió, así que enseñárselo al advisee rompe el
+    anonimato de los evaluadores. Pásalo en False en cualquier documento que él pueda descargar.
     """
     if Document is None:
         raise RuntimeError("Instala python-docx: pip install python-docx")
@@ -1580,7 +1752,7 @@ def guardar_informe_anual_word(emp_data: dict, comentarios: dict, cargo: str = "
     def _v(d, clave):
         return str(d.get(clave) or "").strip()
 
-    fuentes = comentarios.get("_fuentes", {})
+    fuentes = comentarios.get("_fuentes", {}) if incluir_fuentes else {}
     ahora = datetime.now(timezone.utc)
     anio_eval = ahora.year - 1          # se evalúa el año anterior (p. ej. 2025 en marzo 2026)
     anio_sig = ahora.year               # año siguiente al evaluado
@@ -1608,6 +1780,9 @@ def guardar_informe_anual_word(emp_data: dict, comentarios: dict, cargo: str = "
         (t("anual.employee", idioma), emp_data["empleado"], t("anual.date", idioma), fecha_txt),
         (f"CA {yy}", emp_data.get("ca", ""), t("anual.current_position", idioma), cargo or ""),
         (f"CA {yy_sig}", _v(vca, "caSiguiente"), t("anual.current_salary", idioma), _v(vca, "salarioActual")),
+        # El área decide qué criterios y qué apartados lleva el informe, así que conviene
+        # que quede escrita en el propio documento.
+        (t("anual.area", idioma), _grupo_empleado(emp_data.get("empleado", ""), cargo), "", ""),
     ]
     t_emp = doc.add_table(rows=len(filas_emp), cols=4)
     t_emp.style = "Table Grid"
@@ -1622,11 +1797,7 @@ def guardar_informe_anual_word(emp_data: dict, comentarios: dict, cargo: str = "
     # ── CALIFICACIÓN {año_eval}/{año_sig} ─────────────────────────────────────
     _dxt(doc, t("anual.rating_year", idioma, anio=f"{anio_eval}/{anio_sig}"))
 
-    cargo_lower = cargo.strip().lower()
-    requiere_liderazgo = any(c in cargo_lower for c in _REQUIERE_LIDERAZGO)
-    dims = list(_DIMS_PDF)
-    if requiere_liderazgo:
-        dims += list(_DIMS_LIDERAZGO)
+    dims = dimensiones_informe(emp_data.get("empleado", ""), cargo)
 
     w_dim, w_nota = 1.6, 0.6
     w_com = _CONTENT_W_IN - w_dim - w_nota
@@ -1636,12 +1807,13 @@ def guardar_informe_anual_word(emp_data: dict, comentarios: dict, cargo: str = "
     for c, txt, w, ctr in ((h0, t("anual.projects", idioma), w_dim, False), (h1, t("anual.score_up", idioma), w_nota, True), (h2, t("anual.comments_up", idioma), w_com, False)):
         _dxb(c); _dxw(c, w)
         _dxr(c.paragraphs[0], txt, bold=True, size=9, center=ctr)
-    for i, (clave, etiqueta) in enumerate(dims):
+    for i, d in enumerate(dims):
+        clave = d["clave"]
         c0, c1, c2 = t_cal.rows[i + 1].cells
         _dxb(c0); _dxw(c0, w_dim)
         _dxb(c1); _dxw(c1, w_nota)
         _dxb(c2); _dxw(c2, w_com)
-        _dxr(c0.paragraphs[0], _dim_label(clave, etiqueta, idioma), size=9)
+        _dxr(c0.paragraphs[0], _dim_label(d["slug"], d["etiqueta"], idioma), size=9)
         # NOTA: en blanco salvo que el CA la haya rellenado en el borrador web
         nota_dim = _v(notas_ca, clave)
         if nota_dim:
@@ -1700,7 +1872,7 @@ def guardar_informe_anual_word(emp_data: dict, comentarios: dict, cargo: str = "
     _dxb(ch0); _dxw(ch0, w_obj)
     _dxb(ch1); _dxw(ch1, w_dl)
     _dxr(ch0.paragraphs[0], "", size=9)
-    _dxr(ch1.paragraphs[0], "Deadline", bold=True, size=9, center=True)
+    _dxr(ch1.paragraphs[0], t("anual.deadline", idioma), bold=True, size=9, center=True)
     for i in range(n_filas):
         c0, c1 = t_obj.rows[i + 1].cells
         _dxb(c0); _dxw(c0, w_obj)
@@ -1806,8 +1978,15 @@ def generar_informe_anual(evaluado: str, cargo: str = "") -> str:
     slug = slug_archivo(evaluado)
     idioma = idioma_de_persona(evaluado)
     # Se computa una sola vez: alimenta la huella de caché y el prompt (evita doble lectura de Notion).
-    criterios = _criterios_para_prompt(cargo, idioma, evaluado)
-    huella = _huella_datos(emp_data, cargo=cargo, criterios=(criterios or "") + f"|lang={idioma}")
+    # Las dimensiones entran en la huella: si en Notion se añade, quita, renombra o
+    # reordena un criterio, la huella cambia y el informe se regenera con la plantilla
+    # nueva. Mientras no cambien, se reutiliza el de siempre y no se gasta IA.
+    dims = dimensiones_informe(evaluado, cargo)
+    criterios = _criterios_para_prompt(cargo, idioma, evaluado, dims=dims)
+    huella = _huella_datos(
+        emp_data, cargo=cargo,
+        criterios=(criterios or "") + f"|lang={idioma}|dims={huella_dimensiones(dims)}",
+    )
     ruta_docx = os.path.join(config.CARPETA_WEB, f"informe_anual_{slug}.docx")
     ruta_html = os.path.join(config.CARPETA_WEB, f"informe_anual_{slug}.html")
     cache = _leer_cache(slug)
@@ -1816,7 +1995,8 @@ def generar_informe_anual(evaluado: str, cargo: str = "") -> str:
         logging.info("Informe anual en caché para %s, reutilizando.", evaluado)
         return slug
 
-    comentarios = interpretar_evaluaciones_anual(emp_data, cargo=cargo, criterios=criterios, idioma=idioma)
+    comentarios = interpretar_evaluaciones_anual(emp_data, cargo=cargo, criterios=criterios,
+                                                 idioma=idioma, dims=dims)
     slug = guardar_informe_anual_word(emp_data, comentarios, cargo=cargo, idioma=idioma)
     guardar_informe_anual_html(emp_data, comentarios, cargo=cargo, idioma=idioma)
     _escribir_cache(slug, huella)

@@ -6,7 +6,7 @@ import unicodedata
 
 from . import config
 from .notion_service import obtener_registros_empleados
-from .users import cargar_usuarios, guardar_usuarios, hash_password, validar_password_segura
+from .users import cargar_usuarios, guardar_usuario, guardar_usuarios, hash_password, validar_password_segura
 from .utils import normalizar_nombre
 
 
@@ -48,6 +48,51 @@ def username_unico(nombre, usados):
 
 def password_temporal():
     return f"Cambio-{secrets.token_urlsafe(8)}"
+
+
+def crear_cuenta_individual(nombre, email="", password=None):
+    """Crea (o repara) la cuenta de login de una sola persona en 'Usuarios Web'.
+
+    Reutiliza los mismos helpers que el alta masiva. Devuelve
+    {"username": str, "password_temporal": str|None, "ya_existia": bool}: si ya había
+    cuenta con salt+hash, no la toca (password_temporal=None); si estaba a medias, la
+    repara con una contraseña nueva.
+    """
+    nombre = (nombre or "").strip()
+    if not nombre:
+        raise ValueError("El nombre es obligatorio para crear la cuenta.")
+    if password:
+        validar_password_segura(password)
+    email = (email or "").strip().lower()
+    usuarios = cargar_usuarios()
+    persona_clave = normalizar_nombre(nombre)
+
+    for usuario in usuarios.values():
+        if normalizar_nombre(usuario.get("persona") or usuario.get("username")) == persona_clave:
+            if usuario.get("salt") and usuario.get("password_hash"):
+                return {"username": usuario.get("username", ""), "password_temporal": None, "ya_existia": True}
+            # Cuenta a medio crear (sin hash): la completamos con contraseña nueva.
+            temporal = password or password_temporal()
+            salt, password_hash = hash_password(temporal)
+            usuario["email"] = email or usuario.get("email", "")
+            usuario["salt"] = salt
+            usuario["password_hash"] = password_hash
+            guardar_usuario(usuario)
+            return {"username": usuario.get("username", ""), "password_temporal": temporal, "ya_existia": False}
+
+    username = username_unico(nombre, set(usuarios.keys()))
+    if not username:
+        raise ValueError("El nombre no es válido para generar un usuario.")
+    temporal = password or password_temporal()
+    salt, password_hash = hash_password(temporal)
+    guardar_usuario({
+        "username": username,
+        "persona": nombre,
+        "email": email,
+        "salt": salt,
+        "password_hash": password_hash,
+    })
+    return {"username": username, "password_temporal": temporal, "ya_existia": False}
 
 
 def crear_usuarios(apply=False, output=None, password=None):

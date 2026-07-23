@@ -519,32 +519,66 @@ def pendientes_slack_de_persona(persona: str) -> list:
     Las caducadas se excluyen aquí, no en Notion: en Slack el DM ya se editó a "caducado" y
     la persona no puede contestarlas, así que no son tareas; pero la fila sigue con
     Completada=False porque para el cumplimiento cuenta como asignada y no realizada.
+
+    Igualmente, una pendiente vieja no es tarea si hay un envío POSTERIOR del mismo tipo ya
+    completado: la persona ya hizo la evaluación vigente, y la fila vieja queda solo como
+    registro de un ciclo no realizado. Sin esto, la caja de tareas de la web mostraba
+    "fantasmas" tras completar por Slack (`marcar_completada` cierra solo la más reciente).
     """
     db_id = _obtener_o_crear_bbdd()
     if not db_id or not persona:
         return []
     objetivo = normalizar_nombre(persona)
-    por_tipo: dict = {}  # tipo -> fecha del envío pendiente más reciente
+    por_tipo: dict = {}  # tipo -> (momento envío, día 'YYYY-MM-DD') del pendiente más reciente
+    _sin_fecha = datetime.min.replace(tzinfo=timezone.utc)
     try:
         for fila in _iter_filas(db_id, filter={"property": "Completada", "checkbox": {"equals": False}}):
             props = fila.get("properties", {})
+            # El checkbox se re-comprueba en Python: el filtro de Notion es solo eficiencia.
+            if _checkbox(props, "Completada"):
+                continue
             if normalizar_nombre(_titulo(props, "Persona")) != objetivo:
                 continue
             tipo = _select(props, "Tipo")
             if tipo not in _SLACK_TIPOS:
                 continue
-            envio = _dia(props, "Fecha_envio")
-            if tipo not in por_tipo or envio > por_tipo[tipo]:
-                por_tipo[tipo] = envio
+            momento = _fecha(props, "Fecha_envio") or _sin_fecha
+            if tipo not in por_tipo or momento > por_tipo[tipo][0]:
+                por_tipo[tipo] = (momento, _dia(props, "Fecha_envio"))
     except Exception:
         logging.exception("Error leyendo pendientes de Slack de '%s'", persona)
+
+    # Descarta tipos cuyo envío completado más reciente es igual o posterior al pendiente:
+    # la evaluación vigente ya está hecha y la fila pendiente es de un ciclo anterior.
+    if por_tipo:
+        try:
+            condiciones = [{"property": "Completada", "checkbox": {"equals": True}}]
+            momentos_reales = [m for m, _ in por_tipo.values() if m != _sin_fecha]
+            if momentos_reales:
+                # Acota la consulta: solo interesan completadas desde el pendiente más antiguo.
+                condiciones.append({"property": "Fecha_envio", "date": {"on_or_after": min(momentos_reales).date().isoformat()}})
+            for fila in _iter_filas(db_id, filter={"and": condiciones}):
+                props = fila.get("properties", {})
+                if not _checkbox(props, "Completada"):
+                    continue
+                if normalizar_nombre(_titulo(props, "Persona")) != objetivo:
+                    continue
+                tipo = _select(props, "Tipo")
+                if tipo not in por_tipo:
+                    continue
+                momento = _fecha(props, "Fecha_envio")
+                if momento and momento >= por_tipo[tipo][0]:
+                    por_tipo.pop(tipo)
+        except Exception:
+            logging.exception("Error comprobando completadas recientes de '%s'", persona)
+
     frecuencias = _frecuencias()
     vivas = []
     for tp in _SLACK_TIPOS:
         if tp not in por_tipo:
             continue
         # Basta con mirar el envío más reciente: si ese caducó, los anteriores también.
-        deadline = deadline_asignacion(por_tipo[tp], tp, frecuencias)
+        deadline = deadline_asignacion(por_tipo[tp][1], tp, frecuencias)
         if not _caducada(deadline):
             vivas.append({"tipo": tp, "deadline": deadline})
     return vivas

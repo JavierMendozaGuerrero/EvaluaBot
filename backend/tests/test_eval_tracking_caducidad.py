@@ -102,6 +102,34 @@ def test_pendiente_de_otra_persona_se_ignora(notion_falso):
     assert eval_tracking.pendientes_slack_de_persona("Ana") == []
 
 
+def test_completada_posterior_apaga_pendiente_vieja(notion_falso):
+    """El fantasma de la web: quedó una pendiente de un ciclo anterior aún en plazo, pero
+    hay un envío posterior ya completado → la evaluación vigente está hecha, sin tarea."""
+    notion_falso["filas"] = [
+        _fila("Ana", "mensual", _dia(-10), page_id="vieja"),
+        _fila("Ana", "mensual", _dia(-1), completada=True, page_id="hecha"),
+    ]
+    assert eval_tracking.pendientes_slack_de_persona("Ana") == []
+
+
+def test_pendiente_posterior_a_la_completada_sigue_viva(notion_falso):
+    """Un envío nuevo tras completar el anterior vuelve a ser tarea (no se oculta)."""
+    notion_falso["filas"] = [
+        _fila("Ana", "mensual", _dia(-3), completada=True, page_id="hecha"),
+        _fila("Ana", "mensual", _dia(-1), page_id="nueva"),
+    ]
+    assert eval_tracking.pendientes_slack_de_persona("Ana") == [{"tipo": "mensual", "deadline": _dia(29)}]
+
+
+def test_completada_de_otra_persona_no_apaga_pendiente(notion_falso):
+    """Que Beatriz haya completado no cierra la tarea de Ana."""
+    notion_falso["filas"] = [
+        _fila("Ana", "mensual", _dia(-2), page_id="de_ana"),
+        _fila("Beatriz", "mensual", _dia(-1), completada=True, page_id="de_beatriz"),
+    ]
+    assert eval_tracking.pendientes_slack_de_persona("Ana") == [{"tipo": "mensual", "deadline": _dia(28)}]
+
+
 # --- Escritura: cerrar la pendiente correcta -------------------------------------------
 
 def test_completar_cierra_la_pendiente_de_un_ciclo_anterior(notion_falso, monkeypatch):

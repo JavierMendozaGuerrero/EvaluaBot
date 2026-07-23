@@ -111,6 +111,28 @@ deploy() {
   local url
   url="$(gcloud run services describe "${SERVICE_NAME}" \
     --project="${GCP_PROJECT}" --region="${GCP_REGION}" --format='value(status.url)')"
+
+  # IMPRESCINDIBLE con Slack Socket Mode: dejar UNA sola revisión viva.
+  # Cada revisión con min-instances=1 mantiene un contenedor corriendo (y su
+  # WebSocket a Slack) aunque reciba 0% de tráfico. Si no se borran, se acumulan
+  # y el bot se DUPLICA: Slack reparte cada evento entre todas las conexiones
+  # abiertas, así que unas veces responde por partida doble y otras el mensaje
+  # cae en un contenedor sin tu conversación en memoria y no contesta.
+  echo "→ Limpiando revisiones antiguas (dejar solo la recién desplegada)"
+  local activa
+  activa="$(gcloud run services describe "${SERVICE_NAME}" \
+    --project="${GCP_PROJECT}" --region="${GCP_REGION}" \
+    --format='value(status.latestReadyRevisionName)')"
+  for rev in $(gcloud run revisions list --service="${SERVICE_NAME}" \
+      --project="${GCP_PROJECT}" --region="${GCP_REGION}" \
+      --format='value(metadata.name)'); do
+    if [[ "${rev}" != "${activa}" ]]; then
+      echo "  · borrando ${rev}"
+      gcloud run revisions delete "${rev}" \
+        --project="${GCP_PROJECT}" --region="${GCP_REGION}" --quiet || true
+    fi
+  done
+
   echo ""
   echo "✓ Deploy completado"
   echo "  Servicio: ${url}"

@@ -119,19 +119,37 @@ deploy() {
   # abiertas, así que unas veces responde por partida doble y otras el mensaje
   # cae en un contenedor sin tu conversación en memoria y no contesta.
   echo "→ Limpiando revisiones antiguas (dejar solo la recién desplegada)"
-  local activa
-  activa="$(gcloud run services describe "${SERVICE_NAME}" \
-    --project="${GCP_PROJECT}" --region="${GCP_REGION}" \
-    --format='value(status.latestReadyRevisionName)')"
-  for rev in $(gcloud run revisions list --service="${SERVICE_NAME}" \
+  # Revisión que sirve el tráfico. Se reintenta porque justo tras el deploy el
+  # campo puede tardar un instante en poblarse; si se leyera vacío, el bucle de
+  # abajo intentaría borrar la revisión activa (la protege Cloud Run, pero mejor
+  # no depender de eso).
+  local activa=""
+  local intento
+  for intento in 1 2 3; do
+    activa="$(gcloud run services describe "${SERVICE_NAME}" \
       --project="${GCP_PROJECT}" --region="${GCP_REGION}" \
-      --format='value(metadata.name)'); do
-    if [[ "${rev}" != "${activa}" ]]; then
-      echo "  · borrando ${rev}"
-      gcloud run revisions delete "${rev}" \
-        --project="${GCP_PROJECT}" --region="${GCP_REGION}" --quiet || true
-    fi
+      --format='value(status.traffic[0].revisionName)')"
+    [[ -z "${activa}" ]] && activa="$(gcloud run services describe "${SERVICE_NAME}" \
+      --project="${GCP_PROJECT}" --region="${GCP_REGION}" \
+      --format='value(status.latestReadyRevisionName)')"
+    [[ -n "${activa}" ]] && break
+    sleep 3
   done
+  if [[ -z "${activa}" ]]; then
+    echo "  ⚠ No pude identificar la revisión activa; omito la limpieza por seguridad."
+    echo "    Bórralas a mano: gcloud run revisions list --service=${SERVICE_NAME} --region=${GCP_REGION}"
+  else
+    echo "  · revisión activa (se conserva): ${activa}"
+    for rev in $(gcloud run revisions list --service="${SERVICE_NAME}" \
+        --project="${GCP_PROJECT}" --region="${GCP_REGION}" \
+        --format='value(metadata.name)'); do
+      if [[ "${rev}" != "${activa}" ]]; then
+        echo "  · borrando ${rev}"
+        gcloud run revisions delete "${rev}" \
+          --project="${GCP_PROJECT}" --region="${GCP_REGION}" --quiet || true
+      fi
+    done
+  fi
 
   echo ""
   echo "✓ Deploy completado"

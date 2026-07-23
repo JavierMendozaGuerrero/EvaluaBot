@@ -50,11 +50,19 @@ sudo docker pull '${IMAGE}'
 echo '${IMAGE}' | sudo tee /opt/evaluabot/image.ref >/dev/null
 sudo bash /opt/evaluabot/start.sh"
 
-echo "==> 3/3 Verificacion"
-sleep 15
-gcloud compute ssh "${VM_NAME}" \
-  --project="${GCP_PROJECT}" --zone="${GCP_ZONE}" --tunnel-through-iap --quiet \
-  --command="sudo docker ps --format '{{.Names}} {{.Status}}'; sudo docker logs evaluabot-app 2>&1 | grep -m1 'Bolt app is running' && echo 'BOT OK' || echo 'AVISO: no veo Bolt running aun, revisa: sudo docker logs evaluabot-app'"
+echo "==> 3/3 Verificacion (la app tarda ~40s en arrancar; reintento hasta 2 min)"
+BOT_OK=""
+for i in $(seq 1 8); do
+  sleep 15
+  if gcloud compute ssh "${VM_NAME}" \
+      --project="${GCP_PROJECT}" --zone="${GCP_ZONE}" --tunnel-through-iap --quiet \
+      --command="sudo docker logs evaluabot-app 2>&1 | grep -q 'Bolt app is running'" 2>/dev/null; then
+    BOT_OK="si"; break
+  fi
+  echo "  ... aun arrancando (intento ${i}/8)"
+done
+[[ -n "${BOT_OK}" ]] && echo "BOT OK (Bolt app is running)" \
+  || { echo "ERROR: el bot no arranco en 2 min. Logs: sudo docker logs evaluabot-app"; exit 1; }
 HTTP_CODE="$(curl -s -o /dev/null -w '%{http_code}' "https://${DOMAIN}" || echo 000)"
 echo "Web https://${DOMAIN} -> HTTP ${HTTP_CODE}"
 [[ "${HTTP_CODE}" == "200" ]] && echo "" && echo "OK Deploy completado: ${IMAGE}" || { echo "AVISO: la web no devuelve 200; revisa logs de caddy"; exit 1; }

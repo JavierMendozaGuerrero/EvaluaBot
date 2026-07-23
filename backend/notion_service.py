@@ -2327,9 +2327,17 @@ def obtener_ejemplos_guia(idioma: str = "es") -> dict:
         if cached and (ahora - cached[1]) < _EJEMPLOS_CACHE_TTL:
             return cached[0]
 
+    def _stale(idi: str) -> dict:
+        """Última cache válida aunque esté caducada; {} solo si nunca hubo datos.
+        Evita mostrar 'no existe ejemplo' ante un fallo transitorio de Notion."""
+        with _lock_ejemplos:
+            prev = _cache_ejemplos.get(idi) if isinstance(_cache_ejemplos, dict) else None
+        return prev[0] if prev else {}
+
     db_id = _obtener_db_ejemplos()
     if not db_id:
-        return {}
+        logging.warning("[ejemplos] BD no localizada; sirviendo cache previa si existe")
+        return _stale(idioma)
 
     def _rt(prop):
         return "".join(t.get("plain_text", "") for t in (prop or {}).get("rich_text", [])).strip()
@@ -2368,8 +2376,8 @@ def obtener_ejemplos_guia(idioma: str = "es") -> dict:
                 break
             cursor = resp.get("next_cursor")
     except Exception:
-        logging.exception("[ejemplos] Error leyendo BD de ejemplos de guía")
-        return {}
+        logging.exception("[ejemplos] Error leyendo BD de ejemplos de guía; sirviendo cache previa si existe")
+        return _stale(idioma)
 
     es_map = mapas.get("es", {})
     base = mapas.get(idioma, {})

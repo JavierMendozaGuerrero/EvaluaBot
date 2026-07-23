@@ -665,6 +665,7 @@ def _handle_situacion_interactiva(ack, body, client, logger):
             logger.warning("No se pudo actualizar el mensaje de situación")
         _olvidar_botones(dm_channel)
 
+        pregunta = None
         with lock:
             es_activo = user_id in evaluaciones_dm_activas
             estado = conversaciones.get(user_id)
@@ -673,10 +674,15 @@ def _handle_situacion_interactiva(ack, body, client, logger):
             push_historial(estado)
             if situacion == "proyecto":
                 estado["modo"] = "esperando_proyecto"
-                _enviar_pregunta_texto(dm_channel, thread_ts, t("bm.ask_project", _idi), estado, _idi)
+                pregunta = t("bm.ask_project", _idi)
             else:
                 estado["modo"] = "esperando_labores_barbecho"
-                _enviar_pregunta_texto(dm_channel, thread_ts, t("bm.ask_barbecho", _idi), estado, _idi)
+                pregunta = t("bm.ask_barbecho", _idi)
+
+        # Envío de red FUERA del lock (evita bloquear a otros usuarios), como en
+        # _handle_area_interactiva.
+        if pregunta is not None:
+            _enviar_pregunta_texto(dm_channel, thread_ts, pregunta, estado, _idi)
     except Exception:
         logger.exception("Error procesando selección de situación")
 
@@ -2824,4 +2830,8 @@ def ciclo_recordatorios_proyecto():
 
 
 def start_socket_mode():
-    SocketModeHandler(slack_app, config.SLACK_APP_TOKEN).start()
+    # concurrency = nº de eventos que se procesan en paralelo. Por defecto es 10;
+    # las llamadas síncronas a Notion/IA lo saturan y los clics entrantes esperan
+    # turno más de 3 s (Slack marca el botón como colgado). Le damos más margen
+    # mientras no se migre a async.
+    SocketModeHandler(slack_app, config.SLACK_APP_TOKEN, concurrency=30).start()

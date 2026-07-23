@@ -287,7 +287,7 @@ Las sesiones viven en memoria en `state.sesiones_web` (token → datos). Se crea
 ### Reset de contraseña por email
 
 Flujo en dos pasos:
-1. `solicitar_reset_password(email)` localiza al usuario, genera un token `secrets.token_urlsafe(32)` con caducidad de **30 minutos** guardado en `state.password_reset_tokens`, construye la URL `{APP_PUBLIC_URL}/#/reset/{token}` y envía el email vía SMTP.
+1. `solicitar_reset_password(email, base_url=None)` localiza al usuario, genera un token `secrets.token_urlsafe(32)` con caducidad de **30 minutos** guardado en `state.password_reset_tokens`, construye la URL `{base}/#/reset/{token}` y envía el email vía SMTP. `base` es la URL pública real desde la que llegó la petición (la API la deriva de las cabeceras `X-Forwarded-Host`/`X-Forwarded-Proto`, validada contra la lista blanca de CORS para evitar *host header injection*); si no se recibe un origen permitido, se cae en `APP_PUBLIC_URL`. Así el enlace apunta al despliegue actual sin depender de configurar la variable a mano.
 2. `cambiar_password_con_token(token, nueva_password, confirm_password)` valida el token y su caducidad, valida la robustez de la contraseña, re-hashea y guarda el usuario, y consume el token.
 
 ---

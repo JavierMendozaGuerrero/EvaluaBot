@@ -68,9 +68,33 @@ def login(datos: dict = Body(default={})):
     return {"token": token, "user": sesion_con_idioma}
 
 
+def _base_url_publica(request: Request) -> str:
+    """URL pública real desde la que llega la petición.
+
+    Detrás del proxy de Cloud Run (o cualquier reverse proxy) el host y el
+    esquema reales viajan en las cabeceras X-Forwarded-*. Así el enlace de
+    reset apunta siempre al despliegue actual sin depender de configurar
+    APP_PUBLIC_URL a mano.
+
+    Solo se acepta el origen si está en la lista blanca de CORS: el Host es un
+    dato que el cliente puede falsear (host header injection), y este link va
+    en un email de recuperación de contraseña. Si no está permitido, se
+    devuelve "" para que el llamador caiga en el APP_PUBLIC_URL configurado."""
+    host = request.headers.get("x-forwarded-host") or request.headers.get("host")
+    if not host:
+        return ""
+    proto = request.headers.get("x-forwarded-proto", request.url.scheme or "https")
+    # Con varios proxies encadenados las cabeceras pueden traer lista "a, b".
+    host = host.split(",")[0].strip()
+    proto = proto.split(",")[0].strip()
+    origen = f"{proto}://{host}"
+    permitidos = {o.rstrip("/") for o in config.CORS_ORIGINS} | {config.APP_PUBLIC_URL}
+    return origen if origen in permitidos else ""
+
+
 @router.post("/api/password-reset/request")
-def password_reset_request(datos: dict = Body(default={})):
-    solicitar_reset_password(datos.get("email", ""))
+def password_reset_request(request: Request, datos: dict = Body(default={})):
+    solicitar_reset_password(datos.get("email", ""), base_url=_base_url_publica(request))
     return {"ok": True}
 
 

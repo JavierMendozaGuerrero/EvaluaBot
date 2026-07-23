@@ -385,7 +385,7 @@ def _enviar_email_codigo(destinatario, codigo):
         smtp.send_message(mensaje)
 
 
-def solicitar_reset_password(email):
+def solicitar_reset_password(email, base_url=None):
     email = " ".join((email or "").split()).strip().lower()
     if not email or "@" not in email:
         raise ValueError("Introduce un email valido.")
@@ -402,7 +402,11 @@ def solicitar_reset_password(email):
             "email": destinatario,
             "expires_at": datetime.now(timezone.utc) + timedelta(minutes=30),
         }
-    reset_url = f"{config.APP_PUBLIC_URL}/#/reset/{token}"
+    # Priorizamos la URL pública real desde la que llegó la petición (la pasa la
+    # API a partir de las cabeceras del proxy). Así el enlace apunta siempre al
+    # despliegue actual. Si no se recibe, caemos en APP_PUBLIC_URL configurado.
+    base = (base_url or "").strip().rstrip("/") or config.APP_PUBLIC_URL
+    reset_url = f"{base}/#/reset/{token}"
     _enviar_email_reset(destinatario, reset_url)
 
 
